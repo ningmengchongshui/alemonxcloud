@@ -1,0 +1,39 @@
+services:
+  alx:
+    image: ccr.ccs.tencentyun.com/ningmengchongshui/alemonx
+    # 没有名字，默认自动随机，并由数据库记主名字
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      HOME: /root
+      XDG_CONFIG_HOME: /root/config
+      XDG_CACHE_HOME: /root/cache
+      ALX_DEPLOYMENT: production
+      ALX_OPS_STORAGE: sqlite
+      ALX_CONTAINER: "1"
+      ALX_WORKSPACE: /app/workspace
+      ALEMONJS_SETUP_ROOTS: /app/workspace
+      ALX_PRIVILEGED_MODE: enabled
+    volumes:
+      - ./data:/root
+      - ./workspace:/app/workspace
+    # --------- 付费，可改内容 --- start
+    shm_size: "${shm_size:-1gb}"
+    mem_limit: "${mem_limit:-4096m}"
+    memswap_limit: "${mem_limit:-4096m}"
+    cpus: "${cpus:-2.0}"
+    deploy: 
+      resources:
+        limits:
+          memory:  "${mem_limit:-4096m}"
+          cpus: "${cpus:-2.0}"
+        reservations:
+          memory: "${memory:-2048m}"
+          cpus:  "${cpus:-2.0}"
+    # ----------------------- end
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:17390/healthz >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

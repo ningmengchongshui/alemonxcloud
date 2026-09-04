@@ -1,0 +1,17 @@
+[Unit]
+Description=AlemonX Cloud bare-metal agent
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/xcloud-agent
+EnvironmentFile=/etc/xcloud-agent.env
+ExecStart=/opt/xcloud-agent/xcloud-agent
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
