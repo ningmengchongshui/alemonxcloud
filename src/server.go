@@ -46,9 +46,13 @@ type instance struct {
 	OwnerID       string `json:"-"`
 }
 type oidcUser struct {
-	ID, Username, Email, Avatar string
-	Roles, Permissions          []string
-	IsAdmin                     bool `json:"isAdmin"`
+	ID          string   `json:"id"`
+	Username    string   `json:"username"`
+	Email       string   `json:"email"`
+	Avatar      string   `json:"avatar"`
+	Roles       []string `json:"roles"`
+	Permissions []string `json:"permissions"`
+	IsAdmin     bool     `json:"isAdmin"`
 }
 type session struct {
 	User      oidcUser
