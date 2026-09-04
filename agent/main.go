@@ -349,7 +349,24 @@ func agentStatus(c *gin.Context) {
 			count++
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "dockerVersion": strings.TrimSpace(output), "diskAvailableBytes": int64(stat.Bavail) * int64(stat.Bsize), "managedContainerCount": count})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "dockerVersion": strings.TrimSpace(output), "cpuTotal": runtime.NumCPU(), "memoryTotalMB": hostMemoryMB(), "diskAvailableBytes": int64(stat.Bavail) * int64(stat.Bsize), "managedContainerCount": count})
+}
+
+func hostMemoryMB() int {
+	raw, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "MemTotal:" {
+			value, err := strconv.Atoi(fields[1])
+			if err == nil {
+				return value / 1024
+			}
+		}
+	}
+	return 0
 }
 func containerAction(c *gin.Context, action string) {
 	name, ok := checkedName(c)

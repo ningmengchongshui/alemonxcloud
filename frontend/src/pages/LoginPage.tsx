@@ -32,22 +32,22 @@ export function LoginPage({
         <div className="relative z-10 my-[clamp(80px,18vh,190px)] max-w-2xl">
           <p className="mb-5 inline-block rounded-full bg-emerald-300/10 px-2.5 py-1.5 text-[10px] font-extrabold tracking-widest text-emerald-200">专为 ALEMONX 构建</p>
           <h1 className="mb-5 text-[clamp(43px,4.9vw,74px)] leading-[1.08] font-bold tracking-[-.05em]">
-            让你的 AlemonX，<br />
-            <span className="text-emerald-300">更快上线，更稳运行。</span>
+            让 AlemonX，<br />
+            <span className="text-emerald-300">快速上线，稳定运行。</span>
           </h1>
-          <p className="max-w-xl text-[15px] leading-7 text-slate-300">选择镜像和算力，剩下的部署、隔离与运行保障交给 AlemonX Cloud。把精力留给你的产品，而不是基础设施。</p>
+          <p className="max-w-xl text-[15px] leading-7 text-slate-300">选择镜像和算力，部署与运行交给 AlemonX Cloud。</p>
           <div className="mt-12 grid grid-cols-3 gap-2.5" aria-label="平台核心价值">
             <article className="rounded-xl border border-blue-100/15 bg-white/5 p-4">
               <strong className="mb-4 block text-[10px] tracking-widest text-emerald-300">01</strong>
-              <div><b>分钟级创建</b><span>选定配置，即刻提交部署</span></div>
+              <div><b>快速创建</b><span>选定配置即可部署</span></div>
             </article>
             <article className="rounded-xl border border-blue-100/15 bg-white/5 p-4">
               <strong>02</strong>
-              <div><b>独享运行空间</b><span>实例隔离，资源清晰可控</span></div>
+              <div><b>独享空间</b><span>实例隔离，资源可控</span></div>
             </article>
             <article className="rounded-xl border border-blue-100/15 bg-white/5 p-4">
               <strong>03</strong>
-              <div><b>一站式续费管理</b><span>订单、状态和服务周期一目了然</span></div>
+              <div><b>统一管理</b><span>订单和服务状态清晰</span></div>
             </article>
           </div>
         </div>

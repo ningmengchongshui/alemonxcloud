@@ -346,19 +346,32 @@ func adminSaveNode(c *gin.Context) {
 		probe := body
 		probe.AgentToken = encrypted
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
-		err = nodeRequest(ctx, probe, http.MethodGet, "/container/status", nil, nil)
+		var status struct {
+			CPUTotal      float64 `json:"cpuTotal"`
+			MemoryTotalMB int     `json:"memoryTotalMB"`
+		}
+		err = nodeRequest(ctx, probe, http.MethodGet, "/container/status", nil, &status)
 		cancel()
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"message": "Agent 验证失败，节点未保存"})
 			return
 		}
+		if status.CPUTotal <= 0 || status.MemoryTotalMB < 256 {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "Agent 未返回有效硬件信息，节点未保存"})
+			return
+		}
+		body.CPUDetected = status.CPUTotal
+		body.MemoryDetectedMB = status.MemoryTotalMB
+		body.CPUTotal = 0
+		body.MemoryTotalMB = 0
+		body.Enabled = false
 	}
 	if err := saveNode(c.Request.Context(), body); err != nil {
 		businessError(c, err)
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	_ = writeAudit(c.Request.Context(), user.ID, "node.save", "node", body.ID, map[string]any{"cpuTotal": body.CPUTotal, "memoryTotalMB": body.MemoryTotalMB, "enabled": body.Enabled})
+	_ = writeAudit(c.Request.Context(), user.ID, "node.save", "node", body.ID, map[string]any{"enabled": body.Enabled})
 	body.AgentToken = ""
 	c.JSON(http.StatusOK, body)
 }

@@ -53,6 +53,8 @@ type node struct {
 	AgentURL              string     `json:"agentURL"`
 	CPUTotal              float64    `json:"cpuTotal"`
 	MemoryTotalMB         int        `json:"memoryTotalMB"`
+	CPUDetected           float64    `json:"cpuDetected"`
+	MemoryDetectedMB      int        `json:"memoryDetectedMB"`
 	Enabled               bool       `json:"enabled"`
 	LastHeartbeatAt       *time.Time `json:"lastHeartbeatAt"`
 	CPUReserved           float64    `json:"cpuReserved"`
@@ -117,6 +119,9 @@ func initializeControlPlane(ctx context.Context) error {
 		`ALTER TABLE xcloud_tasks ADD COLUMN payload JSON NULL`,
 		`ALTER TABLE xcloud_tasks ADD COLUMN finished_at DATETIME NULL`,
 		`ALTER TABLE xcloud_nodes ADD COLUMN updated_at DATETIME NULL`,
+		`ALTER TABLE xcloud_nodes ADD COLUMN cpu_detected DECIMAL(8,2) NOT NULL DEFAULT 0`,
+		`ALTER TABLE xcloud_nodes ADD COLUMN memory_detected_mb INT NOT NULL DEFAULT 0`,
+		`UPDATE xcloud_nodes SET cpu_detected=cpu_total,memory_detected_mb=memory_total_mb WHERE cpu_detected=0 OR memory_detected_mb=0`,
 		`ALTER TABLE xcloud_orders ADD COLUMN renewal_instance_id VARCHAR(64) NULL`,
 		`ALTER TABLE xcloud_orders ADD COLUMN renewal_instance_id VARCHAR(64) NULL`,
 	} {
@@ -690,7 +695,7 @@ func scheduleLifecycle(ctx context.Context) {
 }
 
 func listNodesWithUsage(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.enabled,n.last_heartbeat_at,COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -698,7 +703,7 @@ func listNodesWithUsage(ctx context.Context) ([]node, error) {
 	items := []node{}
 	for rows.Next() {
 		var item node
-		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.Enabled, &item.LastHeartbeatAt, &item.CPUReserved, &item.MemoryReservedMB); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.CPUReserved, &item.MemoryReservedMB); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -710,8 +715,14 @@ func saveNode(ctx context.Context, value node) error {
 	if value.ID == "" {
 		value.ID = newID("node")
 	}
-	if strings.TrimSpace(value.Name) == "" || value.CPUTotal <= 0 || value.MemoryTotalMB < 256 {
+	if strings.TrimSpace(value.Name) == "" {
 		return errors.New("节点参数无效")
+	}
+	if value.CPUTotal < 0 || value.MemoryTotalMB < 0 || value.CPUTotal > value.CPUDetected || value.MemoryTotalMB > value.MemoryDetectedMB {
+		return errors.New("可调度容量不能超过节点硬件")
+	}
+	if value.Enabled && (value.CPUTotal <= 0 || value.MemoryTotalMB < 256) {
+		return errors.New("启用节点前请确认可调度容量")
 	}
 	if !strings.HasPrefix(value.AgentURL, "http://") && !strings.HasPrefix(value.AgentURL, "https://") {
 		return errors.New("Agent 地址必须是 http 或 https 地址")
@@ -735,7 +746,7 @@ func saveNode(ctx context.Context, value node) error {
 		}
 		cipherText = existing
 	}
-	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,agent_token_ciphertext,cpu_total,memory_total_mb,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE name=VALUES(name),agent_url=VALUES(agent_url),agent_token_ciphertext=VALUES(agent_token_ciphertext),cpu_total=VALUES(cpu_total),memory_total_mb=VALUES(memory_total_mb),enabled=VALUES(enabled),updated_at=NOW()`, value.ID, value.Name, value.AgentURL, cipherText, value.CPUTotal, value.MemoryTotalMB, value.Enabled)
+	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,agent_token_ciphertext,cpu_total,memory_total_mb,cpu_detected,memory_detected_mb,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE name=VALUES(name),agent_url=VALUES(agent_url),agent_token_ciphertext=VALUES(agent_token_ciphertext),cpu_total=VALUES(cpu_total),memory_total_mb=VALUES(memory_total_mb),cpu_detected=VALUES(cpu_detected),memory_detected_mb=VALUES(memory_detected_mb),enabled=VALUES(enabled),updated_at=NOW()`, value.ID, value.Name, value.AgentURL, cipherText, value.CPUTotal, value.MemoryTotalMB, value.CPUDetected, value.MemoryDetectedMB, value.Enabled)
 	return err
 }
 

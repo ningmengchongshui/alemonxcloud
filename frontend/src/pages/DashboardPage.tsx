@@ -62,25 +62,25 @@ export function DashboardPage({
         <header className="page-heading">
           <div>
             <p className="eyebrow">创建服务</p>
-            <h1>为下一项工作准备运行环境</h1>
-            <p>从审核过的镜像和套餐中选择。提交订单后，我们会在确认付款后为你自动部署。</p>
+            <h1>创建运行环境</h1>
+            <p>选择镜像和套餐，提交后等待付款确认。</p>
           </div>
           <div className="step-hint"><b>01</b><span>选择资源</span><i /><b>02</b><span>确认订单</span></div>
         </header>
         <div className="create-layout">
           <div className="create-form">
             <section className="selection-section">
-              <div className="selection-title"><span className="selection-number">1</span><div><h2>选择镜像版本</h2><p>平台仅提供已审核的镜像，保障部署来源清晰、版本可追溯。</p></div></div>
-	              {catalogLoading ? <div className="catalog-empty">正在获取可用镜像，请稍候…</div> : catalogError ? <div className="catalog-empty">商品目录加载失败。<button className="text-button" onClick={onRetryCatalog}>重新加载</button></div> : imageGroups.length ? <><div className="choice-grid image-grid">{imageGroups.map(value => <button key={value.imageRef} type="button" className={`catalog-choice ${selectedImageRef === value.imageRef ? 'selected' : ''}`} aria-pressed={selectedImageRef === value.imageRef} onClick={() => { setImageRef(value.imageRef); setImageID(''); setError('') }}><span className="choice-mark">{selectedImageRef === value.imageRef ? '✓' : ''}</span><span><b>{value.name}</b><small>{value.imageRef}</small></span></button>)}</div><label htmlFor="image-version">镜像版本 <small>默认 latest</small></label><input id="image-version" value={imageVersion} maxLength={64} onChange={event=>setImageVersion(event.target.value)} placeholder="latest" /></> : <div className="catalog-empty">暂无可售镜像，请联系管理员在商品目录中新增镜像来源。</div>}
+              <div className="selection-title"><span className="selection-number">1</span><div><h2>选择镜像</h2><p>仅展示已审核的镜像来源。</p></div></div>
+              {catalogLoading ? <div className="catalog-empty">加载镜像中…</div> : catalogError ? <div className="catalog-empty">镜像加载失败。<button className="text-button" onClick={onRetryCatalog}>重试</button></div> : imageGroups.length ? <><div className="choice-grid image-grid">{imageGroups.map(value => <button key={value.imageRef} type="button" className={`catalog-choice ${selectedImageRef === value.imageRef ? 'selected' : ''}`} aria-pressed={selectedImageRef === value.imageRef} onClick={() => { setImageRef(value.imageRef); setImageID(''); setError('') }}><span className="choice-mark">{selectedImageRef === value.imageRef ? '✓' : ''}</span><span><b>{value.name}</b><small>{value.imageRef}</small></span></button>)}</div><label htmlFor="image-version">镜像版本 <small>默认 latest</small></label><input id="image-version" value={imageVersion} maxLength={64} onChange={event=>setImageVersion(event.target.value)} placeholder="latest" /></> : <div className="catalog-empty">暂无可售镜像。</div>}
             </section>
             <section className="selection-section">
-              <div className="selection-title"><span className="selection-number">2</span><div><h2>选择计算套餐</h2><p>按当前使用规模选择；后续可通过订单中心统一管理服务周期。</p></div></div>
-              {catalogLoading ? <div className="catalog-empty">正在获取可售套餐，请稍候…</div> : catalogError ? <div className="catalog-empty">商品目录加载失败。<button className="text-button" onClick={onRetryCatalog}>重新加载</button></div> : plans.length ? <div className="choice-grid plan-grid">
+              <div className="selection-title"><span className="selection-number">2</span><div><h2>选择套餐</h2><p>按需选择 CPU 和内存。</p></div></div>
+              {catalogLoading ? <div className="catalog-empty">加载套餐中…</div> : catalogError ? <div className="catalog-empty">套餐加载失败。<button className="text-button" onClick={onRetryCatalog}>重试</button></div> : plans.length ? <div className="choice-grid plan-grid">
                 {plans.map(value => <PlanChoice key={value.id} plan={value} selected={plan === value.id} onSelect={() => { setPlanID(value.id); setError('') }} />)}
-              </div> : <div className="catalog-empty">暂无可售套餐，请联系管理员配置套餐。</div>}
+              </div> : <div className="catalog-empty">暂无可售套餐。</div>}
             </section>
             <section className="selection-section compact-section">
-              <div className="selection-title"><span className="selection-number">3</span><div><h2>确认订阅周期</h2><p>将从账户代币余额直接扣除，部署失败可由管理员按账本冲正。</p></div></div>
+              <div className="selection-title"><span className="selection-number">3</span><div><h2>选择周期</h2><p>费用将从账户余额扣除。</p></div></div>
               <div className="period-controls" role="group" aria-label="订阅周期">
                 {[1, 3, 6, 12].map(value => <button type="button" key={value} className={months === value ? 'selected' : ''} aria-pressed={months === value} onClick={() => setMonths(value)}>{value} 个月</button>)}
               </div>
@@ -112,7 +112,7 @@ export function DashboardPage({
   return (
     <section className="page me-page dashboard-page">
       <header className="page-heading">
-        <div><p className="eyebrow">我的服务</p><h1>一眼掌握你的 AlemonX</h1><p>查看运行中的实例，需要新环境时可随时创建订单。</p></div>
+        <div><p className="eyebrow">我的服务</p><h1>实例总览</h1><p>查看实例状态，快速创建新服务。</p></div>
         <button className="primary create-action" onClick={onCreate}><span>＋</span> 创建服务</button>
       </header>
 	      <section className="service-overview" aria-label="服务概览">
@@ -126,11 +126,11 @@ export function DashboardPage({
         {loading ? <div className="instance-panel loading-panel"><span className="loading-dot" />正在加载实例…</div> : instances.length === 0 ? <div className="instance-panel empty-instance"><div className="empty-icon">＋</div><h2>从第一项服务开始</h2><p>选择经过审核的镜像和合适的算力套餐，创建订单后即可开始部署。</p><button className="primary" onClick={onCreate}>创建服务</button></div> : <div className="instance-list">{instances.map(item => {
           const state = instanceState(item.status)
           const action = state.tone === 'success' ? 'stop' : item.status === 'stopped' ? 'start' : null
-          return <article className="instance-row" key={item.id}><div className="instance-name"><span className="instance-avatar">A</span><div><h3>{item.name}</h3><p>{item.image} · {item.version}</p></div></div><div className="instance-resource"><small>运行配置</small><b>{item.spec}</b></div><div className="instance-state"><small>当前状态</small><span className={`status-badge ${state.tone}`}><i />{state.label}</span></div><div className="instance-access">{item.ip ? <a href={item.ip} target="_blank" rel="noreferrer">打开服务 <span>↗</span></a> : <span>访问地址准备中</span>}<button className="text-button" disabled={loadingLogs} onClick={() => void loadLogs(item.id).unwrap().then(value => setLogs({name:item.name,lines:value.lines}))}>查看日志</button>{action && <button className="text-button" disabled={operating} onClick={() => { if(window.confirm(`确定${action==='stop'?'停止':'启动'}此实例吗？`)) void operateInstance({id:item.id,action}) }}>{action==='stop'?'停止':'启动'}</button>}<button className="text-button" disabled={operating} onClick={() => { if(window.confirm('确定删除实例吗？服务会停止，数据保留 7 天。')) void operateInstance({id:item.id,action:'delete'}) }}>删除</button></div></article>
+          return <article className="instance-row" key={item.id}><div className="instance-name"><span className="instance-avatar">A</span><div><h3>{item.name}</h3><p>{item.image} · {item.version}</p></div></div><div className="instance-resource"><small>配置</small><b>{item.spec}</b></div><div className="instance-state"><small>状态</small><span className={`status-badge ${state.tone}`}><i />{state.label}</span></div><div className="instance-access">{item.ip ? <a href={item.ip} target="_blank" rel="noreferrer">打开服务 <span>↗</span></a> : <span>地址准备中</span>}<button className="text-button" disabled={loadingLogs} onClick={() => void loadLogs(item.id).unwrap().then(value => setLogs({name:item.name,lines:value.lines}))}>日志</button>{action && <button className="text-button" disabled={operating} onClick={() => { if(window.confirm(`确定${action==='stop'?'停止':'启动'}此实例吗？`)) void operateInstance({id:item.id,action}) }}>{action==='stop'?'停止':'启动'}</button>}<button className="text-button" disabled={operating} onClick={() => { if(window.confirm('确定删除实例吗？服务会停止，数据保留 7 天。')) void operateInstance({id:item.id,action:'delete'}) }}>删除</button></div></article>
         })}</div>}
       </section>
-      <section className="dashboard-help"><div><b>服务还未出现？</b><span>已创建订单的服务会在管理员确认付款后自动开始部署。</span></div><button onClick={onViewOrders}>查看订单中心 →</button></section>
-      {logs && <section className="table-box" role="dialog" aria-label={`${logs.name} 日志`}><div className="section-heading"><h2>{logs.name} · 最近日志</h2><button className="subtle-button" onClick={() => setLogs(null)}>关闭</button></div><pre className="instance-logs">{logs.lines.join('\n') || '暂无日志'}</pre></section>}
+      <section className="dashboard-help"><div><b>服务还未出现？</b><span>订单确认后会自动部署。</span></div><button onClick={onViewOrders}>查看订单 →</button></section>
+      {logs && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setLogs(null) }}><section className="modal-card logs-modal" role="dialog" aria-modal="true" aria-label={`${logs.name} 日志`}><div className="modal-heading"><div><p className="eyebrow">实例日志</p><h2>{logs.name} · 最近日志</h2><p>展示最近一次采集到的运行输出。</p></div><button className="modal-close" onClick={() => setLogs(null)} aria-label="关闭日志弹窗">×</button></div><pre className="instance-logs">{logs.lines.join('\n') || '暂无日志'}</pre></section></div>}
     </section>
   )
 }

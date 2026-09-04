@@ -49,9 +49,11 @@ func syncNodeHeartbeat(ctx context.Context) {
 	}
 	for _, n := range nodes {
 		var s struct {
-			DockerVersion         string `json:"dockerVersion"`
-			DiskAvailableBytes    int64  `json:"diskAvailableBytes"`
-			ManagedContainerCount int    `json:"managedContainerCount"`
+			DockerVersion         string  `json:"dockerVersion"`
+			CPUTotal              float64 `json:"cpuTotal"`
+			MemoryTotalMB         int     `json:"memoryTotalMB"`
+			DiskAvailableBytes    int64   `json:"diskAvailableBytes"`
+			ManagedContainerCount int     `json:"managedContainerCount"`
 		}
 		probe, cancel := context.WithTimeout(ctx, 8*time.Second)
 		err := nodeRequest(probe, n, "GET", "/container/status", nil, &s)
@@ -60,7 +62,13 @@ func syncNodeHeartbeat(ctx context.Context) {
 			log.Printf("node %s heartbeat: %v", n.ID, err)
 			continue
 		}
-		if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),docker_version=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`, s.DockerVersion, s.DiskAvailableBytes, s.ManagedContainerCount, n.ID); err != nil {
+		query := `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),docker_version=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
+		args := []any{s.DockerVersion, s.DiskAvailableBytes, s.ManagedContainerCount, n.ID}
+		if s.CPUTotal > 0 && s.MemoryTotalMB >= 256 {
+			query = `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),cpu_detected=?,memory_detected_mb=?,docker_version=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
+			args = []any{s.CPUTotal, s.MemoryTotalMB, s.DockerVersion, s.DiskAvailableBytes, s.ManagedContainerCount, n.ID}
+		}
+		if _, err := instanceDB.ExecContext(ctx, query, args...); err != nil {
 			log.Printf("save node %s heartbeat: %v", n.ID, err)
 		}
 	}

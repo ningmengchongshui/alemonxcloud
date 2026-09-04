@@ -13,13 +13,24 @@ const orderStates: Record<string, { label: string; tone: string; hint: string }>
 }
 
 const date = (value?: string) => value ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(value)) : '—'
+const orderStages = ['订单创建', '款项确认', '资源部署', '服务生效']
+const stageForStatus = (status: string) => status === 'pending_payment' ? 0 : status === 'pending_review' ? 1 : status === 'deploying' ? 2 : status === 'active' ? 3 : 0
 
 export function OrdersPage({ orders, loading, onCreate }: { orders: Order[]; loading: boolean; onCreate: () => void }) {
   const [cancel, { isLoading: cancelling }] = useCancelOrderMutation()
   const [renew, { isLoading: renewing }] = useRenewOrderMutation()
   const [submitPayment, { isLoading: submittingPayment }] = useSubmitPaymentMutation()
   const [error, setError] = useState('')
+  const [paymentOrder, setPaymentOrder] = useState<Order | null>(null)
+  const [paymentReference, setPaymentReference] = useState('')
+  const [filter, setFilter] = useState<'all' | 'processing' | 'active' | 'closed'>('all')
   const pending = orders.filter(order => ['pending_payment', 'pending_review', 'deploying'].includes(order.status)).length
+  const visibleOrders = orders.filter(order => {
+    if (filter === 'processing') return ['pending_payment', 'pending_review', 'deploying'].includes(order.status)
+    if (filter === 'active') return order.status === 'active'
+    if (filter === 'closed') return ['expired', 'cancelled', 'rejected'].includes(order.status)
+    return true
+  })
 
   async function cancelOrder(order: Order) {
     if (!window.confirm('确定取消此待支付订单吗？')) return
@@ -31,21 +42,23 @@ export function OrdersPage({ orders, loading, onCreate }: { orders: Order[]; loa
     setError('')
     try { await renew({ id: order.id, months: 1 }).unwrap() } catch { setError('创建续费订单失败，请稍后重试') }
   }
-  async function providePayment(order: Order) { const reference=window.prompt('请输入付款流水号或转账参考号'); if(!reference)return;setError('');try{await submitPayment({id:order.id,reference}).unwrap()}catch{setError('付款信息提交失败，请检查流水号后重试')} }
+  async function providePayment() { if (!paymentOrder || !paymentReference.trim()) return; setError(''); try { await submitPayment({id:paymentOrder.id,reference:paymentReference.trim()}).unwrap(); setPaymentOrder(null); setPaymentReference('') } catch { setError('付款信息提交失败，请检查流水号后重试') } }
 
   return <section className="page me-page orders-page">
     <header className="page-heading">
-      <div><p className="eyebrow">订单中心</p><h1>管理每一项服务订阅</h1><p>从付款确认到服务生效，所有状态和后续操作都集中在这里。</p></div>
+      <div><p className="eyebrow">订单中心</p><h1>订单管理</h1><p>查看订单状态并处理后续操作。</p></div>
       <button className="primary create-action" onClick={onCreate}><span>＋</span> 创建服务</button>
     </header>
-    <section className="orders-overview"><article><small>全部订单</small><strong>{loading ? '—' : orders.length}</strong><span>包含当前与历史订单</span></article><article><small>处理中</small><strong>{loading ? '—' : pending}</strong><span>付款确认或部署进行中</span></article><article className="orders-overview-note"><b>订单会在确认付款后自动开始部署</b><span>无需重复提交，状态变更会在这里同步。</span></article></section>
+    <section className="orders-overview"><article><small>全部订单</small><strong>{loading ? '—' : orders.length}</strong><span>当前及历史订单</span></article><article><small>处理中</small><strong>{loading ? '—' : pending}</strong><span>待确认或部署中</span></article><article className="orders-overview-note"><b>付款确认后自动部署</b><span>状态会自动更新。</span></article></section>
     {error && <p className="form-error" role="alert">{error}</p>}
-    {loading ? <div className="orders-panel loading-panel"><span className="loading-dot" />正在加载订单…</div> : orders.length === 0 ? <div className="orders-panel empty-instance"><div className="empty-icon">□</div><h2>还没有服务订单</h2><p>选择镜像与套餐后创建第一笔订单，我们会在确认付款后自动开始部署。</p><button className="primary" onClick={onCreate}>创建服务</button></div> : <section className="orders-list" aria-label="订单列表">{orders.map(order => {
+    {!loading && orders.length > 0 && <div className="order-toolbar"><div><h2>订单记录</h2><span>共 {visibleOrders.length} 笔</span></div><div className="order-filters" role="tablist" aria-label="订单筛选"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')} role="tab" aria-selected={filter === 'all'}>全部</button><button className={filter === 'processing' ? 'active' : ''} onClick={() => setFilter('processing')} role="tab" aria-selected={filter === 'processing'}>处理中</button><button className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')} role="tab" aria-selected={filter === 'active'}>已生效</button><button className={filter === 'closed' ? 'active' : ''} onClick={() => setFilter('closed')} role="tab" aria-selected={filter === 'closed'}>已结束</button></div></div>}
+    {loading ? <div className="orders-panel loading-panel"><span className="loading-dot" />加载订单中…</div> : orders.length === 0 ? <div className="orders-panel empty-instance"><div className="empty-icon">□</div><h2>暂无订单</h2><p>选择镜像和套餐，创建第一笔服务订单。</p><button className="primary" onClick={onCreate}>创建服务</button></div> : visibleOrders.length === 0 ? <div className="orders-panel empty-instance compact-empty"><h2>暂无匹配订单</h2><p>请切换筛选条件。</p></div> : <section className="orders-list" aria-label="订单列表">{visibleOrders.map(order => {
       const state = orderStates[order.status] ?? { label: order.status, tone: 'neutral', hint: '订单状态正在同步。' }
       const canCancel = ['pending_payment', 'pending_review'].includes(order.status)
       const canSubmitPayment = order.status === 'pending_payment'
       const canRenew = ['active', 'expired'].includes(order.status)
-      return <article className="order-card" key={order.id}><div className="order-card-top"><div><span className={`status-badge ${state.tone}`}><i />{state.label}</span><h2>{order.imageName} <small>· {order.planName}</small></h2><p>订单号 {order.id.slice(0, 14)} · 创建于 {date(order.createdAt)}</p></div><strong className="order-price">¥{(order.amountFen / 100).toFixed(2)}</strong></div><div className="order-card-bottom"><p>{state.hint}</p><dl><div><dt>镜像版本</dt><dd>{order.imageVersion || '—'}</dd></div><div><dt>服务到期</dt><dd>{date(order.expiresAt)}</dd></div></dl><div className="order-actions">{canSubmitPayment && <button className="primary compact-primary" disabled={submittingPayment} onClick={() => void providePayment(order)}>{submittingPayment ? '正在提交…' : '提交付款流水号'}</button>}{canCancel && <button className="subtle-button danger-action" disabled={cancelling} onClick={() => void cancelOrder(order)}>{cancelling ? '正在取消…' : '取消订单'}</button>}{canRenew && <button className="primary compact-primary" disabled={renewing} onClick={() => void renewOrder(order)}>{renewing ? '正在创建…' : '续费 1 个月'}</button>}</div></div></article>
+      return <article className="order-card" key={order.id}><div className="order-card-top"><div><span className={`status-badge ${state.tone}`}><i />{state.label}</span><h2>{order.imageName} <small>· {order.planName}</small></h2><p>订单号 {order.id.slice(0, 14)} · 创建于 {date(order.createdAt)}</p></div><strong className="order-price">¥{(order.amountFen / 100).toFixed(2)}</strong></div><div className="order-progress" aria-label={`订单进度：${state.label}`}>{orderStages.map((stage, index) => <div key={stage} className={index <= stageForStatus(order.status) ? 'done' : ''}><i>{index < stageForStatus(order.status) ? '✓' : index + 1}</i><span>{stage}</span></div>)}</div><div className="order-card-bottom"><p>{state.hint}</p><dl><div><dt>镜像版本</dt><dd>{order.imageVersion || '—'}</dd></div><div><dt>服务到期</dt><dd>{date(order.expiresAt)}</dd></div></dl><div className="order-actions">{canSubmitPayment && <button className="primary compact-primary" disabled={submittingPayment} onClick={() => { setPaymentOrder(order); setPaymentReference('') }}>{submittingPayment ? '正在提交…' : '提交付款流水号'}</button>}{canCancel && <button className="subtle-button danger-action" disabled={cancelling} onClick={() => void cancelOrder(order)}>{cancelling ? '正在取消…' : '取消订单'}</button>}{canRenew && <button className="primary compact-primary" disabled={renewing} onClick={() => void renewOrder(order)}>{renewing ? '正在创建…' : '续费 1 个月'}</button>}</div></div></article>
     })}</section>}
+    {paymentOrder&&<div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaymentOrder(null) }}><section className="modal-card compact-modal" role="dialog" aria-modal="true" aria-labelledby="payment-modal-title"><div className="modal-heading"><div><p className="eyebrow">订单付款</p><h2 id="payment-modal-title">提交付款流水号</h2><p>订单 {paymentOrder.id.slice(0, 14)} · ¥{(paymentOrder.amountFen / 100).toFixed(2)}</p></div><button className="modal-close" onClick={() => setPaymentOrder(null)} aria-label="关闭付款弹窗">×</button></div><label className="modal-field" htmlFor="payment-reference">付款流水号或转账参考号<input id="payment-reference" autoFocus value={paymentReference} onChange={event => setPaymentReference(event.target.value)} placeholder="请输入付款凭证中的参考号" /></label><div className="modal-actions"><button className="subtle-button" onClick={() => setPaymentOrder(null)}>取消</button><button className="primary" disabled={submittingPayment||!paymentReference.trim()} onClick={() => void providePayment()}>{submittingPayment?'正在提交…':'提交付款信息'}</button></div></section></div>}
   </section>
 }
