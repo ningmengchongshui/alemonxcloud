@@ -4,4 +4,4 @@ services:
     image: alemonxcloud:latest
     env_file: .env
     ports:
-      - "13082"
+      - "13082:8082"
