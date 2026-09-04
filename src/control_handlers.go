@@ -3,6 +3,8 @@ package cloud
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -197,6 +199,32 @@ func renewOrderHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, item)
+}
+
+// renewWithWalletHandler renews an existing service without reviving the
+// retired manual-payment flow.  The debit, ledger entry, renewal order and
+// (when necessary) restart task are committed as one transaction.
+func renewWithWalletHandler(c *gin.Context) {
+	var body struct {
+		Months int `json:"months"`
+	}
+	if c.ShouldBindJSON(&body) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "续费参数无效"})
+		return
+	}
+	user := c.MustGet("user").(oidcUser)
+	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months)
+	if err != nil {
+		businessError(c, err)
+		return
+	}
+	if task != nil {
+		if err := enqueuePersistedTask(c.Request.Context(), *task); err != nil {
+			c.JSON(http.StatusAccepted, gin.H{"order": item, "task": task, "message": "续费已记录，等待任务队列恢复"})
+			return
+		}
+	}
+	c.JSON(http.StatusAccepted, gin.H{"order": item, "task": task})
 }
 
 func adminCatalog(c *gin.Context) {
@@ -483,6 +511,10 @@ func instanceLogs(c *gin.Context) {
 }
 
 func businessError(c *gin.Context, err error) {
+	if errors.Is(err, driver.ErrBadConn) || strings.Contains(strings.ToLower(err.Error()), "bad connection") {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "数据库连接暂不可用，请稍后重试"})
+		return
+	}
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"message": "未找到资源"})
 		return

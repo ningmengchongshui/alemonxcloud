@@ -470,6 +470,15 @@ var imageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 func validImageDigest(value string) bool {
 	return imageDigestPattern.MatchString(strings.ToLower(strings.TrimSpace(value)))
 }
+
+// deploymentImage always prefers the approved immutable digest. A tag is used
+// only for sources whose operator intentionally has not recorded a digest.
+func deploymentImage(imageRef, version, digest string) string {
+	if validImageDigest(digest) {
+		return strings.TrimSpace(imageRef) + "@" + strings.ToLower(strings.TrimSpace(digest))
+	}
+	return strings.TrimSpace(imageRef) + ":" + strings.TrimSpace(version)
+}
 func nodeHeartbeatTTL() time.Duration {
 	seconds := envInt("XCLOUD_NODE_HEARTBEAT_TTL_SECONDS", 90)
 	if seconds < 15 {
@@ -614,21 +623,21 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if err != nil {
 			return err
 		}
-		image := imageRef + ":" + selectedVersion
-		if validImageDigest(digest) && selectedVersion == "" {
-			image = imageRef + "@" + digest
-		}
+		image := deploymentImage(imageRef, selectedVersion, digest)
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": image, "cpu": cpu, "memoryMB": memoryMB, "route": route}, nil)
 		if err == nil {
 			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='running' WHERE id=?`, item.ID)
 			if err == nil {
-				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=?`, orderActive, item.ID)
+				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status=?`, orderActive, item.ID, orderDeploy)
 			}
 		}
 	case "start":
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, nil)
 		if err == nil {
 			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='running' WHERE id=?`, item.ID)
+			if err == nil {
+				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status=?`, orderActive, item.ID, orderDeploy)
+			}
 		}
 	case "stop":
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)

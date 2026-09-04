@@ -1,6 +1,6 @@
 # AlemonX Cloud
 
-AlemonX Cloud 是 AlemonX 容器实例的自建控制面。用户登录后选择镜像、套餐并创建订单；控制面确认订单、分配节点，再由裸机上的 `xcloud-agent` 创建和管理 Docker 容器。
+AlemonX Cloud 是 AlemonX 容器实例的自建控制面。用户登录后选择镜像、套餐并使用钱包购买；控制面在一次事务中校验余额和节点资源、扣款并创建部署任务，再由裸机上的 `xcloud-agent` 创建和管理 Docker 容器。
 
 ## 文档导航
 

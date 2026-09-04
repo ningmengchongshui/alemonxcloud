@@ -48,3 +48,13 @@ func TestImageTagValidation(t *testing.T) {
 		t.Fatal("image tag validation is unsafe")
 	}
 }
+
+func TestDeploymentImagePrefersApprovedDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	if got := deploymentImage("registry.example/alemonx", "latest", digest); got != "registry.example/alemonx@"+digest {
+		t.Fatalf("digest must be used for deployment, got %q", got)
+	}
+	if got := deploymentImage("registry.example/alemonx", "v2", ""); got != "registry.example/alemonx:v2" {
+		t.Fatalf("tag fallback is incorrect, got %q", got)
+	}
+}

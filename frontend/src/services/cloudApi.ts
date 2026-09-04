@@ -26,6 +26,7 @@ export const cloudApi = createApi({
     readAllNotifications: builder.mutation<void, void>({ query: () => ({ url: '/notifications/read-all', method: 'POST' }), invalidatesTags: ['Notifications'] }),
     getInstanceTasks: builder.query<Array<{ task: Task }>, string>({ query: id => `/instances/${id}/tasks` }),
     getOrders: builder.query<Order[], void>({ query: () => '/orders', providesTags: ['Orders'] }),
+    renewOrder: builder.mutation<{ order: Order; task?: Task }, { id: string; months: number }>({ query: ({ id, months }) => ({ url: `/orders/${id}/renew`, method: 'POST', body: { months } }), invalidatesTags: ['Wallet', 'Orders', 'Instances'] }),
     getAdminCatalog: builder.query<Catalog, void>({ query: () => '/admin/catalog', providesTags: ['Admin'] }),
     getAdminOrders: builder.query<Order[], void>({ query: () => '/admin/orders', providesTags: ['Admin'] }),
     getAdminNodes: builder.query<import('@/types/cloud').Node[], void>({ query: () => '/admin/nodes', providesTags: ['Admin'] }),
@@ -46,4 +47,4 @@ export const cloudApi = createApi({
   })
 })
 
-export const { useGetSessionQuery, useGetInstancesQuery, useInstanceActionMutation, useLazyGetInstanceLogsQuery, useGetCatalogQuery, useGetWalletQuery, useGetWalletEntriesQuery, usePurchaseMutation, useGetNotificationsQuery, useReadNotificationMutation, useReadAllNotificationsMutation, useGetInstanceTasksQuery, useGetOrdersQuery, useGetAdminCatalogQuery, useGetAdminOrdersQuery, useGetAdminNodesQuery, useGetAdminTasksQuery, useGetAdminAuditLogsQuery, useGetAdminMetricsQuery, useSearchAdminUsersQuery, useGetAdminWalletEntriesQuery, useAdjustAdminWalletMutation, useSaveAdminImageMutation, useSaveAdminPlanMutation, useSaveAdminNodeMutation, useRetryTaskMutation, useLogoutMutation, useAuthorizeMutation, useCallbackMutation, useDevLoginMutation } = cloudApi
+export const { useGetSessionQuery, useGetInstancesQuery, useInstanceActionMutation, useLazyGetInstanceLogsQuery, useGetCatalogQuery, useGetWalletQuery, useGetWalletEntriesQuery, usePurchaseMutation, useGetNotificationsQuery, useReadNotificationMutation, useReadAllNotificationsMutation, useGetInstanceTasksQuery, useGetOrdersQuery, useRenewOrderMutation, useGetAdminCatalogQuery, useGetAdminOrdersQuery, useGetAdminNodesQuery, useGetAdminTasksQuery, useGetAdminAuditLogsQuery, useGetAdminMetricsQuery, useSearchAdminUsersQuery, useGetAdminWalletEntriesQuery, useAdjustAdminWalletMutation, useSaveAdminImageMutation, useSaveAdminPlanMutation, useSaveAdminNodeMutation, useRetryTaskMutation, useLogoutMutation, useAuthorizeMutation, useCallbackMutation, useDevLoginMutation } = cloudApi

@@ -132,7 +132,7 @@ func Run() {
 	router.POST("/api/orders", requireSession, manualPaymentDisabled)
 	router.POST("/api/orders/:id/cancel", requireSession, manualPaymentDisabled)
 	router.POST("/api/orders/:id/payment", requireSession, manualPaymentDisabled)
-	router.POST("/api/orders/:id/renew", requireSession, manualPaymentDisabled)
+	router.POST("/api/orders/:id/renew", requireSession, renewWithWalletHandler)
 	router.GET("/api/admin/catalog", requireAdmin, adminCatalog)
 	router.POST("/api/admin/images", requireAdmin, adminSaveImage)
 	router.PUT("/api/admin/images/:id", requireAdmin, adminSaveImage)

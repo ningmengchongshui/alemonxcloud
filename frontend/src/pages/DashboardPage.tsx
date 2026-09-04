@@ -11,7 +11,7 @@ const instanceState = (status: string) => {
   if (['failed', 'error', 'stopped', 'expired', '已停止', '已过期'].includes(normalized)) return { label: '需要处理', tone: 'danger' }
   return { label: status || '状态同步中', tone: 'neutral' }
 }
-const walletEntryLabel = (type: string) => type === 'purchase' ? '服务购买' : type === 'manual_credit' ? '管理员充值' : type === 'manual_debit' ? '管理员扣减' : '余额变动'
+const walletEntryLabel = (type: string) => type === 'purchase' ? '服务购买' : type === 'renewal' ? '服务续费' : type === 'manual_credit' ? '管理员充值' : type === 'manual_debit' ? '管理员扣减' : '余额变动'
 
 export function DashboardPage({
   instances,

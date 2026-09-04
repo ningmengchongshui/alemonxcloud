@@ -76,7 +76,71 @@ func initializeUpgradeSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := normalizeImageSources(ctx); err != nil {
+		return err
+	}
+	if _, err := instanceDB.ExecContext(ctx, `ALTER TABLE xcloud_images ADD UNIQUE KEY uq_xcloud_image_ref (image_ref)`); err != nil && !isDuplicateMigration(err) {
+		return fmt.Errorf("为镜像地址创建唯一约束: %w", err)
+	}
 	return removeBootstrapData(ctx)
+}
+
+// Older deployments could contain the same repository more than once because
+// uniqueness used to exist only in application code.  Repository source is the
+// product identity, so migrate all historical orders to the oldest record
+// before enforcing the database constraint.
+func normalizeImageSources(ctx context.Context) error {
+	tx, err := instanceDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT image_ref FROM xcloud_images GROUP BY image_ref HAVING COUNT(*) > 1`)
+	if err != nil {
+		return err
+	}
+	var refs []string
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			rows.Close()
+			return err
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		imageRows, err := tx.QueryContext(ctx, `SELECT id FROM xcloud_images WHERE image_ref=? ORDER BY created_at,id FOR UPDATE`, ref)
+		if err != nil {
+			return err
+		}
+		var ids []string
+		for imageRows.Next() {
+			var id string
+			if err := imageRows.Scan(&id); err != nil {
+				imageRows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := imageRows.Close(); err != nil {
+			return err
+		}
+		if len(ids) < 2 {
+			continue
+		}
+		for _, duplicateID := range ids[1:] {
+			if _, err := tx.ExecContext(ctx, `UPDATE xcloud_orders SET image_id=? WHERE image_id=?`, ids[0], duplicateID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM xcloud_images WHERE id=?`, duplicateID); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 // Bootstrap rows were useful in early demos but are unsafe operational data:
@@ -352,6 +416,11 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	if months < 1 || months > 24 {
 		return order{}, controlTask{}, errors.New("订阅周期应为 1 至 24 个月")
 	}
+	// Ping before opening the serializable transaction. database/sql can discard
+	// an idle connection here and obtain a fresh one from an external MySQL pool.
+	if err := instanceDB.PingContext(ctx); err != nil {
+		return order{}, controlTask{}, fmt.Errorf("数据库暂不可用: %w", err)
+	}
 	tx, err := instanceDB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return order{}, controlTask{}, err
@@ -416,6 +485,90 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	appendTaskEvent(ctx, t.ID, "queued", "钱包扣款后等待部署")
 	_ = createNotification(ctx, ownerID, "purchase", "购买已提交", fmt.Sprintf("已扣除 %.2f 代币，正在部署。", float64(amount)/100), map[string]any{"orderId": o.ID, "instanceId": instanceID, "taskId": t.ID})
 	return o, t, nil
+}
+
+// renewWithWallet extends one existing instance.  It deliberately does not
+// reserve fresh capacity: the instance already owns its node reservation until
+// it is purged.  Expired instances are restarted only after the debit commits.
+func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months int) (order, *controlTask, error) {
+	if months < 1 || months > 24 {
+		return order{}, nil, errors.New("订阅周期应为 1 至 24 个月")
+	}
+	tx, err := instanceDB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return order{}, nil, err
+	}
+	defer tx.Rollback()
+	var source order
+	var p plan
+	var img catalogImage
+	var instanceStatus string
+	var currentExpiry sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at,ins.status,ins.expires_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id JOIN xcloud_instances ins ON ins.id=o.instance_id WHERE o.id=? AND o.owner_id=? AND o.status IN (?,?) FOR UPDATE`, sourceOrderID, ownerID, orderActive, orderExpired).Scan(&source.ID, &source.OwnerID, &source.PlanID, &source.ImageID, &source.InstanceID, &source.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt, &instanceStatus, &currentExpiry)
+	if err != nil {
+		return order{}, nil, errors.New("订单不可续费")
+	}
+	if !p.Enabled || !img.Enabled {
+		return order{}, nil, errors.New("套餐或镜像版本已下架，无法续费")
+	}
+	if instanceStatus != "running" && instanceStatus != "stopped" && instanceStatus != "expired" {
+		return order{}, nil, errors.New("实例当前不可续费")
+	}
+	var balance int
+	if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {
+		return order{}, nil, errors.New("请重新登录后再续费")
+	}
+	amount := p.MonthlyFen * months
+	if balance < amount {
+		return order{}, nil, errors.New("代币余额不足")
+	}
+	now := time.Now()
+	base := now
+	if currentExpiry.Valid && currentExpiry.Time.After(now) {
+		base = currentExpiry.Time
+	}
+	expires := base.AddDate(0, months, 0)
+	entry := walletEntry{ID: newID("wal"), UserID: ownerID, AmountFen: -amount, BalanceAfterFen: balance - amount, Type: "renewal", Note: "续费 " + p.Name, ActorID: ownerID, CreatedAt: now}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=?,updated_at=? WHERE user_id=?`, entry.BalanceAfterFen, now, ownerID); err != nil {
+		return order{}, nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?)`, entry.ID, entry.UserID, entry.AmountFen, entry.BalanceAfterFen, entry.Type, entry.Note, entry.ActorID, now); err != nil {
+		return order{}, nil, err
+	}
+	status := orderActive
+	if instanceStatus == "expired" {
+		status = orderDeploy
+	}
+	item := order{ID: newID("ord"), OwnerID: ownerID, PlanID: p.ID, ImageID: img.ID, InstanceID: source.InstanceID, AmountFen: amount, Status: status, ExpiresAt: &expires, CreatedAt: &now, UpdatedAt: &now, PlanName: p.Name, ImageName: img.Name, ImageVersion: img.Version}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_note,payment_source,wallet_entry_id,selected_image_version,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, item.ID, ownerID, p.ID, img.ID, source.InstanceID, amount, status, "续费订单："+sourceOrderID, "wallet", entry.ID, img.Version, expires, now, now); err != nil {
+		return order{}, nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET expires_at=?,purge_at=NULL,status=CASE WHEN status='expired' THEN 'deploying' ELSE status END WHERE id=?`, expires, source.InstanceID); err != nil {
+		return order{}, nil, err
+	}
+	var task *controlTask
+	if instanceStatus == "expired" {
+		value := controlTask{ID: newID("task"), InstanceID: source.InstanceID, Action: "start", IdempotencyKey: "renew:" + item.ID, Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, value.ID, value.InstanceID, value.Action, value.IdempotencyKey, value.Status, 0, now, now, now); err != nil {
+			return order{}, nil, err
+		}
+		task = &value
+	}
+	taskID := ""
+	if task != nil {
+		taskID = task.ID
+	}
+	if err = writeAuditTx(ctx, tx, ownerID, "purchase.renew", "order", item.ID, map[string]any{"sourceOrderId": sourceOrderID, "amountFen": amount, "taskId": taskID}); err != nil {
+		return order{}, nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return order{}, nil, err
+	}
+	if task != nil {
+		appendTaskEvent(ctx, task.ID, "queued", "钱包扣款后等待续费恢复")
+	}
+	_ = createNotification(ctx, ownerID, "renewal", "续费成功", fmt.Sprintf("已扣除 %.2f 代币，服务有效期已延长。", float64(amount)/100), map[string]any{"orderId": item.ID, "instanceId": source.InstanceID})
+	return item, task, nil
 }
 func validImageTag(value string) bool {
 	if len(value) == 0 || len(value) > 64 || strings.ContainsAny(value, " \t\r\n/@") {
