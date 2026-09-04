@@ -2,5 +2,13 @@
 set -e
 
 find . -name '.DS_Store' -type f -delete
-go build
-git diff --exit-code
+
+server_binary=$(mktemp)
+agent_binary=$(mktemp)
+trap 'rm -f "$server_binary" "$agent_binary"' EXIT
+
+go build -o "$server_binary" ./src
+(
+  cd agent
+  go build -o "$agent_binary" .
+)

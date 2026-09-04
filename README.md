@@ -1,32 +1,38 @@
-# Go + React 开发模板
+# AlemonX Cloud
 
-最小的全栈项目骨架：Go/Gin 提供 API 和静态文件服务，React/Vite 提供前端界面。
+AlemonX Cloud 是面向 AlemonX 容器实例的自建云平台。用户通过 Auth 登录，选择已上架的镜像、版本和资源规格；平台通过裸机上的 `xcloud-agent` 管理 Docker 容器，并使用专属子域名访问实例。
 
-## 快速开始
+> 当前阶段：基础设施、认证、实例原型、MySQL 数据模型和 RabbitMQ 队列基础已实现；商品、订单确认、资源预占和队列执行器仍在开发，不能将其视为付费生产版本。
+
+## 文档导航
+
+- [架构与状态](docs/架构与状态.md)：组件职责、访问链路与已实现边界。
+- [部署手册](docs/部署手册.md)：本地、Docker Compose、裸机 agent、Nginx、DNS/TLS。
+- [接口参考](docs/API.md)：当前可调用的 HTTP 接口与权限。
+- [MVP 路线图](docs/MVP路线图.md)：首发范围、数据模型和未完成项。
+
+## 开发启动
 
 ```bash
 cp .env.example .env
 cd frontend && yarn && yarn dev
 ```
 
-另开一个终端启动 API：
+另开一个终端启动服务端：
 
 ```bash
-go run .
+make dev
 ```
 
-前端开发服务器运行在 `http://localhost:5173`，`/api` 请求会代理到 `http://localhost:8082`。
+前端开发服务器为 `http://localhost:5173`，`/api` 自动代理到 `http://localhost:8082`。开发模式可使用内置超级管理员登录；发布模式不注册该接口。
 
-## 约定
+## 构建与检查
 
-- `GET /healthz`：存活检查
-- `GET /api/ping`：示例 API
-- `src/`：xcloud-server 的 Go 源码、持久化与测试
-- `frontend/src/App.tsx`：前端应用起点
-- 生产构建：`make frontend-build && make build`
+```bash
+make frontend-build
+make build
+make test
+make agent-test
+```
 
-## xcloud MVP 部署要点
-
-- 生产环境必须设置 `MYSQL_DSN`，实例记录会自动迁移到 `xcloud_instances` 表；未设置时仅使用开发内存存储。
-- 设置 `XCLOUD_AGENT_URL` 和 `XCLOUD_AGENT_TOKEN` 后，创建实例会调用裸机 agent；缺少任一配置时，实例会显示为“等待节点接入”。
-- agent 默认绑定 `127.0.0.1:9092`。用户实例的域名转发配置见 `deploy/nginx-instance-proxy.conf`，systemd 单元见 `deploy/xcloud-agent.service`。
+服务端源码位于 `src/`，前端源码位于 `frontend/src/`，裸机 agent 位于 `agent/`。

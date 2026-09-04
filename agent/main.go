@@ -46,7 +46,7 @@ func main() {
 	control.DELETE("/:name", deleteContainer)
 	// Nginx 在请求中写入实例路由键；控制接口会先于该路由命中。
 	r.NoRoute(proxyContainer)
-	address := env("AGENT_ADDR", "127.0.0.1:9092")
+	address := env("AGENT_ADDR", "127.0.0.1:13092")
 	log.Printf("xcloud agent listening on %s", address)
 	if err := r.Run(address); err != nil {
 		log.Fatal(err)
