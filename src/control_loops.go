@@ -2,7 +2,6 @@ package cloud
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 )
@@ -103,25 +102,4 @@ func syncInstanceStates(ctx context.Context) {
 			}
 		}
 	}
-}
-func agentOnline(ctx context.Context) bool {
-	if instanceDB == nil {
-		return agentConfigured()
-	}
-	nodes, err := enabledNodes(ctx)
-	if err != nil {
-		return false
-	}
-	for _, n := range nodes {
-		probe, cancel := context.WithTimeout(ctx, 8*time.Second)
-		err := nodeRequest(probe, n, "GET", "/container/status", nil, nil)
-		cancel()
-		if err == nil {
-			return true
-		}
-	}
-	return false
-}
-func agentContainerState(ctx context.Context, name string) (string, error) {
-	return "", fmt.Errorf("use node-specific agent state")
 }

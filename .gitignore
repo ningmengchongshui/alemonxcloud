@@ -49,3 +49,5 @@ pnpm-lock.yaml
 /auth.tar.gz
 
 agent/xcloud-agent
+agent/.env
+/.xcloud/

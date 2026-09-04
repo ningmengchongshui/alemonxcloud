@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -93,9 +92,6 @@ func Run() {
 		}
 		log.Printf("platform upgrade schema unavailable: %v", err)
 	}
-	if mode == gin.ReleaseMode && !agentOnline(context.Background()) {
-		log.Fatal("initialize Agent: agent is unavailable or rejected the control token")
-	}
 	if err := initTaskQueue(); err != nil {
 		if mode == gin.ReleaseMode {
 			log.Fatalf("RabbitMQ unavailable: %v", err)
@@ -104,8 +100,10 @@ func Run() {
 	} else {
 		consumeTasks()
 		recoverPendingTasks()
-		startControlLoops()
 	}
+	// Node health polling must not depend on RabbitMQ. A newly registered
+	// node needs to become schedulable even while task delivery is recovering.
+	startControlLoops()
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 	router.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok", "version": Version}) })
@@ -499,50 +497,6 @@ func createInstance(c *gin.Context) {
 		c.JSON(http.StatusAccepted, item)
 	*/
 }
-func instanceAction(c *gin.Context) {
-	item, ok := ownedInstance(c)
-	if !ok {
-		return
-	}
-	action := c.Param("action")
-	if action != "start" && action != "stop" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的实例操作"})
-		return
-	}
-	if !agentConfigured() {
-		c.JSON(http.StatusConflict, gin.H{"message": "尚未接入裸机节点"})
-		return
-	}
-	if err := callAgent(c.Request.Context(), http.MethodPost, "/container/"+item.ContainerName+"/"+action, nil); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"message": "节点操作失败"})
-		return
-	}
-	if action == "start" {
-		item.Status = "运行中"
-	} else {
-		item.Status = "已停止"
-	}
-	if err := saveStoredInstance(c.Request.Context(), item); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "保存实例状态失败"})
-		return
-	}
-	c.JSON(http.StatusOK, item)
-}
-func deleteInstance(c *gin.Context) {
-	item, ok := ownedInstance(c)
-	if !ok {
-		return
-	}
-	if agentConfigured() && callAgent(c.Request.Context(), http.MethodDelete, "/container/"+item.ContainerName, nil) != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"message": "节点删除失败"})
-		return
-	}
-	if err := removeStoredInstance(c.Request.Context(), item.ID, item.OwnerID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "删除实例记录失败"})
-		return
-	}
-	c.Status(http.StatusNoContent)
-}
 func ownedInstance(c *gin.Context) (instance, bool) {
 	user := c.MustGet("user").(oidcUser)
 	id := c.Param("id")
@@ -557,46 +511,9 @@ func ownedInstance(c *gin.Context) (instance, bool) {
 	}
 	return item, true
 }
-func listNodes(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"nodes": []gin.H{{"name": "baremetal-sh-01", "status": "online", "cpuAvailable": 28, "memoryAvailableGB": 92}}})
-}
-func agentConfigured() bool {
-	return env("XCLOUD_AGENT_URL", "") != "" && env("XCLOUD_AGENT_TOKEN", "") != ""
-}
-func imageReference(image, version string) string {
-	if strings.Contains(image, "@") || strings.Contains(strings.TrimPrefix(image[strings.LastIndex(image, "/")+1:], "/"), ":") {
-		return image
-	}
-	return image + ":" + version
-}
 func routeKey(value string) string {
 	digest := sha256.Sum256([]byte(value))
 	return fmt.Sprintf("r%x", digest[:8])
-}
-func callAgent(ctx context.Context, method, path string, payload any) error {
-	var body io.Reader
-	if payload != nil {
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		body = strings.NewReader(string(data))
-	}
-	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(env("XCLOUD_AGENT_URL", ""), "/")+path, body)
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Authorization", "Bearer "+env("XCLOUD_AGENT_TOKEN", ""))
-	request.Header.Set("Content-Type", "application/json")
-	response, err := (&http.Client{Timeout: 3 * time.Minute}).Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("agent responded %d", response.StatusCode)
-	}
-	return nil
 }
 func oidcConfigured() bool {
 	return env("AUTH_OIDC_ISSUER", "") != "" && env("AUTH_OIDC_CLIENT_ID", "") != "" && env("AUTH_OIDC_REDIRECT_URL", "") != ""
@@ -690,7 +607,7 @@ func envInt(key string, fallback int) int {
 }
 
 func validateProductionConfig() {
-	for _, key := range []string{"MYSQL_DSN", "SESSION_REDIS_URL", "RABBITMQ_URL", "AUTH_OIDC_ISSUER", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_REDIRECT_URL", "XCLOUD_AGENT_URL", "XCLOUD_AGENT_TOKEN", "XCLOUD_NODE_TOKEN_ENCRYPTION_KEY", "XCLOUD_METRICS_TOKEN", "XCLOUD_INSTANCE_DOMAIN", "XCLOUD_INSTANCE_DATA_ROOT"} {
+	for _, key := range []string{"MYSQL_DSN", "SESSION_REDIS_URL", "RABBITMQ_URL", "AUTH_OIDC_ISSUER", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_REDIRECT_URL", "XCLOUD_NODE_TOKEN_ENCRYPTION_KEY", "XCLOUD_METRICS_TOKEN", "XCLOUD_INSTANCE_DOMAIN", "XCLOUD_INSTANCE_DATA_ROOT"} {
 		if strings.TrimSpace(os.Getenv(key)) == "" {
 			log.Fatalf("production configuration missing: %s", key)
 		}

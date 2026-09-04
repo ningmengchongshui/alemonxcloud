@@ -43,8 +43,8 @@ func TestTaskRetryIsBounded(t *testing.T) {
 	}
 }
 
-func TestImageReferencePreservesDigest(t *testing.T) {
-	if got := imageReference("registry.example/alemonx@sha256:abcdef", "latest"); got != "registry.example/alemonx@sha256:abcdef" {
-		t.Fatalf("digest changed: %s", got)
+func TestImageTagValidation(t *testing.T) {
+	if !validImageTag("latest") || !validImageTag("v2.4.1") || validImageTag("../../other") {
+		t.Fatal("image tag validation is unsafe")
 	}
 }

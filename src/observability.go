@@ -20,9 +20,6 @@ func readiness(c *gin.Context) {
 	if !queueAvailable() {
 		problems = append(problems, "rabbitmq")
 	}
-	if !agentOnline(c.Request.Context()) {
-		problems = append(problems, "agent")
-	}
 	if len(problems) > 0 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ready": false, "dependencies": problems})
 		return

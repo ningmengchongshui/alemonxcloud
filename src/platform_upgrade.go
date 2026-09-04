@@ -76,21 +76,31 @@ func initializeUpgradeSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	// Previous releases stored a disabled fake digest as a seed. A managed
-	// source no longer needs an administrator-maintained digest: the selected
-	// tag is kept with the order and is resolved by Docker at deployment time.
-	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_images SET image_digest=NULL,version='latest',enabled=TRUE WHERE id='image-alemonx-latest' AND image_digest LIKE 'sha256:000%'`)
-	// Upgrade the original single-node deployment without ever exposing its token
-	// through an API. New nodes always provide their own token at registration.
-	if token := strings.TrimSpace(env("XCLOUD_AGENT_TOKEN", "")); token != "" && strings.TrimSpace(env("XCLOUD_NODE_TOKEN_ENCRYPTION_KEY", "")) != "" {
-		var current string
-		if err := instanceDB.QueryRowContext(ctx, `SELECT COALESCE(agent_token_ciphertext,'') FROM xcloud_nodes WHERE id='node-default'`).Scan(&current); err == nil && current == "" {
-			if encrypted, e := encryptNodeToken(token); e == nil {
-				_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_nodes SET agent_token_ciphertext=? WHERE id='node-default'`, encrypted)
-			}
+	return removeBootstrapData(ctx)
+}
+
+// Bootstrap rows were useful in early demos but are unsafe operational data:
+// every node, source image and plan must now be explicitly created by an admin.
+// This migration runs once and never touches rows created later by an operator.
+func removeBootstrapData(ctx context.Context) error {
+	var marker int
+	if err := instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_settings WHERE setting_key='bootstrap_data_cleanup_v1'`).Scan(&marker); err != nil {
+		return err
+	}
+	if marker > 0 {
+		return nil
+	}
+	for _, statement := range []string{
+		`DELETE FROM xcloud_nodes WHERE id='node-default' AND NOT EXISTS (SELECT 1 FROM xcloud_instances WHERE node_id='node-default')`,
+		`DELETE FROM xcloud_images WHERE id='image-alemonx-latest' AND NOT EXISTS (SELECT 1 FROM xcloud_orders WHERE image_id='image-alemonx-latest')`,
+		`DELETE FROM xcloud_plans WHERE id IN ('plan-starter','plan-standard','plan-pro') AND NOT EXISTS (SELECT 1 FROM xcloud_orders WHERE plan_id=xcloud_plans.id)`,
+	} {
+		if _, err := instanceDB.ExecContext(ctx, statement); err != nil {
+			return err
 		}
 	}
-	return nil
+	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_settings (setting_key,setting_value,updated_at) VALUES ('bootstrap_data_cleanup_v1',JSON_OBJECT('completed',TRUE),NOW())`)
+	return err
 }
 
 func syncCloudUser(ctx context.Context, user oidcUser) error {
@@ -111,7 +121,10 @@ func encryptionKey() ([]byte, error) {
 	if raw == "" {
 		return nil, errors.New("缺少 XCLOUD_NODE_TOKEN_ENCRYPTION_KEY")
 	}
-	key, err := base64.RawStdEncoding.DecodeString(raw)
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		key, err = base64.RawStdEncoding.DecodeString(raw)
+	}
 	if err != nil || len(key) != 32 {
 		return nil, errors.New("XCLOUD_NODE_TOKEN_ENCRYPTION_KEY 必须是 base64 编码的 32 字节密钥")
 	}
@@ -263,11 +276,13 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 	defer rows.Close()
 	var best node
 	bestScore := math.Inf(1)
+	healthy := 0
 	for rows.Next() {
 		var n node
 		if err := rows.Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt); err != nil {
 			return node{}, err
 		}
+		healthy++
 		var cpu float64
 		var memory int
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(cpu),0),COALESCE(SUM(memory_mb),0) FROM xcloud_instances WHERE node_id=? AND status IN ('deploying','running','stopped','expired','retention')`, n.ID).Scan(&cpu, &memory); err != nil {
@@ -282,6 +297,9 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 		}
 	}
 	if best.ID == "" {
+		if healthy == 0 {
+			return node{}, errors.New("暂无健康可调度节点，请等待节点心跳完成")
+		}
 		return node{}, errors.New("没有可用裸机节点")
 	}
 	return best, nil
@@ -360,7 +378,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	}
 	n, err := selectNodeForPlan(ctx, tx, p)
 	if err != nil {
-		return order{}, controlTask{}, errors.New("资源不足，请联系官方客服")
+		return order{}, controlTask{}, err
 	}
 	now := time.Now()
 	instanceID := newID("ins")

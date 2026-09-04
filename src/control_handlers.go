@@ -3,7 +3,6 @@ package cloud
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -439,27 +438,21 @@ func instanceLogs(c *gin.Context) {
 	if !ok {
 		return
 	}
-	request, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, strings.TrimRight(env("XCLOUD_AGENT_URL", ""), "/")+"/container/"+item.ContainerName+"/logs", nil)
-	if err != nil {
+	var nodeID string
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(node_id,'') FROM xcloud_instances WHERE id=?`, item.ID).Scan(&nodeID); err != nil {
 		internalError(c, err)
 		return
 	}
-	request.Header.Set("Authorization", "Bearer "+env("XCLOUD_AGENT_TOKEN", ""))
-	response, err := (&http.Client{Timeout: 20 * time.Second}).Do(request)
+	n, err := nodeByID(c.Request.Context(), nodeID)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"message": "节点日志暂不可用"})
-		return
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		c.JSON(http.StatusBadGateway, gin.H{"message": "读取实例日志失败"})
+		c.JSON(http.StatusBadGateway, gin.H{"message": "实例节点不可用"})
 		return
 	}
 	var body struct {
 		Lines []string `json:"lines"`
 	}
-	if err = json.NewDecoder(response.Body).Decode(&body); err != nil {
-		internalError(c, err)
+	if err := nodeRequest(c.Request.Context(), n, http.MethodGet, "/container/"+item.ContainerName+"/logs", nil, &body); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "读取实例日志失败"})
 		return
 	}
 	c.JSON(http.StatusOK, body)

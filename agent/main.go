@@ -64,6 +64,10 @@ func runServer() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		log.Printf("load .env: %v", err)
 	}
+	// Agent secrets belong to the node, never to the control-plane .env.
+	if err := godotenv.Overload("agent/.env"); err != nil && !os.IsNotExist(err) {
+		log.Printf("load agent/.env: %v", err)
+	}
 	gin.SetMode(env("GIN_MODE", gin.ReleaseMode))
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())

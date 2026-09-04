@@ -124,43 +124,12 @@ func initializeControlPlane(ctx context.Context) error {
 			return fmt.Errorf("控制面迁移: %w", err)
 		}
 	}
-	if _, err := instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,created_at,updated_at) VALUES ('node-default','默认裸机节点','',16,262144,TRUE,NOW(),NOW())`); err != nil {
-		return err
-	}
-	if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_nodes SET agent_url=CASE WHEN agent_url='' THEN ? ELSE agent_url END WHERE id='node-default'`, env("XCLOUD_AGENT_URL", "")); err != nil {
-		return err
-	}
-	return seedCatalog(ctx)
+	return nil
 }
 
 func isDuplicateMigration(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "duplicate column") || strings.Contains(message, "duplicate key") || strings.Contains(message, "already exists")
-}
-
-func seedCatalog(ctx context.Context) error {
-	var count int
-	if err := instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_images`).Scan(&count); err != nil {
-		return err
-	}
-	now := time.Now()
-	if count == 0 {
-		if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_images (id,name,image_ref,image_digest,version,enabled,created_at) VALUES (?,?,?,?,?,?,?)`, "image-alemonx-latest", "AlemonX", "ccr.ccs.tencentyun.com/ningmengchongshui/alemonx", "sha256:"+strings.Repeat("0", 64), "latest", false, now); err != nil {
-			return err
-		}
-	}
-	if err := instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_plans`).Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	for _, value := range []plan{{"plan-starter", "入门版", 2, 4096, 9900, true, 10, now}, {"plan-standard", "标准版", 4, 8192, 19900, true, 20, now}, {"plan-pro", "专业版", 8, 16384, 39900, true, 30, now}} {
-		if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_plans (id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at) VALUES (?,?,?,?,?,?,?,?)`, value.ID, value.Name, value.CPU, value.MemoryMB, value.MonthlyFen, value.Enabled, value.SortOrder, value.CreatedAt); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func listCatalog(ctx context.Context, includeDisabled bool) ([]catalogImage, []plan, error) {
@@ -233,6 +202,12 @@ func saveImage(ctx context.Context, value catalogImage) error {
 	// Digest is optional operational metadata. Source approval happens at the
 	// repository level, while every user's selected tag is persisted on order.
 	value.ImageDigest = strings.ToLower(strings.TrimSpace(value.ImageDigest))
+	// Older admin pages send the bootstrap placeholder back on every update.
+	// It is not a user-supplied digest and is intentionally ignored now that
+	// administrators manage repository sources rather than immutable versions.
+	if strings.HasPrefix(value.ImageDigest, "seed:") || value.ImageDigest == "sha256:"+strings.Repeat("0", 64) {
+		value.ImageDigest = ""
+	}
 	if value.ImageDigest != "" && !validImageDigest(value.ImageDigest) {
 		return errors.New("镜像摘要格式无效")
 	}
