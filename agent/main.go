@@ -84,7 +84,7 @@ func runServer() {
 	r.NoRoute(proxyContainer)
 	// The control plane runs in Docker and reaches this service through the
 	// Docker bridge gateway.  Exposure is constrained by the host firewall;
-	// see docs/部署手册.md for the required allow rule.
+	// See docs/03-部署指南.md for the required allow rule.
 	address := env("AGENT_ADDR", "0.0.0.0:13092")
 	log.Printf("xcloud agent listening on %s", address)
 	if err := r.Run(address); err != nil {
