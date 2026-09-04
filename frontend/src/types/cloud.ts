@@ -33,7 +33,7 @@ export interface Order { id: string; ownerId: string; planId: string; imageId: s
 export interface Node { id: string; name: string; agentURL: string; agentToken?: string; cpuTotal: number; memoryTotalMB: number; cpuDetected: number; memoryDetectedMB: number; cpuReserved: number; memoryReservedMB: number; enabled: boolean; lastHeartbeatAt?: string; dockerVersion?: string; diskAvailableBytes?: number; managedContainerCount?: number }
 export interface Task { id: string; instanceId: string; action: string; status: string; attempts: number; lastError: string; createdAt: string }
 export interface Wallet { id: string; username: string; email: string; balanceFen: number; lastLoginAt: string }
-export interface WalletEntry { id: string; amountFen: number; balanceAfterFen: number; type: string; note: string; createdAt: string }
+export interface WalletEntry { id: string; amountFen: number; balanceAfterFen: number; type: string; note: string; actorId?: string; createdAt: string }
 export interface Notification { id: string; type: string; title: string; body: string; readAt?: string; createdAt: string }
 export interface CloudUser { id: string; username: string; email: string; balanceFen: number; lastLoginAt: string }
 export interface AdminMetrics { nodes: Node[]; taskFailures: number; taskBacklog: number }

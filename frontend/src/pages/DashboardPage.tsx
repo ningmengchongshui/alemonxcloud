@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useGetWalletQuery, useInstanceActionMutation, useLazyGetInstanceLogsQuery, usePurchaseMutation } from '@/services/cloudApi'
+import { useGetWalletEntriesQuery, useGetWalletQuery, useInstanceActionMutation, useLazyGetInstanceLogsQuery, usePurchaseMutation } from '@/services/cloudApi'
 import type { Catalog, Instance, Page, Plan } from '@/types/cloud'
+import { ActionDialog } from '@/components/ActionDialog'
 
 const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`
 const instanceState = (status: string) => {
@@ -10,6 +11,7 @@ const instanceState = (status: string) => {
   if (['failed', 'error', 'stopped', 'expired', '已停止', '已过期'].includes(normalized)) return { label: '需要处理', tone: 'danger' }
   return { label: status || '状态同步中', tone: 'neutral' }
 }
+const walletEntryLabel = (type: string) => type === 'purchase' ? '服务购买' : type === 'manual_credit' ? '管理员充值' : type === 'manual_debit' ? '管理员扣减' : '余额变动'
 
 export function DashboardPage({
   instances,
@@ -42,9 +44,11 @@ export function DashboardPage({
 	const [error, setError] = useState('')
 	const [purchase, { isLoading: saving }] = usePurchaseMutation()
 	const { data: wallet } = useGetWalletQuery()
+	const { data: walletEntries = [] } = useGetWalletEntriesQuery()
   const [operateInstance, { isLoading: operating }] = useInstanceActionMutation()
   const [loadLogs, { isLoading: loadingLogs }] = useLazyGetInstanceLogsQuery()
   const [logs, setLogs] = useState<{ name: string; lines: string[] } | null>(null)
+  const [pendingAction, setPendingAction] = useState<{ id: string; action: 'start' | 'stop' | 'delete' } | null>(null)
   const images = catalog?.images ?? []
 	const imageGroups = Array.from(new Map(images.map(item => [item.imageRef, { name: item.name, imageRef: item.imageRef }])).values())
 	const selectedImageRef = imageRef || imageGroups[0]?.imageRef || ''
@@ -63,7 +67,7 @@ export function DashboardPage({
           <div>
             <p className="eyebrow">创建服务</p>
             <h1>创建运行环境</h1>
-            <p>选择镜像和套餐，提交后等待付款确认。</p>
+            <p>选择镜像和套餐，系统校验余额与资源后自动部署。</p>
           </div>
           <div className="step-hint"><b>01</b><span>选择资源</span><i /><b>02</b><span>确认订单</span></div>
         </header>
@@ -97,7 +101,7 @@ export function DashboardPage({
             </dl>
             <div className="summary-total"><span>应付代币</span><strong>{selectedPlan ? `${(total / 100).toFixed(2)} 代币` : '—'}</strong></div>
             {error && <p className="form-error" role="alert">{error}</p>}
-	            <button className="primary full" disabled={saving || !image || !plan || !imageVersion.trim()} onClick={() => void purchase({ imageId: image, imageVersion: imageVersion.trim(), planId: plan, months }).unwrap().then(onCreated).catch(value => setError(typeof value === 'object' && value !== null && 'data' in value ? '代币余额、镜像版本或节点资源不足，请检查后重试' : '购买失败，请检查网络后重试'))}>
+	            <button className="primary full" disabled={saving || !image || !plan || !imageVersion.trim()} onClick={() => void purchase({ imageId: image, imageVersion: imageVersion.trim(), planId: plan, months }).unwrap().then(onCreated).catch(() => setError('购买未完成：余额或可用资源不足时，系统不会扣款，也不会创建订单。'))}>
               {saving ? '正在扣款并安排部署…' : '使用代币直接购买'}
             </button>
             <p className="summary-note">购买后立即进入部署队列，可在订单中心追踪状态。</p>
@@ -126,11 +130,13 @@ export function DashboardPage({
         {loading ? <div className="instance-panel loading-panel"><span className="loading-dot" />正在加载实例…</div> : instances.length === 0 ? <div className="instance-panel empty-instance"><div className="empty-icon">＋</div><h2>从第一项服务开始</h2><p>选择经过审核的镜像和合适的算力套餐，创建订单后即可开始部署。</p><button className="primary" onClick={onCreate}>创建服务</button></div> : <div className="instance-list">{instances.map(item => {
           const state = instanceState(item.status)
           const action = state.tone === 'success' ? 'stop' : item.status === 'stopped' ? 'start' : null
-          return <article className="instance-row" key={item.id}><div className="instance-name"><span className="instance-avatar">A</span><div><h3>{item.name}</h3><p>{item.image} · {item.version}</p></div></div><div className="instance-resource"><small>配置</small><b>{item.spec}</b></div><div className="instance-state"><small>状态</small><span className={`status-badge ${state.tone}`}><i />{state.label}</span></div><div className="instance-access">{item.ip ? <a href={item.ip} target="_blank" rel="noreferrer">打开服务 <span>↗</span></a> : <span>地址准备中</span>}<button className="text-button" disabled={loadingLogs} onClick={() => void loadLogs(item.id).unwrap().then(value => setLogs({name:item.name,lines:value.lines}))}>日志</button>{action && <button className="text-button" disabled={operating} onClick={() => { if(window.confirm(`确定${action==='stop'?'停止':'启动'}此实例吗？`)) void operateInstance({id:item.id,action}) }}>{action==='stop'?'停止':'启动'}</button>}<button className="text-button" disabled={operating} onClick={() => { if(window.confirm('确定删除实例吗？服务会停止，数据保留 7 天。')) void operateInstance({id:item.id,action:'delete'}) }}>删除</button></div></article>
+          return <article className="instance-row" key={item.id}><div className="instance-name"><span className="instance-avatar">A</span><div><h3>{item.name}</h3><p>{item.image} · {item.version}</p></div></div><div className="instance-resource"><small>配置</small><b>{item.spec}</b></div><div className="instance-state"><small>状态</small><span className={`status-badge ${state.tone}`}><i />{state.label}</span></div><div className="instance-access">{item.ip ? <a href={item.ip} target="_blank" rel="noreferrer">打开服务 <span>↗</span></a> : <span>地址准备中</span>}<button className="text-button" disabled={loadingLogs} onClick={() => void loadLogs(item.id).unwrap().then(value => setLogs({name:item.name,lines:value.lines}))}>日志</button>{action && <button className="text-button" disabled={operating} onClick={() => setPendingAction({ id: item.id, action })}>{action==='stop'?'停止':'启动'}</button>}<button className="text-button" disabled={operating} onClick={() => setPendingAction({ id: item.id, action: 'delete' })}>删除</button></div></article>
         })}</div>}
       </section>
+      <section className="instance-section wallet-history-section"><div className="section-heading"><div><h2>钱包流水</h2><p>每一笔余额变动都会记录在这里。</p></div><strong>{wallet ? `${(wallet.balanceFen / 100).toFixed(2)} 代币` : '同步中'}</strong></div>{walletEntries.length === 0 ? <div className="instance-panel empty-instance compact-empty"><h2>暂无钱包流水</h2><p>充值、扣减和服务购买记录会显示在这里。</p></div> : <div className="wallet-entry-list">{walletEntries.map(entry => <article className="wallet-entry-row" key={entry.id}><div><b>{walletEntryLabel(entry.type)}</b><p>{entry.note || '—'}</p></div><strong className={entry.amountFen >= 0 ? 'wallet-credit' : 'wallet-debit'}>{entry.amountFen >= 0 ? '+' : ''}{(entry.amountFen / 100).toFixed(2)} 代币</strong><small>{new Date(entry.createdAt).toLocaleString('zh-CN')} · 余额 {(entry.balanceAfterFen / 100).toFixed(2)} 代币</small></article>)}</div>}</section>
       <section className="dashboard-help"><div><b>服务还未出现？</b><span>订单确认后会自动部署。</span></div><button onClick={onViewOrders}>查看订单 →</button></section>
       {logs && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setLogs(null) }}><section className="modal-card logs-modal" role="dialog" aria-modal="true" aria-label={`${logs.name} 日志`}><div className="modal-heading"><div><p className="eyebrow">实例日志</p><h2>{logs.name} · 最近日志</h2><p>展示最近一次采集到的运行输出。</p></div><button className="modal-close" onClick={() => setLogs(null)} aria-label="关闭日志弹窗">×</button></div><pre className="instance-logs">{logs.lines.join('\n') || '暂无日志'}</pre></section></div>}
+      {pendingAction && <ActionDialog title={pendingAction.action === 'delete' ? '删除实例' : pendingAction.action === 'stop' ? '停止实例' : '启动实例'} description={pendingAction.action === 'delete' ? '服务会停止，数据保留 7 天。确定继续吗？' : `确定${pendingAction.action === 'stop' ? '停止' : '启动'}此实例吗？`} confirmLabel={pendingAction.action === 'delete' ? '确认删除' : '确认操作'} danger={pendingAction.action === 'delete'} busy={operating} onCancel={() => setPendingAction(null)} onConfirm={() => void operateInstance(pendingAction).unwrap().finally(() => setPendingAction(null))} />}
     </section>
   )
 }

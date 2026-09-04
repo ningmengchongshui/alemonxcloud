@@ -212,7 +212,11 @@ func adjustWallet(ctx context.Context, userID string, amount int, note, actor st
 		return walletEntry{}, errors.New("余额不足，不能扣减")
 	}
 	now := time.Now()
-	entry := walletEntry{ID: newID("wal"), UserID: userID, AmountFen: amount, BalanceAfterFen: next, Type: "adjustment", Note: strings.TrimSpace(note), ActorID: actor, CreatedAt: now}
+	entryType := "manual_debit"
+	if amount > 0 {
+		entryType = "manual_credit"
+	}
+	entry := walletEntry{ID: newID("wal"), UserID: userID, AmountFen: amount, BalanceAfterFen: next, Type: entryType, Note: strings.TrimSpace(note), ActorID: actor, CreatedAt: now}
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=?,updated_at=? WHERE user_id=?`, next, now, userID); err != nil {
 		return walletEntry{}, err
 	}

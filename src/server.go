@@ -1,6 +1,7 @@
 package cloud
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,13 +11,16 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -125,18 +129,18 @@ func Run() {
 	router.POST("/api/notifications/:id/read", requireSession, readNotificationHandler)
 	router.GET("/api/instances/:id/tasks", requireSession, instanceTasksHandler)
 	router.GET("/api/orders", requireSession, myOrders)
-	router.POST("/api/orders", requireSession, createOrderHandler)
-	router.POST("/api/orders/:id/cancel", requireSession, cancelOrderHandler)
-	router.POST("/api/orders/:id/payment", requireSession, submitPaymentHandler)
-	router.POST("/api/orders/:id/renew", requireSession, renewOrderHandler)
+	router.POST("/api/orders", requireSession, manualPaymentDisabled)
+	router.POST("/api/orders/:id/cancel", requireSession, manualPaymentDisabled)
+	router.POST("/api/orders/:id/payment", requireSession, manualPaymentDisabled)
+	router.POST("/api/orders/:id/renew", requireSession, manualPaymentDisabled)
 	router.GET("/api/admin/catalog", requireAdmin, adminCatalog)
 	router.POST("/api/admin/images", requireAdmin, adminSaveImage)
 	router.PUT("/api/admin/images/:id", requireAdmin, adminSaveImage)
 	router.POST("/api/admin/plans", requireAdmin, adminSavePlan)
 	router.PUT("/api/admin/plans/:id", requireAdmin, adminSavePlan)
 	router.GET("/api/admin/orders", requireAdmin, adminOrders)
-	router.POST("/api/admin/orders/:id/confirm", requireAdmin, adminConfirmOrder)
-	router.POST("/api/admin/orders/:id/reject", requireAdmin, adminRejectOrder)
+	router.POST("/api/admin/orders/:id/confirm", requireAdmin, manualPaymentDisabled)
+	router.POST("/api/admin/orders/:id/reject", requireAdmin, manualPaymentDisabled)
 	router.GET("/api/admin/nodes", requireAdmin, adminNodes)
 	router.POST("/api/admin/nodes", requireAdmin, adminSaveNode)
 	router.PUT("/api/admin/nodes/:id", requireAdmin, adminSaveNode)
@@ -179,10 +183,93 @@ func Run() {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	})
 	address := listenAddress(env("PORT", ":8082"))
-	log.Printf("AlemonX Cloud %s listening on %s", Version, address)
-	if err := router.Run(address); err != nil {
+	listener, err := listenServer(address, mode)
+	if err != nil {
 		log.Fatal(err)
 	}
+	address = listener.Addr().String()
+	log.Printf("AlemonX Cloud %s listening on %s", Version, address)
+	if err := router.RunListener(listener); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func listenServer(address, mode string) (net.Listener, error) {
+	listener, err := net.Listen("tcp", address)
+	if err == nil || mode != gin.DebugMode {
+		return listener, err
+	}
+	if !isInteractiveInput() {
+		return nil, fmt.Errorf("端口 %s 已被占用（开发模式非交互启动不会自动终止占用进程）", address)
+	}
+
+	pids, findErr := portListenerPIDs(address)
+	if findErr != nil {
+		return nil, findErr
+	}
+	if len(pids) == 0 {
+		return nil, fmt.Errorf("端口 %s 已被占用，但无法定位占用进程", address)
+	}
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Fprintf(os.Stderr, "端口 %s 已被进程 %s 占用，是否终止该进程后继续启动？[y/N] ", address, strings.Join(pids, ", "))
+	answer, readErr := reader.ReadString('\n')
+	if readErr != nil && len(answer) == 0 {
+		return nil, fmt.Errorf("端口 %s 已被占用，未获得继续启动确认", address)
+	}
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "y" && answer != "yes" {
+		return nil, fmt.Errorf("端口 %s 已被占用，已取消启动", address)
+	}
+	for _, pid := range pids {
+		value, convertErr := strconv.Atoi(pid)
+		if convertErr != nil {
+			return nil, fmt.Errorf("占用进程 PID 无效: %s", pid)
+		}
+		process, processErr := os.FindProcess(value)
+		if processErr != nil {
+			return nil, fmt.Errorf("定位占用进程 %s: %w", pid, processErr)
+		}
+		if signalErr := process.Signal(syscall.SIGTERM); signalErr != nil {
+			return nil, fmt.Errorf("终止占用进程 %s: %w", pid, signalErr)
+		}
+	}
+	for attempt := 0; attempt < 20; attempt++ {
+		time.Sleep(100 * time.Millisecond)
+		listener, err = net.Listen("tcp", address)
+		if err == nil {
+			fmt.Fprintf(os.Stderr, "已终止占用进程，继续使用端口 %s 启动\n", address)
+			return listener, nil
+		}
+	}
+	return nil, fmt.Errorf("端口 %s 的占用进程未在超时时间内退出", address)
+}
+
+func isInteractiveInput() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func portListenerPIDs(address string) ([]string, error) {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("端口地址无效: %s", address)
+	}
+	output, err := exec.Command("lsof", "-tiTCP:"+port, "-sTCP:LISTEN").Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("无法定位端口 %s 的占用进程: %w", address, err)
+	}
+	seen := map[string]bool{}
+	result := []string{}
+	for _, value := range strings.Fields(string(output)) {
+		if !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	return result, nil
 }
 
 // instanceGateway is the only public cross-node route. It resolves the random

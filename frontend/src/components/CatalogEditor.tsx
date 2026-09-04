@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useSaveAdminImageMutation, useSaveAdminPlanMutation } from '@/services/cloudApi'
+import { useGetAdminCatalogQuery, useSaveAdminImageMutation, useSaveAdminPlanMutation } from '@/services/cloudApi'
 
 type EditorMode = 'image' | 'plan' | null
 
@@ -14,6 +14,7 @@ export function CatalogEditor() {
   const [error, setError] = useState('')
   const [saveImage, { isLoading: imageSaving }] = useSaveAdminImageMutation()
   const [savePlan, { isLoading: planSaving }] = useSaveAdminPlanMutation()
+  const { data: catalog } = useGetAdminCatalogQuery()
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setMode(null) }
@@ -21,7 +22,14 @@ export function CatalogEditor() {
     return () => document.removeEventListener('keydown', close)
   }, [])
   function openEditor(nextMode: Exclude<EditorMode, null>) { setError(''); setMode(nextMode) }
-  async function addImage() { try { setError(''); await saveImage({ id: '', name: imageName, imageRef, imageDigest: '', version: 'latest', enabled: true }).unwrap(); setImageName(''); setImageRef(''); setMode(null) } catch { setError('镜像来源保存失败，请确认镜像地址') } }
+  async function addImage() {
+    const normalizedRef = imageRef.trim()
+    if (catalog?.images.some(image => image.imageRef.trim().toLowerCase() === normalizedRef.toLowerCase())) {
+      setError('镜像地址已存在，请勿重复添加')
+      return
+    }
+    try { setError(''); await saveImage({ id: '', name: imageName, imageRef: normalizedRef, imageDigest: '', version: 'latest', enabled: true }).unwrap(); setImageName(''); setImageRef(''); setMode(null) } catch { setError('镜像来源保存失败，请确认镜像地址是否重复或格式正确') }
+  }
   async function addPlan() { try { setError(''); await savePlan({ id: '', name: planName, cpu, memoryMB: memory, monthlyPriceFen: price, enabled: true, sortOrder: 100 }).unwrap(); setPlanName(''); setMode(null) } catch { setError('套餐保存失败') } }
 
   return <>

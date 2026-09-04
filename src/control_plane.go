@@ -191,6 +191,7 @@ func scanPlans(ctx context.Context, statement string, args ...any) ([]plan, erro
 }
 
 func saveImage(ctx context.Context, value catalogImage) error {
+	isNew := value.ID == ""
 	if value.ID == "" {
 		value.ID = newID("img")
 	}
@@ -200,6 +201,24 @@ func saveImage(ctx context.Context, value catalogImage) error {
 	value.ImageRef = strings.TrimSpace(value.ImageRef)
 	if value.ImageRef == "" || strings.ContainsAny(value.ImageRef, " \t\r\n@") {
 		return errors.New("镜像地址无效")
+	}
+	checkDuplicate := isNew
+	if !isNew {
+		var currentRef string
+		err := instanceDB.QueryRowContext(ctx, `SELECT image_ref FROM xcloud_images WHERE id=?`, value.ID).Scan(&currentRef)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		checkDuplicate = err == sql.ErrNoRows || strings.TrimSpace(currentRef) != value.ImageRef
+	}
+	if checkDuplicate {
+		var duplicate int
+		if err := instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_images WHERE image_ref=? AND id<>?`, value.ImageRef, value.ID).Scan(&duplicate); err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			return errors.New("镜像地址已存在，请勿重复添加")
+		}
 	}
 	if value.Version == "" {
 		value.Version = "latest"

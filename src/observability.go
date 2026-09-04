@@ -10,6 +10,15 @@ import (
 )
 
 func readiness(c *gin.Context) {
+	problems := readinessProblems()
+	if len(problems) > 0 {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"ready": false, "dependencies": problems})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ready": true})
+}
+
+func readinessProblems() []string {
 	problems := []string{}
 	if instanceDB == nil {
 		problems = append(problems, "mysql")
@@ -20,11 +29,7 @@ func readiness(c *gin.Context) {
 	if !queueAvailable() {
 		problems = append(problems, "rabbitmq")
 	}
-	if len(problems) > 0 {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"ready": false, "dependencies": problems})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ready": true})
+	return problems
 }
 
 // metrics is intentionally network-restricted by Nginx/firewall. It exposes
@@ -42,7 +47,11 @@ func metrics(c *gin.Context) {
 	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_tasks WHERE status IN ('pending','running')`).Scan(&pending)
 	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_tasks WHERE status='failed'`).Scan(&failed)
 	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_instances WHERE status='running'`).Scan(&running)
-	lines := []string{"# HELP xcloud_ready Control-plane readiness", "# TYPE xcloud_ready gauge", "xcloud_ready 1", "# TYPE xcloud_tasks_backlog gauge", "xcloud_tasks_backlog " + strconv.Itoa(pending), "# TYPE xcloud_tasks_failed gauge", "xcloud_tasks_failed " + strconv.Itoa(failed), "# TYPE xcloud_instances_running gauge", "xcloud_instances_running " + strconv.Itoa(running)}
+	ready := 1
+	if len(readinessProblems()) > 0 {
+		ready = 0
+	}
+	lines := []string{"# HELP xcloud_ready Control-plane readiness", "# TYPE xcloud_ready gauge", "xcloud_ready " + strconv.Itoa(ready), "# TYPE xcloud_tasks_backlog gauge", "xcloud_tasks_backlog " + strconv.Itoa(pending), "# TYPE xcloud_tasks_failed gauge", "xcloud_tasks_failed " + strconv.Itoa(failed), "# TYPE xcloud_instances_running gauge", "xcloud_instances_running " + strconv.Itoa(running)}
 	nodes, err := listNodesWithUsage(c.Request.Context())
 	if err == nil {
 		for _, node := range nodes {

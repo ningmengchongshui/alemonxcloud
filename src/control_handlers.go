@@ -18,6 +18,13 @@ func catalog(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"images": images, "plans": plans})
 }
+
+// manualPaymentDisabled retires the manual-transfer workflow. Purchases must
+// be paid from wallet balance and are atomically scheduled only after capacity
+// has been reserved on a healthy node.
+func manualPaymentDisabled(c *gin.Context) {
+	c.JSON(http.StatusGone, gin.H{"message": "人工付款订单已停用，请充值后使用钱包直接购买"})
+}
 func myOrders(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	items, err := listOrders(c.Request.Context(), user.ID)
@@ -209,8 +216,8 @@ func adminSaveImage(c *gin.Context) {
 	if id := c.Param("id"); id != "" {
 		body.ID = id
 	}
-	if strings.TrimSpace(body.Name) == "" || strings.TrimSpace(body.ImageRef) == "" || strings.TrimSpace(body.ImageDigest) == "" || strings.TrimSpace(body.Version) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "镜像版本参数无效"})
+	if strings.TrimSpace(body.Name) == "" || strings.TrimSpace(body.ImageRef) == "" || strings.TrimSpace(body.Version) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "镜像来源参数无效"})
 		return
 	}
 	if err := saveImage(c.Request.Context(), body); err != nil {
@@ -313,11 +320,15 @@ func adminWalletEntries(c *gin.Context) {
 func adminAdjustWallet(c *gin.Context) {
 	var body struct {
 		AmountFen int    `json:"amountFen"`
+		Direction string `json:"direction"`
 		Note      string `json:"note"`
 	}
-	if c.ShouldBindJSON(&body) != nil || strings.TrimSpace(body.Note) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "金额和运营备注不能为空"})
+	if c.ShouldBindJSON(&body) != nil || body.AmountFen <= 0 || (body.Direction != "increase" && body.Direction != "decrease") || strings.TrimSpace(body.Note) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "操作类型、正数金额和运营备注不能为空"})
 		return
+	}
+	if body.Direction == "decrease" {
+		body.AmountFen = -body.AmountFen
 	}
 	user := c.MustGet("user").(oidcUser)
 	entry, err := adjustWallet(c.Request.Context(), c.Param("id"), body.AmountFen, body.Note, user.ID)
