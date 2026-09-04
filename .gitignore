@@ -47,3 +47,5 @@ pnpm-lock.yaml
 /.env.secrets
 /auth.tar
 /auth.tar.gz
+
+agent/xcloud-agent

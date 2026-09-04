@@ -1,0 +1,23 @@
+groups:
+  - name: xcloud
+    rules:
+      - alert: XCloudNotReady
+        expr: up{job="xcloud"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "AlemonX Cloud is not ready" }
+      - alert: XCloudTaskBacklog
+        expr: xcloud_tasks_backlog > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "AlemonX Cloud task backlog exceeds 10 minutes" }
+      - alert: XCloudFailedTasks
+        expr: xcloud_tasks_failed > 0
+        for: 1m
+        labels: { severity: warning }
+        annotations: { summary: "AlemonX Cloud has failed tasks" }
+      - alert: XCloudAgentHeartbeatStale
+        expr: time() - xcloud_node_heartbeat_timestamp > 90
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "AlemonX Cloud Agent heartbeat is stale" }

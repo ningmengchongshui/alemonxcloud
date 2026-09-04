@@ -1,0 +1,46 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-container
+    environment:
+      - TZ=Asia/Shanghai
+      - MYSQL_ROOT_PASSWORD=Mm002580!
+      - MYSQL_ROOT_HOST=%
+      - MYSQL_ALLOW_EMPTY_PASSWORD=yes
+    ports:
+      - '13306:3306'
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - ./docker-data/mysql:/var/lib/mysql
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-container
+    ports:
+      - '16379:6379'
+    volumes:
+      - ./docker-data/redis:/data
+    restart: always
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: rabbitmq-container
+    environment:
+      RABBITMQ_DEFAULT_USER: xcloud
+      RABBITMQ_DEFAULT_PASS: Qq002580!
+    ports:
+      - '15671:5672'   # AMQP 协议端口
+      - '15672:15672' # 管理界面端口
+    volumes: 
+        - ./docker-data/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  mysql-data:
+  redis-data:
+  postgres-data:

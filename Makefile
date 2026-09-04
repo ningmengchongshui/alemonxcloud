@@ -20,14 +20,17 @@ format: ## Format Go files
 lint: ## Run Go vet
 	go vet ./...
 
-frontend-dev: ## Start the Vite development server
+dev-fe: ## Start the Vite development server
 	cd frontend && yarn dev
 
-frontend-build: ## Build the frontend into dist/
+build-fe: ## Build the frontend into dist/
 	cd frontend && yarn build
 
 agent-build: ## Build the bare-metal systemd agent
 	cd agent && go build -o xcloud-agent .
+
+agent-run: ## Build the bare-metal systemd agent
+	./agent/xcloud-agent --serve
 
 agent-test: ## Run the bare-metal agent tests
 	cd agent && go test ./...

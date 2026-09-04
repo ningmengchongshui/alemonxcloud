@@ -2,6 +2,8 @@
 
 ## UI 与样式
 
+- 把页面和组件上的视觉样式迁到 Tailwind 工具类，index.css 只保留 Tailwind 的入口与必要的全局基础设置；
+- 不能再原生样式去完成视觉效果，必须使用 Tailwind；
 - 前端 UI 使用 Tailwind CSS、SCSS 和 `classnames` 实现，优先使用 Tailwind CSS 工具类，尽可能减少自定义 class。
 - UI 必须遵循 Tailwind CSS 已定义的设计标准，包括间距、颜色、字体、圆角、阴影和响应式断点；不要随意定义与其不一致的样式值。
 - 尽可能避免使用 Ant Design（antd）组件。确有必要时，应先确认本地是否已有可复用组件。

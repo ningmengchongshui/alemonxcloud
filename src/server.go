@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"strconv"
@@ -74,8 +75,27 @@ func Run() {
 	if mode == gin.ReleaseMode {
 		validateProductionConfig()
 	}
-	initSessionStore()
-	initInstanceStore()
+	if err := initSessionStore(); err != nil && mode == gin.ReleaseMode {
+		log.Fatalf("initialize Redis: %v", err)
+	}
+	if err := initInstanceStore(); err != nil && mode == gin.ReleaseMode {
+		log.Fatalf("initialize MySQL: %v", err)
+	}
+	if err := initializeControlPlane(context.Background()); err != nil {
+		if mode == gin.ReleaseMode {
+			log.Fatalf("initialize control plane: %v", err)
+		}
+		log.Printf("control plane unavailable: %v", err)
+	}
+	if err := initializeUpgradeSchema(context.Background()); err != nil {
+		if mode == gin.ReleaseMode {
+			log.Fatalf("initialize platform upgrade: %v", err)
+		}
+		log.Printf("platform upgrade schema unavailable: %v", err)
+	}
+	if mode == gin.ReleaseMode && !agentOnline(context.Background()) {
+		log.Fatal("initialize Agent: agent is unavailable or rejected the control token")
+	}
 	if err := initTaskQueue(); err != nil {
 		if mode == gin.ReleaseMode {
 			log.Fatalf("RabbitMQ unavailable: %v", err)
@@ -83,16 +103,52 @@ func Run() {
 		log.Printf("task queue unavailable: %v", err)
 	} else {
 		consumeTasks()
+		recoverPendingTasks()
+		startControlLoops()
 	}
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 	router.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok", "version": Version}) })
+	router.GET("/readyz", readiness)
+	router.GET("/metrics", metrics)
+	router.Any("/__instance_proxy", instanceGateway)
 	router.GET("/api/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"message": "pong"}) })
 	router.GET("/api/instances", requireSession, listInstances)
 	router.POST("/api/instances", requireSession, createInstance)
-	router.POST("/api/instances/:id/:action", requireSession, instanceAction)
-	router.DELETE("/api/instances/:id", requireSession, deleteInstance)
-	router.GET("/api/admin/nodes", requireAdmin, listNodes)
+	router.POST("/api/instances/:id/:action", requireSession, queueInstanceAction)
+	router.DELETE("/api/instances/:id", requireSession, queueDeleteInstance)
+	router.GET("/api/instances/:id/logs", requireSession, instanceLogs)
+	router.GET("/api/catalog", requireSession, catalog)
+	router.GET("/api/wallet", requireSession, walletHandler)
+	router.GET("/api/wallet/entries", requireSession, walletEntriesHandler)
+	router.POST("/api/purchases", requireSession, purchaseHandler)
+	router.GET("/api/notifications", requireSession, notificationsHandler)
+	router.POST("/api/notifications/read-all", requireSession, readAllNotificationsHandler)
+	router.POST("/api/notifications/:id/read", requireSession, readNotificationHandler)
+	router.GET("/api/instances/:id/tasks", requireSession, instanceTasksHandler)
+	router.GET("/api/orders", requireSession, myOrders)
+	router.POST("/api/orders", requireSession, createOrderHandler)
+	router.POST("/api/orders/:id/cancel", requireSession, cancelOrderHandler)
+	router.POST("/api/orders/:id/payment", requireSession, submitPaymentHandler)
+	router.POST("/api/orders/:id/renew", requireSession, renewOrderHandler)
+	router.GET("/api/admin/catalog", requireAdmin, adminCatalog)
+	router.POST("/api/admin/images", requireAdmin, adminSaveImage)
+	router.PUT("/api/admin/images/:id", requireAdmin, adminSaveImage)
+	router.POST("/api/admin/plans", requireAdmin, adminSavePlan)
+	router.PUT("/api/admin/plans/:id", requireAdmin, adminSavePlan)
+	router.GET("/api/admin/orders", requireAdmin, adminOrders)
+	router.POST("/api/admin/orders/:id/confirm", requireAdmin, adminConfirmOrder)
+	router.POST("/api/admin/orders/:id/reject", requireAdmin, adminRejectOrder)
+	router.GET("/api/admin/nodes", requireAdmin, adminNodes)
+	router.POST("/api/admin/nodes", requireAdmin, adminSaveNode)
+	router.PUT("/api/admin/nodes/:id", requireAdmin, adminSaveNode)
+	router.GET("/api/admin/users", requireAdmin, adminUsers)
+	router.GET("/api/admin/users/:id/wallet/entries", requireAdmin, adminWalletEntries)
+	router.POST("/api/admin/users/:id/wallet/adjust", requireAdmin, adminAdjustWallet)
+	router.GET("/api/admin/tasks", requireAdmin, adminTasks)
+	router.GET("/api/admin/audit-logs", requireAdmin, adminAuditLogs)
+	router.POST("/api/admin/tasks/:id/retry", requireAdmin, retryTask)
+	router.GET("/api/admin/metrics", requireAdmin, adminMetricsHandler)
 	router.POST("/api/oidc/authorize", oidcAuthorize)
 	router.POST("/api/oidc/callback", oidcCallback)
 	router.GET("/api/oidc/session", sessionInfo)
@@ -129,6 +185,54 @@ func Run() {
 	if err := router.Run(address); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// instanceGateway is the only public cross-node route. It resolves the random
+// route key in the control-plane database, then proxies to that instance's
+// Agent. The Agent itself still resolves the Docker container from its label.
+func instanceGateway(c *gin.Context) {
+	route := strings.TrimSpace(c.GetHeader("X-Route-Key"))
+	if !regexpRouteKey(route) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "实例路由无效"})
+		return
+	}
+	var nodeID string
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT node_id FROM xcloud_instances WHERE route_key=? AND status IN ('running','deploying')`, route).Scan(&nodeID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "实例不可用"})
+		return
+	}
+	n, err := nodeByID(c.Request.Context(), nodeID)
+	if err != nil || !n.Enabled {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "实例节点不可用"})
+		return
+	}
+	target, err := url.Parse(strings.TrimRight(n.AgentURL, "/"))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "节点地址无效"})
+		return
+	}
+	if original := c.GetHeader("X-Forwarded-Uri"); strings.HasPrefix(original, "/") {
+		c.Request.URL.Path = original
+		c.Request.URL.RawQuery = ""
+	}
+	c.Request.Header.Set("X-Route-Key", route)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
+		log.Printf("instance gateway %s: %v", route, e)
+		http.Error(w, "实例暂不可用", http.StatusBadGateway)
+	}
+	proxy.ServeHTTP(c.Writer, c.Request)
+}
+func regexpRouteKey(value string) bool {
+	if len(value) != 17 || value[0] != 'r' {
+		return false
+	}
+	for _, v := range value[1:] {
+		if !(v >= '0' && v <= '9' || v >= 'a' && v <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // listenAddress accepts both common port-only forms ("8082" and ":8082")
@@ -199,6 +303,11 @@ func oidcCallback(c *gin.Context) {
 	if err != nil {
 		log.Printf("OIDC callback failed: %v", err)
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "统一认证失败"})
+		return
+	}
+	if err := syncCloudUser(c.Request.Context(), user); err != nil {
+		log.Printf("sync cloud user: %v", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "用户目录暂不可用"})
 		return
 	}
 	sid, err := randomToken()
@@ -318,6 +427,9 @@ func logout(c *gin.Context) {
 }
 func devLogin(c *gin.Context) {
 	user := oidcUser{ID: "dev-super-admin", Username: "开发超级管理员", Email: "dev-admin@localhost", Roles: []string{"cloud-admin"}, Permissions: []string{"*"}, IsAdmin: true}
+	if instanceDB != nil {
+		_ = syncCloudUser(c.Request.Context(), user)
+	}
 	sid, err := randomToken()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法创建开发会话"})
@@ -340,45 +452,52 @@ func listInstances(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 func createInstance(c *gin.Context) {
-	var body struct {
-		Name, Image, Version, Spec string
-		CPU                        float64 `json:"cpu"`
-		MemoryMB                   int     `json:"memoryMB"`
-	}
-	if c.ShouldBindJSON(&body) != nil || strings.TrimSpace(body.Name) == "" || strings.TrimSpace(body.Image) == "" || strings.TrimSpace(body.Version) == "" || strings.TrimSpace(body.Spec) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "实例参数无效"})
-		return
-	}
-	id, err := randomToken()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法创建实例"})
-		return
-	}
-	if body.CPU <= 0 {
-		body.CPU = 2
-	}
-	if body.MemoryMB <= 0 {
-		body.MemoryMB = 4096
-	}
-	user := c.MustGet("user").(oidcUser)
-	digest := sha256.Sum256([]byte(id))
-	containerName := fmt.Sprintf("xcloud-%x", digest[:6])
-	route := routeKey(user.ID + "\x00" + id)
-	accessAddress := "https://xcloud-" + route + "." + env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com")
-	item := instance{ID: id, Name: body.Name, Image: body.Image, Version: body.Version, Spec: body.Spec, Status: "等待节点接入", IP: accessAddress, CreatedAt: time.Now().Format("2006-01-02 15:04"), ContainerName: containerName, OwnerID: user.ID}
-	if agentConfigured() {
-		if err := callAgent(c.Request.Context(), http.MethodPost, "/container/create", gin.H{"name": containerName, "image": imageReference(body.Image, body.Version), "cpu": body.CPU, "memoryMB": body.MemoryMB, "route": route}); err != nil {
-			log.Printf("create instance %s: %v", id, err)
-			c.JSON(http.StatusBadGateway, gin.H{"message": "裸机节点暂不可用，实例未创建"})
+	// Instances are created only after an administrator confirms a catalog order.
+	// Keeping this legacy path would let callers submit arbitrary image references
+	// and bypass both the product catalog and capacity reservation.
+	c.JSON(http.StatusGone, gin.H{"message": "请通过订单中心创建实例"})
+	return
+	/*
+		var body struct {
+			Name, Image, Version, Spec string
+			CPU                        float64 `json:"cpu"`
+			MemoryMB                   int     `json:"memoryMB"`
+		}
+		if c.ShouldBindJSON(&body) != nil || strings.TrimSpace(body.Name) == "" || strings.TrimSpace(body.Image) == "" || strings.TrimSpace(body.Version) == "" || strings.TrimSpace(body.Spec) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "实例参数无效"})
 			return
 		}
-		item.Status = "运行中"
-	}
-	if err := saveStoredInstance(c.Request.Context(), item); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "保存实例失败"})
-		return
-	}
-	c.JSON(http.StatusAccepted, item)
+		id, err := randomToken()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "无法创建实例"})
+			return
+		}
+		if body.CPU <= 0 {
+			body.CPU = 2
+		}
+		if body.MemoryMB <= 0 {
+			body.MemoryMB = 4096
+		}
+		user := c.MustGet("user").(oidcUser)
+		digest := sha256.Sum256([]byte(id))
+		containerName := fmt.Sprintf("xcloud-%x", digest[:6])
+		route := routeKey(user.ID + "\x00" + id)
+		accessAddress := "https://xcloud-" + route + "." + env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com")
+		item := instance{ID: id, Name: body.Name, Image: body.Image, Version: body.Version, Spec: body.Spec, Status: "等待节点接入", IP: accessAddress, CreatedAt: time.Now().Format("2006-01-02 15:04"), ContainerName: containerName, OwnerID: user.ID}
+		if agentConfigured() {
+			if err := callAgent(c.Request.Context(), http.MethodPost, "/container/create", gin.H{"name": containerName, "image": imageReference(body.Image, body.Version), "cpu": body.CPU, "memoryMB": body.MemoryMB, "route": route}); err != nil {
+				log.Printf("create instance %s: %v", id, err)
+				c.JSON(http.StatusBadGateway, gin.H{"message": "裸机节点暂不可用，实例未创建"})
+				return
+			}
+			item.Status = "运行中"
+		}
+		if err := saveStoredInstance(c.Request.Context(), item); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "保存实例失败"})
+			return
+		}
+		c.JSON(http.StatusAccepted, item)
+	*/
 }
 func instanceAction(c *gin.Context) {
 	item, ok := ownedInstance(c)
@@ -490,24 +609,23 @@ func hasPermission(permissions []string, wanted string) bool {
 	}
 	return false
 }
-func initSessionStore() {
+func initSessionStore() error {
 	redisURL := env("SESSION_REDIS_URL", "")
 	if redisURL == "" {
 		log.Printf("session store: in-memory (development only)")
-		return
+		return nil
 	}
 	options, err := redis.ParseURL(redisURL)
 	if err != nil {
-		log.Printf("invalid SESSION_REDIS_URL; using in-memory session store")
-		return
+		return fmt.Errorf("parse Redis URL: %w", err)
 	}
 	client := redis.NewClient(options)
 	if err := client.Ping(context.Background()).Err(); err != nil {
-		log.Printf("Redis unavailable; using in-memory session store: %v", err)
-		return
+		return fmt.Errorf("ping Redis: %w", err)
 	}
 	sessionRedis = client
 	log.Printf("session store: Redis")
+	return nil
 }
 func storeSession(sid string, value session) error {
 	if sessionRedis != nil {
@@ -562,9 +680,17 @@ func env(key, fallback string) string {
 	}
 	return fallback
 }
+func envInt(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	value, err := strconv.Atoi(raw)
+	if err != nil || raw == "" {
+		return fallback
+	}
+	return value
+}
 
 func validateProductionConfig() {
-	for _, key := range []string{"MYSQL_DSN", "SESSION_REDIS_URL", "RABBITMQ_URL", "AUTH_OIDC_ISSUER", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_REDIRECT_URL", "XCLOUD_AGENT_URL", "XCLOUD_AGENT_TOKEN", "XCLOUD_INSTANCE_DOMAIN", "XCLOUD_INSTANCE_DATA_ROOT"} {
+	for _, key := range []string{"MYSQL_DSN", "SESSION_REDIS_URL", "RABBITMQ_URL", "AUTH_OIDC_ISSUER", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_REDIRECT_URL", "XCLOUD_AGENT_URL", "XCLOUD_AGENT_TOKEN", "XCLOUD_NODE_TOKEN_ENCRYPTION_KEY", "XCLOUD_METRICS_TOKEN", "XCLOUD_INSTANCE_DOMAIN", "XCLOUD_INSTANCE_DATA_ROOT"} {
 		if strings.TrimSpace(os.Getenv(key)) == "" {
 			log.Fatalf("production configuration missing: %s", key)
 		}

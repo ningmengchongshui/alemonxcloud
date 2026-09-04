@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -69,8 +70,11 @@ func runServer() {
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	control := r.Group("/container", requireControlToken)
 	control.POST("/create", createContainer)
+	control.GET("/status", agentStatus)
 	control.POST("/:name/start", startContainer)
 	control.POST("/:name/stop", stopContainer)
+	control.GET("/:name/status", containerStatus)
+	control.GET("/:name/logs", containerLogs)
 	control.DELETE("/:name", deleteContainer)
 	// Nginx 在请求中写入实例路由键；控制接口会先于该路由命中。
 	r.NoRoute(proxyContainer)
@@ -219,12 +223,18 @@ func requireControlToken(c *gin.Context) {
 
 func createContainer(c *gin.Context) {
 	var input createRequest
-	if c.ShouldBindJSON(&input) != nil || !safeContainerName.MatchString(input.Name) || !safeRouteKey.MatchString(input.Route) || !validImage(input.Image) || input.CPU <= 0 || input.CPU > 64 || input.MemoryMB < 256 || input.MemoryMB > 262144 {
+	if c.ShouldBindJSON(&input) != nil || !safeContainerName.MatchString(input.Name) || !safeRouteKey.MatchString(input.Route) || !validManagedImage(input.Image) || input.CPU <= 0 || input.CPU > 64 || input.MemoryMB < 256 || input.MemoryMB > 262144 {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "容器参数无效"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 	defer cancel()
+	if _, err := docker(ctx, "inspect", input.Name); err == nil {
+		// A worker may retry after the Docker command succeeded but before its
+		// database acknowledgement. Treat the managed name as an idempotent key.
+		c.JSON(http.StatusOK, gin.H{"name": input.Name, "status": "existing"})
+		return
+	}
 	dataDir := env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances") + "/" + input.Name
 	workspaceDir := dataDir + "/workspace"
 	if err := os.MkdirAll(workspaceDir, 0750); err != nil {
@@ -252,7 +262,90 @@ func deleteContainer(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker 删除容器失败"})
 		return
 	}
+	if c.Query("purge") == "true" {
+		dataDir := filepath.Join(env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances"), name)
+		root := filepath.Clean(env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances")) + string(os.PathSeparator)
+		if !strings.HasPrefix(filepath.Clean(dataDir)+string(os.PathSeparator), root) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "实例数据目录无效"})
+			return
+		}
+		if err := os.RemoveAll(dataDir); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "无法清理实例数据目录"})
+			return
+		}
+	}
 	c.Status(http.StatusNoContent)
+}
+
+func containerStatus(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	output, err := docker(ctx, "inspect", "--format", "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "容器不存在"})
+		return
+	}
+	parts := strings.SplitN(strings.TrimSpace(output), "|", 2)
+	status := parts[0]
+	health := "none"
+	if len(parts) == 2 {
+		health = parts[1]
+	}
+	c.JSON(http.StatusOK, gin.H{"name": name, "status": status, "health": health})
+}
+
+func containerLogs(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	output, err := docker(ctx, "logs", "--tail", "200", "--timestamps", name)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "读取容器日志失败"})
+		return
+	}
+	if len(output) > 64*1024 {
+		output = output[len(output)-64*1024:]
+	}
+	c.JSON(http.StatusOK, gin.H{"lines": strings.Split(strings.TrimSpace(output), "\n")})
+}
+
+func agentStatus(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	output, err := docker(ctx, "info", "--format", "{{.ServerVersion}}")
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "Docker 不可用"})
+		return
+	}
+	dataRoot := env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances")
+	if err := os.MkdirAll(dataRoot, 0750); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "实例数据目录不可用"})
+		return
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(dataRoot, &stat); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "实例数据目录不可用"})
+		return
+	}
+	managed, err := docker(ctx, "ps", "-a", "--filter", "label=xcloud.managed=true", "--format", "{{.ID}}")
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "Docker 容器统计失败"})
+		return
+	}
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(managed), "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "dockerVersion": strings.TrimSpace(output), "diskAvailableBytes": int64(stat.Bavail) * int64(stat.Bsize), "managedContainerCount": count})
 }
 func containerAction(c *gin.Context, action string) {
 	name, ok := checkedName(c)
@@ -313,6 +406,30 @@ func docker(ctx context.Context, args ...string) (string, error) {
 }
 func validImage(value string) bool {
 	return len(value) <= 255 && !strings.ContainsAny(value, " \t\n\r;&|`$()")
+}
+func validDigestImage(value string) bool {
+	parts := strings.Split(value, "@sha256:")
+	if len(parts) != 2 || !validImage(parts[0]) || len(parts[1]) != 64 {
+		return false
+	}
+	for _, char := range parts[1] {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+func validManagedImage(value string) bool {
+	if validDigestImage(value) {
+		return true
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) < 2 {
+		return false
+	}
+	tag := parts[len(parts)-1]
+	ref := strings.Join(parts[:len(parts)-1], ":")
+	return tag != "" && validImage(ref) && !strings.ContainsAny(tag, " \t\r\n/@")
 }
 func memory(value int) string { return strconv.Itoa(value) + "m" }
 func min(a, b int) int {
