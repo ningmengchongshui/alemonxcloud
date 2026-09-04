@@ -35,4 +35,23 @@ make test
 make agent-test
 ```
 
+## Docker 构建
+
+公开依赖无需 GitHub token，直接执行：
+
+```bash
+make docker-build
+# 或 docker compose build
+```
+
+如果之后加入了私有 GitHub Go 模块，请使用具有该仓库读取权限的 fine-grained token：
+
+```bash
+export GITHUB_TOKEN=github_pat_...
+make docker-build
+# 或 docker compose build
+```
+
+Token 通过 BuildKit secret 仅在构建步骤中挂载，不会写入最终镜像或镜像层。
+
 服务端源码位于 `src/`，前端源码位于 `frontend/src/`，裸机 agent 位于 `agent/`。

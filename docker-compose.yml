@@ -1,7 +1,17 @@
 services:
   alemonxcloud:
-    build: .
+    build:
+      context: .
+      secrets:
+        - source: github_token
+          target: github_token
     image: alemonxcloud:latest
     env_file: .env
     ports:
       - "13082:8082"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+secrets:
+  github_token:
+    environment: GITHUB_TOKEN

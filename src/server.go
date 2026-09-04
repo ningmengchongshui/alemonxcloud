@@ -1,4 +1,4 @@
-package main
+package cloud
 
 import (
 	"context"
@@ -60,7 +60,7 @@ var sessions = map[string]session{}
 var sessionsMu sync.RWMutex
 var sessionRedis *redis.Client
 
-func main() {
+func Run() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		log.Printf("load .env: %v", err)
 	}

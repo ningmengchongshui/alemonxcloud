@@ -1,4 +1,4 @@
-module template
+module xcloud
 
 go 1.24.4
 
