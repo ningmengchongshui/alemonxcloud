@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,11 +120,24 @@ func Run() {
 		}
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	})
-	port := env("PORT", ":8082")
-	log.Printf("AlemonX Cloud %s listening on %s", Version, port)
-	if err := router.Run(port); err != nil {
+	address := listenAddress(env("PORT", ":8082"))
+	log.Printf("AlemonX Cloud %s listening on %s", Version, address)
+	if err := router.Run(address); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// listenAddress accepts both common port-only forms ("8082" and ":8082")
+// as well as complete addresses such as "127.0.0.1:8082".
+func listenAddress(value string) string {
+	address := strings.TrimSpace(value)
+	if address == "" {
+		return ":8082"
+	}
+	if _, err := strconv.ParseUint(address, 10, 16); err == nil {
+		return ":" + address
+	}
+	return address
 }
 
 func oidcAuthorize(c *gin.Context) {
