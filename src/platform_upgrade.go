@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -262,7 +263,7 @@ func adjustWallet(ctx context.Context, userID string, amount int, note, actor st
 	if amount == 0 {
 		return walletEntry{}, errors.New("充值金额不能为零")
 	}
-	tx, err := instanceDB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := beginSerializableTx(ctx)
 	if err != nil {
 		return walletEntry{}, err
 	}
@@ -292,6 +293,26 @@ func adjustWallet(ctx context.Context, userID string, amount int, note, actor st
 	}
 	_ = createNotification(ctx, userID, "wallet", "代币余额已调整", fmt.Sprintf("本次变动 %+.2f 代币。", float64(amount)/100), map[string]any{"entryId": entry.ID})
 	return entry, nil
+}
+
+// Retrying BeginTx is safe: no wallet row has been locked or modified before a
+// transaction exists. We deliberately do not blindly replay a later failure,
+// because a commit outcome may be unknown and must never double-charge a user.
+func beginSerializableTx(ctx context.Context) (*sql.Tx, error) {
+	options := &sql.TxOptions{Isolation: sql.LevelSerializable}
+	for attempt := 0; attempt < 2; attempt++ {
+		tx, err := instanceDB.BeginTx(ctx, options)
+		if err == nil {
+			return tx, nil
+		}
+		if !errors.Is(err, driver.ErrBadConn) || attempt == 1 {
+			return nil, err
+		}
+		if pingErr := instanceDB.PingContext(ctx); pingErr != nil {
+			return nil, pingErr
+		}
+	}
+	return nil, driver.ErrBadConn
 }
 func createNotification(ctx context.Context, userID, kind, title, body string, data any) error {
 	payload, _ := json.Marshal(data)
@@ -341,16 +362,29 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 	if err != nil {
 		return node{}, err
 	}
-	defer rows.Close()
-	var best node
-	bestScore := math.Inf(1)
-	healthy := 0
+	// A transaction owns a single MySQL connection.  Do not issue the resource
+	// query below while this result set is still open; go-sql-driver/mysql then
+	// rejects the connection as busy/bad.  Materialise the small healthy-node
+	// list and close the rows before evaluating each candidate.
+	candidates := make([]node, 0)
 	for rows.Next() {
 		var n node
 		if err := rows.Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt); err != nil {
+			_ = rows.Close()
 			return node{}, err
 		}
-		healthy++
+		candidates = append(candidates, n)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return node{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return node{}, err
+	}
+	var best node
+	bestScore := math.Inf(1)
+	for _, n := range candidates {
 		var cpu float64
 		var memory int
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(cpu),0),COALESCE(SUM(memory_mb),0) FROM xcloud_instances WHERE node_id=? AND status IN ('deploying','running','stopped','expired','retention')`, n.ID).Scan(&cpu, &memory); err != nil {
@@ -365,7 +399,7 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 		}
 	}
 	if best.ID == "" {
-		if healthy == 0 {
+		if len(candidates) == 0 {
 			return node{}, errors.New("暂无健康可调度节点，请等待节点心跳完成")
 		}
 		return node{}, errors.New("没有可用裸机节点")
@@ -421,7 +455,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	if err := instanceDB.PingContext(ctx); err != nil {
 		return order{}, controlTask{}, fmt.Errorf("数据库暂不可用: %w", err)
 	}
-	tx, err := instanceDB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := beginSerializableTx(ctx)
 	if err != nil {
 		return order{}, controlTask{}, err
 	}
@@ -494,7 +528,7 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if months < 1 || months > 24 {
 		return order{}, nil, errors.New("订阅周期应为 1 至 24 个月")
 	}
-	tx, err := instanceDB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := beginSerializableTx(ctx)
 	if err != nil {
 		return order{}, nil, err
 	}

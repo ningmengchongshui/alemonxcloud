@@ -1,10 +1,12 @@
 package cloud
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,6 +24,16 @@ func readinessProblems() []string {
 	problems := []string{}
 	if instanceDB == nil {
 		problems = append(problems, "mysql")
+	} else {
+		// database/sql only knows whether it has a pool. A real ping prevents
+		// readiness from reporting success when a proxy or MySQL has dropped all
+		// pooled TCP connections.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err := instanceDB.PingContext(ctx)
+		cancel()
+		if err != nil {
+			problems = append(problems, "mysql")
+		}
 	}
 	if sessionRedis == nil {
 		problems = append(problems, "redis")
