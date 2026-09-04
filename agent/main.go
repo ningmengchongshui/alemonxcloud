@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -10,7 +14,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +29,13 @@ import (
 var safeContainerName = regexp.MustCompile(`^xcloud-[a-z0-9]{8,32}$`)
 var safeRouteKey = regexp.MustCompile(`^r[0-9a-f]{16}$`)
 
+const (
+	agentServiceName = "xcloud-agent.service"
+	agentInstallDir  = "/opt/xcloud-agent"
+	agentInstallPath = agentInstallDir + "/xcloud-agent"
+	agentUnitPath    = "/etc/systemd/system/" + agentServiceName
+)
+
 type createRequest struct {
 	Name     string  `json:"name" binding:"required"`
 	Image    string  `json:"image" binding:"required"`
@@ -32,6 +45,21 @@ type createRequest struct {
 }
 
 func main() {
+	serve := flag.Bool("serve", false, "run the HTTP agent (used by systemd)")
+	flag.Parse()
+	if !*serve {
+		if err := installAndStartService(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	runServer()
+}
+
+// runServer is deliberately separate from bootstrap.  The default invocation
+// installs the unit and exits; systemd invokes the installed binary with
+// --serve, avoiding a recursive self-installation loop.
+func runServer() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		log.Printf("load .env: %v", err)
 	}
@@ -51,6 +79,129 @@ func main() {
 	if err := r.Run(address); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func installAndStartService() error {
+	if runtime.GOOS != "linux" {
+		return errors.New("automatic service installation requires Linux with systemd; use --serve for direct development")
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("automatic service installation requires root; run: sudo ./xcloud-agent")
+	}
+
+	source, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate agent executable: %w", err)
+	}
+	source, err = filepath.EvalSymlinks(source)
+	if err != nil {
+		return fmt.Errorf("resolve agent executable: %w", err)
+	}
+	if err := installExecutable(source, agentInstallPath); err != nil {
+		return err
+	}
+	if err := writeFileAtomically(agentUnitPath, []byte(systemdUnit()), 0644); err != nil {
+		return fmt.Errorf("install systemd unit: %w", err)
+	}
+	for _, args := range [][]string{{"daemon-reload"}, {"enable", "--now", agentServiceName}, {"try-restart", agentServiceName}} {
+		if err := runSystemctl(args...); err != nil {
+			return err
+		}
+	}
+	log.Printf("installed and started %s; inspect with: systemctl status %s", agentServiceName, strings.TrimSuffix(agentServiceName, ".service"))
+	return nil
+}
+
+func installExecutable(source, destination string) error {
+	info, err := os.Stat(source)
+	if err != nil {
+		return fmt.Errorf("stat agent executable: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("agent executable is not a regular file: %s", source)
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("open agent executable: %w", err)
+	}
+	defer input.Close()
+	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+		return fmt.Errorf("create agent install directory: %w", err)
+	}
+	output, err := os.CreateTemp(filepath.Dir(destination), ".xcloud-agent-*")
+	if err != nil {
+		return fmt.Errorf("create agent staging file: %w", err)
+	}
+	temporary := output.Name()
+	defer os.Remove(temporary)
+	if _, err := io.Copy(output, input); err != nil {
+		output.Close()
+		return fmt.Errorf("copy agent executable: %w", err)
+	}
+	if err := output.Chmod(0755); err != nil {
+		output.Close()
+		return fmt.Errorf("mark agent executable: %w", err)
+	}
+	if err := output.Close(); err != nil {
+		return fmt.Errorf("close agent staging file: %w", err)
+	}
+	if err := os.Rename(temporary, destination); err != nil {
+		return fmt.Errorf("activate agent executable: %w", err)
+	}
+	return nil
+}
+
+func writeFileAtomically(destination string, contents []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".xcloud-agent-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(contents); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, destination)
+}
+
+func runSystemctl(args ...string) error {
+	output, err := exec.Command("systemctl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func systemdUnit() string {
+	return `[Unit]
+Description=AlemonX Cloud bare-metal agent
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/xcloud-agent
+EnvironmentFile=-/etc/xcloud-agent.env
+ExecStart=/opt/xcloud-agent/xcloud-agent --serve
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+`
 }
 
 func requireControlToken(c *gin.Context) {
