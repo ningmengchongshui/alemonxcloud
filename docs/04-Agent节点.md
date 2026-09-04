@@ -23,6 +23,20 @@ XCLOUD_INSTANCE_DATA_ROOT=/var/lib/xcloud/instances
 
 仅本地运行可使用 `./agent/xcloud-agent --serve`。
 
+## 实例 Compose 文件
+
+每个实例的配置固定生成在：
+
+```text
+/var/lib/xcloud/instances/xcloud-<实例哈希>/docker-compose.yml
+```
+
+Agent 使用该文件执行 `docker compose up -d`。配置包含套餐 CPU、内存、PID
+限制，私有 cgroup namespace，Go/Node/Python 的运行时并发参数，健康检查、
+路由标签和数据卷。用户容器不声明 `ports`，也不挂载 Docker socket。
+
+可以人工查看该文件排障；平台重新创建同一实例时会依据控制面套餐重新生成。
+
 ## 安全要求
 
 - 每个节点使用不同的 Agent 令牌。
