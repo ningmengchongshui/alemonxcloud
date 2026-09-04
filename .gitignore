@@ -17,6 +17,7 @@ node_modules
 dist
 src/dist
 app
+agent/xcloud-agent
 dist-ssr
 dist-electron
 release
