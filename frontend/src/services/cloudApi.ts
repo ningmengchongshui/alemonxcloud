@@ -1,24 +1,26 @@
+import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
 import type { CreateInstanceInput, CurrentUser, Instance } from '@/types/cloud'
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init)
-  const body = await response.json().catch(() => ({})) as T & { message?: string }
-  if (!response.ok) throw new Error(body.message ?? '请求失败，请稍后重试')
-  return body
-}
+interface SessionResponse { user?: CurrentUser }
+interface AuthorizeResponse { authorizeURL: string }
 
-export const cloudApi = {
-  session: async () => {
-    const response = await fetch('/api/oidc/session')
-    if (response.status === 401) return null
-    const body = await response.json().catch(() => ({})) as { user?: CurrentUser; message?: string }
-    if (!response.ok || !body.user) throw new Error(body.message ?? '无法检查登录状态')
-    return { user: body.user }
-  },
-  instances: () => request<Instance[]>('/api/instances'),
-  createInstance: (input: CreateInstanceInput) => request<Instance>('/api/instances', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
-  logout: () => fetch('/api/logout', { method: 'POST' }),
-  authorize: (redirectUri: string) => request<{ authorizeURL: string }>('/api/oidc/authorize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ redirect_uri: redirectUri }) }),
-  callback: (code: string, state: string) => request<{ user: CurrentUser }>('/api/oidc/callback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, state }) }),
-  devLogin: () => request<{ user: CurrentUser }>('/api/dev/login', { method: 'POST' })
-}
+export const cloudApi = createApi({
+  reducerPath: 'cloudApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Session', 'Instances'],
+  endpoints: builder => ({
+    getSession: builder.query<{ user: CurrentUser } | null, void>({
+      query: () => ({ url: '/oidc/session', validateStatus: response => response.status === 200 || response.status === 401 }),
+      transformResponse: (response: SessionResponse) => response.user ? { user: response.user } : null,
+      providesTags: ['Session']
+    }),
+    getInstances: builder.query<Instance[], void>({ query: () => '/instances', providesTags: ['Instances'] }),
+    createInstance: builder.mutation<Instance, CreateInstanceInput>({ query: body => ({ url: '/instances', method: 'POST', body }), invalidatesTags: ['Instances'] }),
+    logout: builder.mutation<void, void>({ query: () => ({ url: '/logout', method: 'POST' }), invalidatesTags: ['Session', 'Instances'] }),
+    authorize: builder.mutation<AuthorizeResponse, string>({ query: redirectUri => ({ url: '/oidc/authorize', method: 'POST', body: { redirect_uri: redirectUri } }) }),
+    callback: builder.mutation<SessionResponse, { code: string; state: string }>({ query: body => ({ url: '/oidc/callback', method: 'POST', body }), invalidatesTags: ['Session'] }),
+    devLogin: builder.mutation<SessionResponse, void>({ query: () => ({ url: '/dev/login', method: 'POST' }), invalidatesTags: ['Session'] })
+  })
+})
+
+export const { useGetSessionQuery, useGetInstancesQuery, useCreateInstanceMutation, useLogoutMutation, useAuthorizeMutation, useCallbackMutation, useDevLoginMutation } = cloudApi
