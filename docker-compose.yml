@@ -3,3 +3,5 @@ services:
     build: .
     image: alemonxcloud:latest
     env_file: .env
+    ports:
+      - "13082"
