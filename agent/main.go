@@ -74,7 +74,10 @@ func runServer() {
 	control.DELETE("/:name", deleteContainer)
 	// Nginx 在请求中写入实例路由键；控制接口会先于该路由命中。
 	r.NoRoute(proxyContainer)
-	address := env("AGENT_ADDR", "127.0.0.1:13092")
+	// The control plane runs in Docker and reaches this service through the
+	// Docker bridge gateway.  Exposure is constrained by the host firewall;
+	// see docs/部署手册.md for the required allow rule.
+	address := env("AGENT_ADDR", "0.0.0.0:13092")
 	log.Printf("xcloud agent listening on %s", address)
 	if err := r.Run(address); err != nil {
 		log.Fatal(err)

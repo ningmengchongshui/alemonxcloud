@@ -1,7 +1,9 @@
 # xcloud-agent
 
 `xcloud-agent` 是安装在裸机节点上的 **systemd 服务**，本身不是 Docker 容器。它默认仅监听
-`127.0.0.1:13092`，控制接口要求 `Authorization: Bearer $XCLOUD_AGENT_TOKEN`，不得向公网开放。
+`0.0.0.0:13092`，以便主应用容器通过 Docker 网桥访问。控制接口要求
+`Authorization: Bearer $XCLOUD_AGENT_TOKEN`；必须由宿主机防火墙限制为仅允许
+`xcloud_control` Docker 子网和本机访问，绝不向公网开放。
 
 服务需要能执行宿主机 Docker 命令。先创建供用户容器使用的内部网络：
 

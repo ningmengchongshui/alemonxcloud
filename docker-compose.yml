@@ -11,6 +11,18 @@ services:
       - "13082:8082"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - xcloud_control
+
+networks:
+  # Fixed subnet lets the host firewall admit only the control-plane container
+  # to the systemd agent port.
+  xcloud_control:
+    name: xcloud_control
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 secrets:
   github_token:
