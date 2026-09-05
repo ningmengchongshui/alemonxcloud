@@ -228,8 +228,12 @@ export function CreateServicePage({
                           setError('')
                         }}
                       >
-                        <span className="choice-mark">{selectedVersion?.tag === version.tag ? '✓' : ''}</span>
-                        <span><b>{version.tag}</b></span>
+                        <span className="choice-mark">
+                          {selectedVersion?.tag === version.tag ? '✓' : ''}
+                        </span>
+                        <span>
+                          <b>{version.tag}</b>
+                        </span>
                       </button>
                     ))}
                   </div>

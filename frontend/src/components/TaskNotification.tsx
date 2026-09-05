@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import classNames from 'classnames'
-import { useGetTaskQuery } from '@/services/cloudApi'
+import { cloudApi, useGetTaskQuery } from '@/services/cloudApi'
 import type { RootState } from '@/store'
 import { clearWatchedTask } from '@/store/uiSlice'
 import type { Task } from '@/types/cloud'
@@ -13,6 +13,7 @@ function taskLabel(action: string) {
       start: '启动',
       stop: '关机',
       restart: '重启',
+      update: '更新',
       delete: '删除',
       deploy: '部署'
     }[action] ?? '资源操作'
@@ -32,6 +33,12 @@ export function TaskNotification() {
     if (!data || (data.status !== 'succeeded' && data.status !== 'failed'))
       return
     setResult(data)
+    // The initial mutation invalidates data when the task is queued. Refresh
+    // again after the worker reaches a terminal state so the instance card
+    // immediately reflects the Agent's result without a manual page reload.
+    dispatch(
+      cloudApi.util.invalidateTags(['Instances', 'Orders', 'Notifications'])
+    )
     dispatch(clearWatchedTask())
   }, [data, dispatch])
 
