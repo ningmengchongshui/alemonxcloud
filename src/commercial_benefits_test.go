@@ -40,3 +40,16 @@ func TestRenewalAudienceRequiresCurrentInstance(t *testing.T) {
 		t.Fatalf("missing current instance must not qualify: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestSubscriptionMonthsExposeEveryTierChoice(t *testing.T) {
+	for _, months := range []int{1, 3, 6, 12} {
+		if !validSubscriptionMonths(months) {
+			t.Fatalf("%d months must be purchasable", months)
+		}
+	}
+	for _, months := range []int{0, 2, 4, 24} {
+		if validSubscriptionMonths(months) {
+			t.Fatalf("%d months must not bypass the product choices", months)
+		}
+	}
+}

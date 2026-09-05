@@ -97,6 +97,7 @@ export interface Plan {
   monthlyPriceFen: number
   enabled: boolean
   sortOrder: number
+  tierDiscounts?: Record<number, number>
 }
 export interface Catalog {
   images: PublicCatalogImage[]
@@ -141,6 +142,7 @@ export interface PriceQuote {
   amountFen: number
   bonusDays: number
   tierMonths?: number
+  tierDiscountBps?: number
   quoteSummary: string
   program?: {
     id: string

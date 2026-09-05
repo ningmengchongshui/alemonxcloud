@@ -15,8 +15,8 @@ func quotePurchaseHandler(c *gin.Context) {
 		Months    int    `json:"months"`
 		PromoCode string `json:"promoCode"`
 	}
-	if c.ShouldBindJSON(&body) != nil || body.Months < 1 || body.Months > 60 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "报价参数无效"})
+	if c.ShouldBindJSON(&body) != nil || !validSubscriptionMonths(body.Months) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择 1、3、6 或 12 个月"})
 		return
 	}
 	var monthly int
@@ -49,8 +49,8 @@ func quoteRenewHandler(c *gin.Context) {
 		Months    int    `json:"months"`
 		PromoCode string `json:"promoCode"`
 	}
-	if c.ShouldBindJSON(&body) != nil || body.Months < 1 || body.Months > 60 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "报价参数无效"})
+	if c.ShouldBindJSON(&body) != nil || !validSubscriptionMonths(body.Months) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择 1、3、6 或 12 个月"})
 		return
 	}
 	user := c.MustGet("user").(oidcUser)

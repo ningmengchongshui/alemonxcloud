@@ -122,15 +122,16 @@ type publicCatalogImage struct {
 }
 
 type plan struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	CPU           float64   `json:"cpu"`
-	MemoryMB      int       `json:"memoryMB"`
-	BandwidthMbps int       `json:"bandwidthMbps"`
-	MonthlyFen    int       `json:"monthlyPriceFen"`
-	Enabled       bool      `json:"enabled"`
-	SortOrder     int       `json:"sortOrder"`
-	CreatedAt     time.Time `json:"createdAt"`
+	ID            string      `json:"id"`
+	Name          string      `json:"name"`
+	CPU           float64     `json:"cpu"`
+	MemoryMB      int         `json:"memoryMB"`
+	BandwidthMbps int         `json:"bandwidthMbps"`
+	MonthlyFen    int         `json:"monthlyPriceFen"`
+	Enabled       bool        `json:"enabled"`
+	SortOrder     int         `json:"sortOrder"`
+	CreatedAt     time.Time   `json:"createdAt"`
+	TierDiscounts map[int]int `json:"tierDiscounts,omitempty"`
 }
 
 type node struct {
@@ -270,7 +271,40 @@ func listCatalog(ctx context.Context, includeDisabled bool) ([]catalogImage, []p
 		images[index].Versions = versions
 	}
 	plans, err := scanPlans(ctx, planSQL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := loadPlanTierDiscounts(ctx, plans); err != nil {
+		return nil, nil, err
+	}
 	return images, plans, err
+}
+
+func loadPlanTierDiscounts(ctx context.Context, plans []plan) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	rows, err := instanceDB.QueryContext(ctx, `SELECT plan_id,months,discount_bps FROM xcloud_plan_price_tiers WHERE enabled=TRUE`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byID := make(map[string]*plan, len(plans))
+	for index := range plans {
+		plans[index].TierDiscounts = map[int]int{}
+		byID[plans[index].ID] = &plans[index]
+	}
+	for rows.Next() {
+		var planID string
+		var months, discount int
+		if err := rows.Scan(&planID, &months, &discount); err != nil {
+			return err
+		}
+		if plan := byID[planID]; plan != nil {
+			plan.TierDiscounts[months] = discount
+		}
+	}
+	return rows.Err()
 }
 func listImageVersions(ctx context.Context, imageID string, includeDisabled bool) ([]imageVersion, error) {
 	statement := `SELECT id,image_id,version_tag,COALESCE(image_digest,''),enabled,version_status,COALESCE(last_error,''),published_at,created_at FROM xcloud_image_versions WHERE image_id=?`

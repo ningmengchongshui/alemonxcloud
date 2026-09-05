@@ -75,7 +75,7 @@ export function AdminPlanPriceTiersPage() {
     <section className="page super-page">
       <PageHeader
         eyebrow="营销运营"
-        title="套餐阶梯价"
+        title="套餐"
         description="设置 3、6、12 个月的折扣值；例如 8.5 表示 8.5 折，未设置时按原价计算。"
         actions={
           <Button

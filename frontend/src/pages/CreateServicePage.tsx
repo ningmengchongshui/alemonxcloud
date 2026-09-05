@@ -18,6 +18,11 @@ import { watchTask } from '@/store/uiSlice'
 import type { Catalog, Plan, PriceQuote } from '@/types/cloud'
 
 const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`
+const subscriptionMonths = [1, 3, 6, 12]
+const discountLabel = (plan: Plan | undefined, months: number) => {
+  const bps = plan?.tierDiscounts?.[months]
+  return months > 1 && bps !== undefined && bps < 10000 ? `${bps / 1000} 折` : ''
+}
 
 function PlanChoice({
   plan,
@@ -68,7 +73,6 @@ export function CreateServicePage({
   const [imageVersion, setImageVersion] = useState('')
   const [planID, setPlanID] = useState('')
   const [months, setMonths] = useState(1)
-  const [periodMode, setPeriodMode] = useState<'month' | 'year'>('month')
   const [error, setError] = useState('')
   const [promoCode, setPromoCode] = useState('')
   const [quote, setQuote] = useState<PriceQuote | null>(null)
@@ -278,45 +282,11 @@ export function CreateServicePage({
               <span className="selection-number">3</span>
               <div>
                 <h2>选择周期</h2>
-                <p>支持按月或按年购买，费用将从钱包余额扣除。</p>
+                <p>选择 1、3、6 或 12 个月，阶梯方案会自动计价。</p>
               </div>
             </div>
-            <div
-              className="mb-3 flex w-fit rounded-lg bg-slate-100 p-1 dark:bg-slate-900"
-              role="tablist"
-              aria-label="周期单位"
-            >
-              {[
-                ['month', '按月'],
-                ['year', '按年']
-              ].map(([mode, label]) => (
-                <button
-                  type="button"
-                  key={mode}
-                  role="tab"
-                  aria-selected={periodMode === mode}
-                  className={`rounded-md px-3 py-1.5 text-xs font-bold transition-colors ${periodMode === mode ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-200' : 'text-slate-500 dark:text-slate-300'}`}
-                  onClick={() => {
-                    const nextMode = mode as 'month' | 'year'
-                    setPeriodMode(nextMode)
-                    setMonths(current =>
-                      nextMode === 'year'
-                        ? current >= 12
-                          ? Math.min(60, Math.ceil(current / 12) * 12)
-                          : 12
-                        : Math.min(current, 12)
-                    )
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
             <div className="period-controls" role="group" aria-label="订阅周期">
-              {(periodMode === 'month'
-                ? Array.from({ length: 12 }, (_, index) => index + 1)
-                : [1, 2, 3, 4, 5].map(year => year * 12)
-              ).map(value => (
+              {subscriptionMonths.map(value => (
                 <button
                   type="button"
                   key={value}
@@ -324,9 +294,7 @@ export function CreateServicePage({
                   aria-pressed={months === value}
                   onClick={() => setMonths(value)}
                 >
-                  {periodMode === 'month'
-                    ? `${value} 个月`
-                    : `${value / 12} 年`}
+                  <span>{value} 个月</span>{discountLabel(selectedPlan, value) && <small className="ml-1 text-red-600">{discountLabel(selectedPlan, value)}</small>}
                 </button>
               ))}
             </div>
@@ -358,7 +326,7 @@ export function CreateServicePage({
             <div>
               <dt>周期</dt>
               <dd>
-                {periodMode === 'year' ? `${months / 12} 年` : `${months} 个月`}
+                {months} 个月
               </dd>
             </div>
           </dl>
@@ -379,7 +347,7 @@ export function CreateServicePage({
             <div className="mt-3 flex justify-between">
               <span>
                 套餐价格
-                {quote?.tierMonths ? `（${quote.tierMonths} 个月阶梯价）` : ''}
+                {quote?.tierMonths ? `（${quote.tierMonths} 个月）` : ''}
               </span>
               <b>{quote ? money(quote.listAmountFen) : '—'}</b>
             </div>

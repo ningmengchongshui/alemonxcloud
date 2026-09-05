@@ -64,6 +64,7 @@ type benefitQuote struct {
 	AmountFen         int    `json:"amountFen"`
 	BonusDays         int    `json:"bonusDays"`
 	TierMonths        int    `json:"tierMonths,omitempty"`
+	TierDiscountBps   int    `json:"tierDiscountBps,omitempty"`
 	QuoteSummary      string `json:"quoteSummary"`
 	Program           *struct {
 		ID          string `json:"id"`
@@ -77,6 +78,10 @@ type benefitQuote struct {
 	program *benefitProgram
 	codeID  string
 	grantID string
+}
+
+func validSubscriptionMonths(months int) bool {
+	return months == 1 || months == 3 || months == 6 || months == 12
 }
 
 func benefitCodeHash(value string) string {
@@ -171,7 +176,7 @@ func scanBenefitProgram(scanner interface{ Scan(...any) error }) (benefitProgram
 
 const benefitProgramSelect = `SELECT p.id,p.name,p.goal,p.status,p.trigger_type,p.order_scope,p.benefit_type,p.benefit_value,p.min_amount_fen,p.plan_ids,p.month_values,p.audience_type,p.starts_at,p.ends_at,p.per_user_limit,p.total_limit,p.used_count,p.cash_budget_fen,p.cash_spent_fen,p.grant_days_limit,p.grant_days_used,p.priority,p.channel_label,p.created_at,p.updated_at,COALESCE(c.code_mask,''),COALESCE(c.total_limit,0),COALESCE(c.per_user_limit,0),COALESCE(c.enabled,FALSE) FROM xcloud_benefit_programs p LEFT JOIN xcloud_benefit_codes c ON c.program_id=p.id`
 
-func tierPrice(ctx context.Context, tx *sql.Tx, planID string, months, monthly int, lock bool) (int, bool, error) {
+func tierPrice(ctx context.Context, tx *sql.Tx, planID string, months, monthly int, lock bool) (int, bool, int, error) {
 	var discountBps int
 	query := `SELECT discount_bps FROM xcloud_plan_price_tiers WHERE plan_id=? AND months=? AND enabled=TRUE`
 	var err error
@@ -184,12 +189,12 @@ func tierPrice(ctx context.Context, tx *sql.Tx, planID string, months, monthly i
 		err = instanceDB.QueryRowContext(ctx, query, planID, months).Scan(&discountBps)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return monthly * months, false, nil
+		return monthly * months, false, 10000, nil
 	}
 	if discountBps < 0 || discountBps > 10000 {
-		return 0, false, errors.New("套餐阶梯折扣无效")
+		return 0, false, 0, errors.New("套餐阶梯折扣无效")
 	}
-	return monthly * months * discountBps / 10000, err == nil, err
+	return monthly * months * discountBps / 10000, err == nil, discountBps, err
 }
 
 func benefitDiscount(p benefitProgram, list int) (discount, days int) {
@@ -312,13 +317,14 @@ func quoteCommercialBenefit(ctx context.Context, ownerID, scope, planID, renewal
 	if tx == nil {
 		return benefitQuote{}, errors.New("权益报价需要事务上下文")
 	}
-	list, tiered, err := tierPrice(ctx, tx, planID, months, monthly, lock)
+	list, tiered, tierDiscountBps, err := tierPrice(ctx, tx, planID, months, monthly, lock)
 	if err != nil {
 		return benefitQuote{}, err
 	}
 	q := benefitQuote{ListAmountFen: list, AmountFen: list}
 	if tiered {
 		q.TierMonths = months
+		q.TierDiscountBps = tierDiscountBps
 	}
 	programQuery := benefitProgramSelect + ` WHERE p.status IN ('active','scheduled') ORDER BY p.priority DESC,p.created_at ASC`
 	if lock {

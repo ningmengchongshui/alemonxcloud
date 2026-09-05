@@ -13,13 +13,20 @@ import {
 } from '@/components/ui'
 import {
   useInstanceActionMutation,
+  useGetCatalogQuery,
   useGetWalletQuery,
   useQuoteRenewalMutation,
   useRenewOrderMutation
 } from '@/services/cloudApi'
 import { trackConsoleEvent } from '@/services/telemetry'
 import { watchTask } from '@/store/uiSlice'
-import type { Instance, Order, PriceQuote } from '@/types/cloud'
+import type { Instance, Order, Plan, PriceQuote } from '@/types/cloud'
+
+const subscriptionMonths = [1, 3, 6, 12]
+const renewDiscountLabel = (plan: Plan | undefined, months: number) => {
+  const bps = plan?.tierDiscounts?.[months]
+  return months > 1 && bps !== undefined && bps < 10000 ? `${bps / 1000} 折` : ''
+}
 
 type InstanceAction =
   | 'start'
@@ -124,6 +131,7 @@ export function InstancesPage({
   const [renewQuote, setRenewQuote] = useState<PriceQuote | null>(null)
   const [renewalError, setRenewalError] = useState('')
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
+  const { data: catalog } = useGetCatalogQuery()
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
   const [quoteRenewal] = useQuoteRenewalMutation()
   const { data: wallet } = useGetWalletQuery()
@@ -149,11 +157,15 @@ export function InstancesPage({
       renewableOrderByInstance.set(order.instanceId, order)
   }
 
-  function refreshRenewQuote(order: Order, promoCode = renewPromoCode) {
+  function refreshRenewQuote(
+    order: Order,
+    promoCode = renewPromoCode,
+    quoteMonths = Number(months) || 1
+  ) {
     setRenewalError('')
     void quoteRenewal({
       id: order.id,
-      months: Number(months) || 1,
+      months: quoteMonths,
       promoCode: promoCode || undefined
     })
       .unwrap()
@@ -503,17 +515,17 @@ export function InstancesPage({
           description={`为当前实例续费 ${renewing.planName}；余额不足时不会续费。`}
           onClose={() => setRenewing(null)}
         >
-          <label className="grid gap-1.5 text-sm font-medium">
-            续费月数（1–24）
-            <input
-              type="number"
-              min="1"
-              max="24"
-              value={months}
-              onChange={event => setMonths(event.target.value)}
-              onBlur={() => refreshRenewQuote(renewing)}
-            />
-          </label>
+          <fieldset className="grid gap-2 text-sm font-medium">
+            <legend>续费周期</legend>
+            <div className="flex flex-wrap gap-2">
+              {subscriptionMonths.map(value => (
+                <Button key={value} tone={Number(months) === value ? 'primary' : 'secondary'} onClick={() => { setMonths(String(value)); refreshRenewQuote(renewing, renewPromoCode, value) }}>
+                  <span>{value} 个月</span>{renewDiscountLabel(catalog?.plans.find(plan => plan.id === renewing.planId), value) && <small className="ml-1 text-red-600">{renewDiscountLabel(catalog?.plans.find(plan => plan.id === renewing.planId), value)}</small>}
+                </Button>
+              ))}
+            </div>
+            <small className="text-slate-500">3、6、12 个月会自动使用对应的阶梯价。</small>
+          </fieldset>
           <div className="mt-4">
             <div className="rounded-xl border border-slate-200 p-4 text-sm">
               <label className="grid gap-1.5 font-medium">
@@ -536,7 +548,7 @@ export function InstancesPage({
                 <span>
                   套餐价格
                   {renewQuote?.tierMonths
-                    ? `（${renewQuote.tierMonths} 个月阶梯价）`
+                    ? `（${renewQuote.tierMonths} 个月）`
                     : ''}
                 </span>
                 <b>
@@ -579,8 +591,8 @@ export function InstancesPage({
               disabled={!canRenew}
               onClick={() => {
                 const value = Number(months)
-                if (!Number.isInteger(value) || value < 1 || value > 24) {
-                  setRenewalError('请输入 1 至 24 的整数月数')
+                if (!subscriptionMonths.includes(value)) {
+                  setRenewalError('请选择 1、3、6 或 12 个月')
                   return
                 }
                 const started = performance.now()
