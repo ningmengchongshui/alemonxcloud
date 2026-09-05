@@ -9,7 +9,9 @@ import { store } from './store'
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Provider store={store}>
-      <ErrorBoundary><App /></ErrorBoundary>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </Provider>
   </StrictMode>
 )

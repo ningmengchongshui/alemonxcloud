@@ -1,7 +1,7 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @theme {
-  --font-sans: "Manrope", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Manrope', 'Noto Sans SC', ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {
@@ -23,6 +23,48 @@
   input:focus-visible,
   select:focus-visible {
     @apply outline-3 outline-offset-2 outline-blue-200;
+  }
+
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(148 163 184 / 0.55) transparent;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(148 163 184 / 0.55) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background: rgb(148 163 184 / 0.55);
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgb(100 116 139 / 0.8);
+    background-clip: content-box;
+  }
+
+  @media (pointer: coarse) {
+    html,
+    * {
+      scrollbar-width: none;
+    }
+
+    *::-webkit-scrollbar {
+      display: none;
+    }
   }
 }
 
@@ -140,10 +182,18 @@
     @apply flex h-12 items-center gap-2 border-b border-slate-200 bg-white px-7 text-xs text-slate-400 dark:border-slate-700 dark:bg-slate-950 max-[560px]:px-4;
   }
 
-  .console-topbar>span { @apply font-bold text-slate-700 dark:text-slate-100; }
-  .console-topbar>i { @apply not-italic text-slate-300; }
-  .console-topbar>b { @apply font-bold text-blue-600 dark:text-blue-300; }
-  .console-topbar>small { @apply ml-auto rounded bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200; }
+  .console-topbar > span {
+    @apply font-bold text-slate-700 dark:text-slate-100;
+  }
+  .console-topbar > i {
+    @apply not-italic text-slate-300;
+  }
+  .console-topbar > b {
+    @apply font-bold text-blue-600 dark:text-blue-300;
+  }
+  .console-topbar > small {
+    @apply ml-auto rounded bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200;
+  }
 
   .page {
     @apply mx-auto max-w-screen-2xl px-7 py-11;
@@ -157,7 +207,7 @@
     @apply mb-2.5 text-4xl font-bold tracking-tight;
   }
 
-  .page-heading>div>p:last-child {
+  .page-heading > div > p:last-child {
     @apply m-0 max-w-xl text-[13px] leading-6 text-slate-500 dark:text-slate-300;
   }
 
@@ -191,19 +241,11 @@
     @apply min-h-11 px-4 max-[560px]:w-full;
   }
 
-  .service-overview {
-    @apply mb-11 grid grid-cols-4 gap-3.5 max-[1100px]:grid-cols-2 max-[850px]:grid-cols-1;
-  }
-
-  .service-overview article {
-    @apply min-h-32 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-800;
-  }
-
   .overview-primary {
     @apply border-transparent bg-gradient-to-br from-blue-900 to-blue-600 text-white;
   }
 
-  .overview-primary>span,
+  .overview-primary > span,
   .overview-primary p {
     @apply text-xs text-blue-100;
   }
@@ -365,16 +407,32 @@
     @apply grid grid-cols-3 items-start gap-10 max-[850px]:grid-cols-1;
   }
 
-  .create-form { @apply col-span-2 min-w-0 max-[850px]:col-span-1; }
+  .create-form {
+    @apply col-span-2 min-w-0 max-[850px]:col-span-1;
+  }
 
-  .step-hint { @apply flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-400 shadow-sm dark:border-slate-700 dark:bg-slate-800; }
-  .step-hint b { @apply grid size-5 place-items-center rounded-full bg-blue-600 text-[9px] text-white; }
-  .step-hint span { @apply font-bold text-slate-600 dark:text-slate-200; }
-  .step-hint i { @apply mx-1 h-px w-5 bg-slate-200 dark:bg-slate-600; }
+  .step-hint {
+    @apply flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-400 shadow-sm dark:border-slate-700 dark:bg-slate-800;
+  }
+  .step-hint b {
+    @apply grid size-5 place-items-center rounded-full bg-blue-600 text-[9px] text-white;
+  }
+  .step-hint span {
+    @apply font-bold text-slate-600 dark:text-slate-200;
+  }
+  .step-hint i {
+    @apply mx-1 h-px w-5 bg-slate-200 dark:bg-slate-600;
+  }
 
-  .create-form label { @apply mt-4 flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-300; }
-  .create-form label small { @apply font-normal text-slate-400; }
-  .create-form input { @apply mt-1.5 min-h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 shadow-sm outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100; }
+  .create-form label {
+    @apply mt-4 flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-300;
+  }
+  .create-form label small {
+    @apply font-normal text-slate-400;
+  }
+  .create-form input {
+    @apply mt-1.5 min-h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 shadow-sm outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100;
+  }
 
   .selection-section {
     @apply mb-7 border-b border-slate-200 pb-8 dark:border-slate-700;
@@ -421,7 +479,7 @@
     @apply border-blue-600 bg-blue-600;
   }
 
-  .catalog-choice>span:nth-child(2) {
+  .catalog-choice > span:nth-child(2) {
     @apply min-w-0;
   }
 
@@ -495,47 +553,8 @@
     @apply mt-3 text-center text-[10px] text-slate-400;
   }
 
-  .orders-overview {
-    @apply mb-6 grid grid-cols-3 gap-3.5 max-[850px]:grid-cols-1;
-  }
-
-  .orders-overview article,
   .order-card {
-    @apply rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800;
-  }
-
-  .orders-overview small,
-  .orders-overview strong,
-  .orders-overview span {
-    @apply block;
-  }
-
-  .orders-overview small {
-    @apply text-[11px] text-slate-400;
-  }
-
-  .orders-overview strong {
-    @apply my-1 text-3xl font-bold text-slate-700 dark:text-white;
-  }
-
-  .orders-overview span {
-    @apply text-[10px] text-slate-400;
-  }
-
-  .orders-overview-note {
-    @apply border-blue-100 bg-blue-50 dark:border-blue-900 dark:bg-blue-950;
-  }
-
-  .order-toolbar {
-    @apply mb-4 flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-5 py-3.5 dark:border-slate-700 dark:bg-slate-800 max-[700px]:flex-col max-[700px]:items-start;
-  }
-
-  .order-toolbar h2 {
-    @apply m-0 text-sm font-bold text-slate-700 dark:text-white;
-  }
-
-  .order-toolbar > div:first-child span {
-    @apply mt-1 block text-[10px] text-slate-400;
+    @apply rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800;
   }
 
   .order-filters {
@@ -554,10 +573,6 @@
     @apply min-h-40;
   }
 
-  .orders-overview-note b {
-    @apply text-[13px] text-blue-800 dark:text-blue-200;
-  }
-
   .orders-list {
     @apply grid gap-3;
   }
@@ -567,7 +582,7 @@
   }
 
   .order-card h2 {
-    @apply my-2 text-[15px] font-bold text-slate-700 dark:text-white;
+    @apply my-1.5 text-[15px] font-bold text-slate-700 dark:text-white;
   }
 
   .order-card h2 small,
@@ -575,22 +590,35 @@
     @apply text-slate-400;
   }
 
-  .order-progress { @apply my-5 grid grid-cols-4 gap-2 border-y border-slate-100 py-4 dark:border-slate-700; }
-  .order-progress>div { @apply relative flex items-center gap-2 text-[10px] text-slate-400; }
-  .order-progress>div:not(:last-child)::after { content: ""; @apply absolute left-6 right-0 top-2.5 -z-0 h-px bg-slate-200 dark:bg-slate-600; }
-  .order-progress i { @apply z-10 grid size-5 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-[9px] not-italic dark:border-slate-600 dark:bg-slate-800; }
-  .order-progress .done { @apply font-bold text-blue-600 dark:text-blue-300; }
-  .order-progress .done i { @apply border-blue-600 bg-blue-600 text-white; }
+  .order-progress {
+    @apply my-3 grid grid-cols-4 gap-2 border-y border-slate-100 py-3 dark:border-slate-700;
+  }
+  .order-progress > div {
+    @apply relative flex items-center gap-2 text-[10px] text-slate-400;
+  }
+  .order-progress > div:not(:last-child)::after {
+    content: '';
+    @apply absolute left-6 right-0 top-2.5 -z-0 h-px bg-slate-200 dark:bg-slate-600;
+  }
+  .order-progress i {
+    @apply z-10 grid size-5 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-[9px] not-italic dark:border-slate-600 dark:bg-slate-800;
+  }
+  .order-progress .done {
+    @apply font-bold text-blue-600 dark:text-blue-300;
+  }
+  .order-progress .done i {
+    @apply border-blue-600 bg-blue-600 text-white;
+  }
 
   .order-price {
-    @apply text-xl font-bold text-slate-700 dark:text-white;
+    @apply text-lg font-bold text-slate-700 dark:text-white;
   }
 
   .order-card-bottom {
-    @apply mt-5 grid grid-cols-3 items-center gap-6 border-t border-slate-100 pt-4 dark:border-slate-700 max-[850px]:grid-cols-1;
+    @apply grid grid-cols-3 items-center gap-4 max-[850px]:grid-cols-1;
   }
 
-  .order-card-bottom>p {
+  .order-card-bottom > p {
     @apply m-0 text-[11px] text-slate-500 dark:text-slate-300;
   }
 
@@ -618,16 +646,22 @@
     @apply flex flex-col items-end gap-2 max-[850px]:items-start;
   }
 
-  .super-heading-tools { @apply flex items-end gap-4 max-[850px]:w-full max-[850px]:items-start max-[560px]:flex-col; }
-  .refresh-button { @apply min-h-9 whitespace-nowrap; }
-  .refresh-button span { @apply mr-1 text-sm; }
+  .super-heading-tools {
+    @apply flex items-end gap-4 max-[850px]:w-full max-[850px]:items-start max-[560px]:flex-col;
+  }
+  .refresh-button {
+    @apply min-h-9 whitespace-nowrap;
+  }
+  .refresh-button span {
+    @apply mr-1 text-sm;
+  }
 
-  .super-health>span,
+  .super-health > span,
   .admin-state {
     @apply inline-flex items-center gap-1.5 rounded-full text-[10px] font-extrabold;
   }
 
-  .super-health>span {
+  .super-health > span {
     @apply px-2.5 py-1.5;
   }
 
@@ -650,32 +684,6 @@
   }
 
   .super-health small {
-    @apply text-[10px] text-slate-400;
-  }
-
-  .super-metrics {
-    @apply mb-7 grid grid-cols-4 gap-3.5 max-[1100px]:grid-cols-2;
-  }
-
-  .super-metrics article {
-    @apply min-h-32 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800;
-  }
-
-  .super-metrics small,
-  .super-metrics strong,
-  .super-metrics span {
-    @apply block;
-  }
-
-  .super-metrics small {
-    @apply text-[11px] text-slate-400;
-  }
-
-  .super-metrics strong {
-    @apply my-1 text-3xl font-bold text-slate-700 dark:text-white;
-  }
-
-  .super-metrics span {
     @apply text-[10px] text-slate-400;
   }
 
@@ -703,11 +711,15 @@
     @apply m-0 text-lg font-bold text-slate-700 dark:text-white;
   }
 
-  .super-section-heading>span {
+  .super-section-heading > span {
     @apply rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500 dark:bg-slate-700 dark:text-slate-300;
   }
-  .section-heading-actions { @apply flex items-center gap-2; }
-  .section-heading-actions>span { @apply rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500 dark:bg-slate-700 dark:text-slate-300; }
+  .section-heading-actions {
+    @apply flex items-center gap-2;
+  }
+  .section-heading-actions > span {
+    @apply rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500 dark:bg-slate-700 dark:text-slate-300;
+  }
 
   .attention-grid {
     @apply grid grid-cols-2 gap-4 max-[1100px]:grid-cols-1;
@@ -733,7 +745,7 @@
     @apply bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200;
   }
 
-  .attention-row>div:nth-child(2) {
+  .attention-row > div:nth-child(2) {
     @apply min-w-0 flex-1;
   }
 
@@ -753,7 +765,7 @@
     @apply rounded-lg bg-blue-50 p-5 dark:bg-blue-950;
   }
 
-  .attention-note>span {
+  .attention-note > span {
     @apply mb-3 block text-[10px] font-extrabold text-blue-600 dark:text-blue-200;
   }
 
@@ -769,7 +781,7 @@
     @apply flex items-center gap-3 rounded-lg bg-emerald-50 p-4 dark:bg-emerald-950;
   }
 
-  .super-empty>span {
+  .super-empty > span {
     @apply grid size-7 place-items-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200;
   }
 
@@ -785,16 +797,32 @@
     @apply mb-5 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900;
   }
 
-  .admin-editor-intro { @apply col-span-2 mb-1 max-[850px]:col-span-1; }
-  .admin-editor-intro p { @apply mt-1 max-w-2xl text-[11px] leading-5 text-slate-500 dark:text-slate-300; }
-  .admin-editor-block { @apply rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800; }
-  .admin-editor-block-title { @apply mb-3 text-[11px] font-extrabold text-blue-600 dark:text-blue-200; }
-  .admin-field { @apply grid gap-1.5; }
-  .admin-field label { @apply mt-0 text-[10px] font-bold text-slate-500 dark:text-slate-300; }
-  .admin-editor-fields { @apply grid grid-cols-2 gap-2.5; }
+  .admin-editor-intro {
+    @apply col-span-2 mb-1 max-[850px]:col-span-1;
+  }
+  .admin-editor-intro p {
+    @apply mt-1 max-w-2xl text-[11px] leading-5 text-slate-500 dark:text-slate-300;
+  }
+  .admin-editor-block {
+    @apply rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800;
+  }
+  .admin-editor-block-title {
+    @apply mb-3 text-[11px] font-extrabold text-blue-600 dark:text-blue-200;
+  }
+  .admin-field {
+    @apply grid gap-1.5;
+  }
+  .admin-field label {
+    @apply mt-0 text-[10px] font-bold text-slate-500 dark:text-slate-300;
+  }
+  .admin-editor-fields {
+    @apply grid grid-cols-2 gap-2.5;
+  }
   .admin-editor input,
   .admin-editor select,
-  .admin-search input { @apply min-h-9 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] text-slate-700 shadow-sm outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100; }
+  .admin-search input {
+    @apply min-h-9 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] text-slate-700 shadow-sm outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100;
+  }
 
   .admin-editor h3 {
     @apply text-[13px] font-bold text-slate-700 dark:text-white;
@@ -804,7 +832,9 @@
     @apply mt-3 text-[10px];
   }
 
-  .admin-editor .admin-field label { @apply mt-0; }
+  .admin-editor .admin-field label {
+    @apply mt-0;
+  }
 
   .admin-editor input,
   .admin-editor select {
@@ -815,41 +845,42 @@
     @apply mt-3 min-h-8.5 px-3 text-[10px] shadow-none;
   }
 
-  .catalog-editor .admin-editor-block .primary { @apply w-full; }
-  .catalog-add-actions { @apply flex items-center gap-2; }
-  .modal-backdrop { @apply fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-5 backdrop-blur-sm; }
-  .modal-card { @apply max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900; }
-  .modal-heading { @apply mb-5 flex items-start justify-between gap-5 border-b border-slate-100 pb-4 dark:border-slate-700; }
-  .modal-heading h2 { @apply m-0 text-xl font-bold text-slate-800 dark:text-white; }
-  .modal-heading p:last-child { @apply mt-1 max-w-xl text-[11px] leading-5 text-slate-500 dark:text-slate-300; }
-  .modal-close { @apply grid size-8 shrink-0 place-items-center rounded-md border-0 bg-slate-100 text-xl leading-none text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300; }
-  .compact-modal { @apply max-w-lg; }
-  .modal-field { @apply grid gap-2 text-[11px] font-bold text-slate-600 dark:text-slate-200; }
-  .modal-field input { @apply min-h-10 rounded-md border border-slate-200 bg-white px-3 text-xs font-normal outline-none focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800; }
-  .modal-actions { @apply mt-6 flex justify-end gap-2; }
-  .wallet-entry-list { @apply overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700; }
-  .wallet-entry-row { @apply grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 border-b border-slate-100 p-4 last:border-0 dark:border-slate-700; }
-  .wallet-entry-row b { @apply text-xs text-slate-700 dark:text-white; }
-  .wallet-entry-row p, .wallet-entry-row small { @apply mt-1 text-[10px] text-slate-400; }
-  .wallet-entry-row small { @apply col-span-2; }
-  .wallet-credit { @apply text-sm text-emerald-600 dark:text-emerald-300; }
-  .wallet-debit { @apply text-sm text-red-600 dark:text-red-300; }
-  .logs-modal { @apply max-w-4xl; }
-  .node-editor label { @apply flex flex-col gap-1.5; }
-  .node-editor { @apply grid gap-2; }
+  .catalog-editor .admin-editor-block .primary {
+    @apply w-full;
+  }
+  .catalog-add-actions {
+    @apply flex items-center gap-2;
+  }
+  .logs-modal {
+    @apply max-w-4xl;
+  }
+  .node-editor label {
+    @apply flex flex-col gap-1.5;
+  }
+  .node-editor {
+    @apply grid gap-2;
+  }
   .node-editor input,
-  .node-editor select { @apply min-h-9 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] text-slate-700 shadow-sm outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100; }
-  .node-editor>select,
-  .node-editor>input { @apply mt-1.5 w-full; }
-  .node-editor>h3 { @apply mt-4 text-[13px] font-bold text-slate-700 dark:text-white; }
-  .modal-divider { @apply my-5 border-t border-slate-100 dark:border-slate-700; }
+  .node-editor select {
+    @apply min-h-9 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] text-slate-700 shadow-sm outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100;
+  }
+  .node-editor > select,
+  .node-editor > input {
+    @apply mt-1.5 w-full;
+  }
+  .node-editor > h3 {
+    @apply mt-4 text-[13px] font-bold text-slate-700 dark:text-white;
+  }
+  .modal-divider {
+    @apply my-5 border-t border-slate-100 dark:border-slate-700;
+  }
 
   .catalog-editor {
     @apply grid grid-cols-2 gap-x-2.5 max-[850px]:grid-cols-1;
   }
 
   .catalog-editor h3,
-  .catalog-editor>.login-error {
+  .catalog-editor > .login-error {
     @apply col-span-2 max-[850px]:col-span-1;
   }
 
@@ -874,13 +905,24 @@
     @apply bg-slate-50 text-[10px] text-slate-400 dark:bg-slate-900;
   }
 
-  .admin-table-wrap tbody:empty { @apply block min-h-20; }
-  .admin-table-wrap tbody:empty::before { content: "暂无数据"; @apply block py-7 text-center text-xs text-slate-400; }
+  .admin-table-wrap tbody:empty {
+    @apply block min-h-20;
+  }
+  .admin-table-wrap tbody:empty::before {
+    content: '暂无数据';
+    @apply block py-7 text-center text-xs text-slate-400;
+  }
 
-  .admin-table-wrap tbody tr { @apply transition-colors hover:bg-blue-50/40 dark:hover:bg-slate-700/40; }
+  .admin-table-wrap tbody tr {
+    @apply transition-colors hover:bg-blue-50/40 dark:hover:bg-slate-700/40;
+  }
   .admin-table-wrap td:last-child,
-  .admin-table-wrap th:last-child { @apply whitespace-nowrap text-right; }
-  .admin-table-state { @apply py-10 text-center text-xs text-slate-400; }
+  .admin-table-wrap th:last-child {
+    @apply whitespace-nowrap text-right;
+  }
+  .admin-table-state {
+    @apply py-10 text-center text-xs text-slate-400;
+  }
 
   .admin-table-wrap td small {
     @apply mt-1 block text-[9px] text-slate-400;
@@ -906,16 +948,22 @@
     @apply mt-1 truncate text-[9px] text-slate-400;
   }
 
-  .node-intro { @apply mb-4 text-[11px] text-slate-500 dark:text-slate-300; }
-  .node-details { @apply flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400; }
-  .node-actions { @apply flex items-center gap-3 max-[850px]:justify-between; }
-  .node-hardware { @apply mb-3 rounded-lg bg-slate-100 px-3 py-2 text-[11px] dark:bg-slate-800; }
-  .node-hardware span { @apply mr-2 text-slate-400; }
-  .node-hardware b { @apply text-slate-700 dark:text-slate-100; }
-  .node-summary { @apply mb-4 grid grid-cols-4 gap-3 max-[850px]:grid-cols-2; }
-  .node-summary article { @apply rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900; }
-  .node-summary small,
-  .node-summary strong { @apply block; }
-  .node-summary small { @apply text-[10px] text-slate-400; }
-  .node-summary strong { @apply mt-1 text-lg font-bold text-slate-700 dark:text-white; }
+  .node-intro {
+    @apply mb-4 text-[11px] text-slate-500 dark:text-slate-300;
+  }
+  .node-details {
+    @apply flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400;
+  }
+  .node-actions {
+    @apply flex items-center gap-3 max-[850px]:justify-between;
+  }
+  .node-hardware {
+    @apply mb-3 rounded-lg bg-slate-100 px-3 py-2 text-[11px] dark:bg-slate-800;
+  }
+  .node-hardware span {
+    @apply mr-2 text-slate-400;
+  }
+  .node-hardware b {
+    @apply text-slate-700 dark:text-slate-100;
+  }
 }

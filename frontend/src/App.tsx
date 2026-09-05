@@ -1,34 +1,133 @@
 import { useEffect, useState } from 'react'
-import { useAuthorizeMutation, useCallbackMutation, useDevLoginMutation, useGetCatalogQuery, useGetInstancesQuery, useGetOrdersQuery, useGetSessionQuery, useLogoutMutation } from '@/services/cloudApi'
+import {
+  useAuthorizeMutation,
+  useCallbackMutation,
+  useDevLoginMutation,
+  useGetCatalogQuery,
+  useGetInstancesQuery,
+  useGetOrdersQuery,
+  useGetSessionQuery,
+  useLogoutMutation
+} from '@/services/cloudApi'
 import { Shell } from './components/Shell'
-import { DashboardPage } from './pages/DashboardPage'
+import { CreateServicePage } from './pages/CreateServicePage'
+import { InstancesPage } from './pages/InstancesPage'
+import { InstanceLogsPage } from './pages/InstanceLogsPage'
+import { NotificationsPage } from './pages/NotificationsPage'
+import { TicketsPage } from './pages/TicketsPage'
+import { WalletPage } from './pages/WalletPage'
+import { WalletHistoryPage } from './pages/WalletHistoryPage'
+import { UserOverviewPage } from './pages/UserOverviewPage'
 import { LoginPage } from './pages/LoginPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { AdminPage } from './pages/AdminPage'
-import type { SuperPage } from '@/types/cloud'
+import type { Page, SuperPage } from '@/types/cloud'
 
-type UserPage = 'instances' | 'create' | 'orders'
-const userPaths = new Set(['/me', '/me/create', '/me/orders'])
-const superPaths: Record<SuperPage, string> = { overview: '/super', catalog: '/super/catalog', nodes: '/super/nodes', orders: '/super/orders', tasks: '/super/tasks', users: '/super/users', audit: '/super/audit' }
+const userPaths = new Set([
+  '/me',
+  '/me/instances',
+  '/me/create',
+  '/me/orders',
+  '/me/wallet',
+  '/me/notifications',
+  '/me/tickets'
+])
+const superPaths: Record<SuperPage, string> = {
+  overview: '/super',
+  catalog: '/super/catalog',
+  images: '/super/images',
+  nodes: '/super/nodes',
+  orders: '/super/orders',
+  tasks: '/super/tasks',
+  users: '/super/users',
+  audit: '/super/audit',
+  tickets: '/super/tickets'
+}
 
-function message(error: unknown, fallback: string) { return typeof error === 'object' && error !== null && 'data' in error && typeof error.data === 'object' && error.data !== null && 'message' in error.data && typeof error.data.message === 'string' ? error.data.message : fallback }
-function currentPath() { return window.location.pathname.replace(/\/+$/, '') || '/' }
-function userPageFor(path: string): UserPage { return path === '/me/create' ? 'create' : path === '/me/orders' ? 'orders' : 'instances' }
-function superPageFor(path: string): SuperPage | null { return (Object.entries(superPaths).find(([, value]) => value === path)?.[0] as SuperPage | undefined) ?? null }
+function message(error: unknown, fallback: string) {
+  return typeof error === 'object' &&
+    error !== null &&
+    'data' in error &&
+    typeof error.data === 'object' &&
+    error.data !== null &&
+    'message' in error.data &&
+    typeof error.data.message === 'string'
+    ? error.data.message
+    : fallback
+}
+function currentPath() {
+  return window.location.pathname.replace(/\/+$/, '') || '/'
+}
+function userPageFor(path: string): Page {
+  if (path === '/me/instances') return 'instances'
+  if (path === '/me/create') return 'create'
+  if (path === '/me/orders') return 'orders'
+  if (path === '/me/wallet') return 'wallet'
+  if (path === '/me/notifications') return 'notifications'
+  if (path === '/me/tickets') return 'tickets'
+  return 'overview'
+}
+function superPageFor(path: string): SuperPage | null {
+  return (
+    (Object.entries(superPaths).find(([, value]) => value === path)?.[0] as
+      SuperPage | undefined) ?? null
+  )
+}
+function walletHistoryUserID(path: string) {
+  const match = path.match(/^\/super\/users\/([^/]+)\/wallet$/)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+}
+function instanceLogID(path: string) {
+  const match = path.match(/^\/me\/instances\/([^/]+)\/logs$/)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+}
+function ticketID(path: string) {
+  const match = path.match(/^\/me\/tickets\/([^/]+)$/)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+}
 function safeReturnPath() {
   const value = window.sessionStorage.getItem('alemonxcloud:return-to')
   window.sessionStorage.removeItem('alemonxcloud:return-to')
-  return value === '/super' || (value !== null && userPaths.has(value)) ? value : '/me'
+  return value === '/super' || (value !== null && userPaths.has(value))
+    ? value
+    : '/me'
 }
 
 export default function App() {
   const [path, setPath] = useState(currentPath)
   const [error, setError] = useState('')
   const { data: session, isLoading } = useGetSessionQuery()
-  const isUserArea = userPaths.has(path)
-  const { data: instances = [], isLoading: instancesLoading } = useGetInstancesQuery(undefined, { skip: !session || !isUserArea })
-  const { data: catalog, isLoading: catalogLoading, isError: catalogError, refetch: refetchCatalog } = useGetCatalogQuery(undefined, { skip: !session || !isUserArea })
-  const { data: orders = [], isLoading: ordersLoading } = useGetOrdersQuery(undefined, { skip: !session || !isUserArea })
+  const logInstanceID = instanceLogID(path)
+  const selectedTicketID = ticketID(path)
+  const isUserArea =
+    userPaths.has(path) || Boolean(logInstanceID) || Boolean(selectedTicketID)
+  const { data: instances = [], isLoading: instancesLoading } =
+    useGetInstancesQuery(undefined, { skip: !session || !isUserArea })
+  const {
+    data: catalog,
+    isLoading: catalogLoading,
+    isError: catalogError,
+    refetch: refetchCatalog
+  } = useGetCatalogQuery(undefined, { skip: !session || !isUserArea })
+  const { data: orders = [], isLoading: ordersLoading } = useGetOrdersQuery(
+    undefined,
+    { skip: !session || !isUserArea }
+  )
   const [authorize] = useAuthorizeMutation()
   const [callback] = useCallbackMutation()
   const [devLogin] = useDevLoginMutation()
@@ -51,18 +150,27 @@ export default function App() {
     const code = params.get('code')
     const state = params.get('state')
     if (!code || !state) return
-    void callback({ code, state }).unwrap().then(() => navigate(safeReturnPath(), true)).catch(value => {
-      window.history.replaceState({}, '', '/login')
-      setPath('/login')
-      setError(message(value, '统一认证失败'))
-    })
+    void callback({ code, state })
+      .unwrap()
+      .then(() => navigate(safeReturnPath(), true))
+      .catch(value => {
+        window.history.replaceState({}, '', '/login')
+        setPath('/login')
+        setError(message(value, '统一认证失败'))
+      })
   }, [callback])
 
   async function login() {
     setError('')
-    window.sessionStorage.setItem('alemonxcloud:return-to', path === '/super' ? '/super' : '/me')
+    window.sessionStorage.setItem(
+      'alemonxcloud:return-to',
+      path === '/super' ? '/super' : '/me'
+    )
     try {
-      window.location.assign((await authorize(`${window.location.origin}/callback`).unwrap()).authorizeURL)
+      window.location.assign(
+        (await authorize(`${window.location.origin}/callback`).unwrap())
+          .authorizeURL
+      )
     } catch (value) {
       setError(message(value, '无法发起登录'))
       throw value
@@ -85,20 +193,196 @@ export default function App() {
     navigate('/login', true)
   }
 
-  if (isLoading) return <main className="auth"><section className="login"><div className="login-card"><h2>正在恢复登录状态…</h2></div></section></main>
-  if (!session) return <LoginPage error={error} onLogin={login} onDevLogin={loginAsDeveloper} />
-  if (path === '/' || path === '/login' || path === '/callback') { navigate('/me', true); return null }
-  const superPage = superPageFor(path)
-  if (superPage) {
-    if (!session.user.isAdmin) { navigate('/me', true); return null }
-    return <Shell user={session.user} area="super" superPage={superPage} onSuperPageChange={next => navigate(superPaths[next])} onGoToMe={() => navigate('/me')} onLogout={signOut}><AdminPage page={superPage} /></Shell>
+  if (isLoading)
+    return (
+      <main className="auth">
+        <section className="login">
+          <div className="login-card">
+            <h2>正在恢复登录状态…</h2>
+          </div>
+        </section>
+      </main>
+    )
+  if (!session)
+    return (
+      <LoginPage error={error} onLogin={login} onDevLogin={loginAsDeveloper} />
+    )
+  if (path === '/' || path === '/login' || path === '/callback') {
+    navigate('/me', true)
+    return null
   }
-  if (!userPaths.has(path)) { navigate('/me', true); return null }
+  const walletUserID = walletHistoryUserID(path)
+  const superPage = superPageFor(path)
+  if (superPage || walletUserID) {
+    if (!session.user.isAdmin) {
+      navigate('/me', true)
+      return null
+    }
+    return (
+      <Shell
+        user={session.user}
+        area="super"
+        superPage={superPage ?? 'users'}
+        onSuperPageChange={next => navigate(superPaths[next])}
+        onGoToMe={() => navigate('/me')}
+        onLogout={signOut}
+      >
+        {walletUserID ? (
+          <WalletHistoryPage
+            userID={walletUserID}
+            onBack={() => navigate('/super/users')}
+          />
+        ) : (
+          <AdminPage
+            page={superPage!}
+            onOpenWalletHistory={user =>
+              navigate(`/super/users/${encodeURIComponent(user.id)}/wallet`)
+            }
+          />
+        )}
+      </Shell>
+    )
+  }
+  if (logInstanceID) {
+    return (
+      <Shell
+        user={session.user}
+        area="me"
+        page="instances"
+        onPageChange={next =>
+          navigate(
+            {
+              overview: '/me',
+              instances: '/me/instances',
+              create: '/me/create',
+              orders: '/me/orders',
+              wallet: '/me/wallet',
+              notifications: '/me/notifications',
+              tickets: '/me/tickets'
+            }[next]
+          )
+        }
+        onGoToMe={() => navigate('/me')}
+        onGoToSuper={
+          session.user.isAdmin ? () => navigate('/super') : undefined
+        }
+        onLogout={signOut}
+      >
+        <InstanceLogsPage
+          instanceID={logInstanceID}
+          instance={instances.find(item => item.id === logInstanceID)}
+          onBack={() => navigate('/me/instances')}
+        />
+      </Shell>
+    )
+  }
+  if (selectedTicketID) {
+    return (
+      <Shell
+        user={session.user}
+        area="me"
+        page="tickets"
+        onPageChange={next =>
+          navigate(
+            {
+              overview: '/me',
+              instances: '/me/instances',
+              create: '/me/create',
+              orders: '/me/orders',
+              wallet: '/me/wallet',
+              notifications: '/me/notifications',
+              tickets: '/me/tickets'
+            }[next]
+          )
+        }
+        onGoToMe={() => navigate('/me')}
+        onGoToSuper={
+          session.user.isAdmin ? () => navigate('/super') : undefined
+        }
+        onLogout={signOut}
+      >
+        <TicketsPage
+          selectedID={selectedTicketID}
+          onSelect={id =>
+            navigate(
+              id ? `/me/tickets/${encodeURIComponent(id)}` : '/me/tickets'
+            )
+          }
+        />
+      </Shell>
+    )
+  }
+  if (!userPaths.has(path)) {
+    navigate('/me', true)
+    return null
+  }
 
   const page = userPageFor(path)
-  const routeForPage: Record<UserPage, string> = { instances: '/me', create: '/me/create', orders: '/me/orders' }
-  const content = page === 'orders'
-    ? <OrdersPage orders={orders} loading={ordersLoading} onCreate={() => navigate('/me/create')} />
-    : <DashboardPage instances={instances} loading={instancesLoading} page={page} catalog={catalog} catalogLoading={catalogLoading} catalogError={catalogError} onRetryCatalog={() => void refetchCatalog()} onCreate={() => navigate('/me/create')} onCreated={() => navigate('/me/orders')} onViewOrders={() => navigate('/me/orders')} />
-  return <Shell user={session.user} area="me" page={page} onPageChange={next => navigate(routeForPage[next])} onGoToMe={() => navigate('/me')} onGoToSuper={session.user.isAdmin ? () => navigate('/super') : undefined} onLogout={signOut}>{content}</Shell>
+  const routeForPage: Record<Page, string> = {
+    overview: '/me',
+    instances: '/me/instances',
+    create: '/me/create',
+    orders: '/me/orders',
+    wallet: '/me/wallet',
+    notifications: '/me/notifications',
+    tickets: '/me/tickets'
+  }
+  const content =
+    page === 'orders' ? (
+      <OrdersPage
+        orders={orders}
+        loading={ordersLoading}
+        onCreate={() => navigate('/me/create')}
+      />
+    ) : page === 'instances' ? (
+      <InstancesPage
+        instances={instances}
+        loading={instancesLoading}
+        onCreate={() => navigate('/me/create')}
+        onOpenLogs={instanceID =>
+          navigate(`/me/instances/${encodeURIComponent(instanceID)}/logs`)
+        }
+      />
+    ) : page === 'wallet' ? (
+      <WalletPage />
+    ) : page === 'notifications' ? (
+      <NotificationsPage
+        onOpenTicket={id => navigate(`/me/tickets/${encodeURIComponent(id)}`)}
+      />
+    ) : page === 'tickets' ? (
+      <TicketsPage
+        onSelect={id =>
+          navigate(id ? `/me/tickets/${encodeURIComponent(id)}` : '/me/tickets')
+        }
+      />
+    ) : page === 'create' ? (
+      <CreateServicePage
+        catalog={catalog}
+        loading={catalogLoading}
+        hasError={catalogError}
+        onRetry={() => void refetchCatalog()}
+        onCreated={() => navigate('/me/orders')}
+      />
+    ) : (
+      <UserOverviewPage
+        instances={instances}
+        loading={instancesLoading}
+        onCreate={() => navigate('/me/create')}
+        onInstances={() => navigate('/me/instances')}
+        onWallet={() => navigate('/me/wallet')}
+      />
+    )
+  return (
+    <Shell
+      user={session.user}
+      area="me"
+      page={page}
+      onPageChange={next => navigate(routeForPage[next])}
+      onGoToMe={() => navigate('/me')}
+      onGoToSuper={session.user.isAdmin ? () => navigate('/super') : undefined}
+      onLogout={signOut}
+    >
+      {content}
+    </Shell>
+  )
 }
