@@ -368,6 +368,7 @@ export default function App() {
     ) : page === 'instances' ? (
       <InstancesPage
         instances={instances}
+        orders={orders}
         loading={instancesLoading}
         onCreate={() => navigate('/me/create')}
         onOpenLogs={instanceID =>

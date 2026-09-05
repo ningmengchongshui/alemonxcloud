@@ -237,10 +237,10 @@ export const cloudApi = createApi({
         payFullPrice?: boolean
       }
     >({
-      query: ({ id, months }) => ({
+      query: ({ id, ...body }) => ({
         url: `/orders/${id}/renew`,
         method: 'POST',
-        body: { months }
+        body
       }),
       invalidatesTags: ['Wallet', 'Orders', 'Instances']
     }),

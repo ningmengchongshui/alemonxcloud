@@ -2,11 +2,8 @@ import { useState } from 'react'
 import type { Order, RefundQuote } from '@/types/cloud'
 import {
   useLazyGetRefundQuoteQuery,
-  useRefundOrderMutation,
-  useRenewOrderMutation,
-  useQuoteRenewalMutation
+  useRefundOrderMutation
 } from '@/services/cloudApi'
-import { ActionDialog } from '@/components/ActionDialog'
 import {
   Button,
   Dialog,
@@ -90,46 +87,11 @@ export function OrdersPage({
   const [filter, setFilter] = useState<
     'all' | 'processing' | 'active' | 'closed'
   >('all')
-  const [renewing, setRenewing] = useState<Order | null>(null)
   const [refunding, setRefunding] = useState<Order | null>(null)
   const [refundQuote, setRefundQuote] = useState<RefundQuote | null>(null)
-  const [months, setMonths] = useState('1')
-  const [renewSelection, setRenewSelection] = useState('')
-  const [renewFullPrice, setRenewFullPrice] = useState(false)
-  const [renewQuote, setRenewQuote] = useState<
-    import('@/types/cloud').PriceQuote | null
-  >(null)
-  const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
-  const [quoteRenewal, { isLoading: renewalQuoting }] =
-    useQuoteRenewalMutation()
-  const refreshRenewQuote = (
-    order: Order,
-    selection = renewSelection,
-    full = renewFullPrice
-  ) =>
-    void quoteRenewal({
-      id: order.id,
-      months: Number(months) || 1,
-      selectionId: selection || undefined,
-      payFullPrice: full
-    })
-      .unwrap()
-      .then(value => {
-        setRenewQuote(value)
-        setRenewSelection(value.selectedId ?? '')
-        setRenewFullPrice(Boolean(value.payFullPrice))
-      })
-      .catch(error =>
-        setRenewalError(
-          typeof error?.data?.message === 'string'
-            ? error.data.message
-            : '优惠试算失败'
-        )
-      )
   const [loadRefundQuote, { isFetching: quoteLoading }] =
     useLazyGetRefundQuoteQuery()
   const [submitRefund, { isLoading: refundLoading }] = useRefundOrderMutation()
-  const [renewalError, setRenewalError] = useState('')
   const [refundError, setRefundError] = useState('')
   const processing = orders.filter(order => order.status === 'deploying').length
   const visibleOrders = orders.filter(order => {
@@ -151,7 +113,7 @@ export function OrdersPage({
     <section className="page me-page orders-page">
       <PageHeader
         title="服务订阅"
-        description="在这里查看部署进度、到期时间，并处理续费。"
+        description="在这里查看部署进度和订阅记录；续费请前往对应实例。"
         actions={
           <Button onClick={onCreate}>
             <span aria-hidden="true">＋</span> 创建服务
@@ -282,28 +244,6 @@ export function OrdersPage({
                     ) : null}
                   </dl>
                   <div className="flex flex-wrap gap-2">
-                    {(order.status === 'active' ||
-                      order.status === 'expired' ||
-                      order.status === 'refunded') && (
-                      <Button
-                        tone={
-                          order.status === 'expired' ? 'primary' : 'secondary'
-                        }
-                        onClick={() => {
-                          setRenewalError('')
-                          setMonths('1')
-                          setRenewSelection('')
-                          setRenewFullPrice(false)
-                          setRenewQuote(null)
-                          setRenewing(order)
-                          void quoteRenewal({ id: order.id, months: 1 })
-                            .unwrap()
-                            .then(setRenewQuote)
-                        }}
-                      >
-                        钱包续费
-                      </Button>
-                    )}
                     {order.status === 'active' && order.serviceStartsAt && (
                       <Button
                         tone="secondary"
@@ -338,102 +278,6 @@ export function OrdersPage({
             )
           })}
         </section>
-      )}
-      {renewing && (
-        <ActionDialog
-          title="钱包续费"
-          description={`将从钱包扣除 ${renewing.planName} 对应的续费金额；余额不足时不会续费。`}
-          confirmLabel="确认续费"
-          inputLabel="续费月数（1–24）"
-          inputValue={months}
-          inputPlaceholder="例如 1"
-          onInputChange={setMonths}
-          busy={renewalLoading}
-          onCancel={() => setRenewing(null)}
-          onConfirm={() => {
-            const value = Number(months)
-            if (!Number.isInteger(value) || value < 1 || value > 24) {
-              setRenewalError('请输入 1 至 24 的整数月数')
-              return
-            }
-            const started = performance.now()
-            trackConsoleEvent('renew_order', 'me', 'orders', {
-              result: 'started'
-            })
-            void renewOrder({
-              id: renewing.id,
-              months: value,
-              selectionId: renewSelection || undefined,
-              payFullPrice: renewFullPrice
-            })
-              .unwrap()
-              .then(() => {
-                trackConsoleEvent('renew_order', 'me', 'orders', {
-                  result: 'success',
-                  durationMs: performance.now() - started
-                })
-                setRenewing(null)
-              })
-              .catch(error => {
-                trackConsoleEvent('renew_order', 'me', 'orders', {
-                  result: 'error',
-                  durationMs: performance.now() - started
-                })
-                setRenewalError(
-                  typeof error?.data?.message === 'string'
-                    ? error.data.message
-                    : '续费失败，请稍后重试'
-                )
-              })
-          }}
-        >
-          <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-            <Button
-              type="button"
-              tone="secondary"
-              loading={renewalQuoting}
-              onClick={() => refreshRenewQuote(renewing)}
-            >
-              试算续费优惠
-            </Button>
-            {renewQuote && (
-              <>
-                <p className="m-0">
-                  原价 {(renewQuote.listAmountFen / 100).toFixed(2)} XCoin，实付{' '}
-                  {(renewQuote.amountFen / 100).toFixed(2)} XCoin
-                </p>
-                {renewQuote.candidates.length > 0 && (
-                  <select
-                    value={renewFullPrice ? '__full__' : renewSelection}
-                    onChange={event => {
-                      const full = event.target.value === '__full__'
-                      setRenewFullPrice(full)
-                      setRenewSelection(full ? '' : event.target.value)
-                      refreshRenewQuote(
-                        renewing,
-                        full ? '' : event.target.value,
-                        full
-                      )
-                    }}
-                  >
-                    <option value="__full__">不使用优惠，按原价购买</option>
-                    {renewQuote.candidates.map(item => (
-                      <option key={item.id} value={item.id}>
-                        {item.name} · 减{' '}
-                        {(item.discountAmountFen / 100).toFixed(2)} XCoin
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </>
-            )}
-          </div>
-        </ActionDialog>
-      )}
-      {renewalError && (
-        <p className="login-error" role="alert">
-          {renewalError}
-        </p>
       )}
       {refunding && (
         <Dialog
