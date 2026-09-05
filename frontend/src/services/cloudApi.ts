@@ -21,6 +21,7 @@ import type {
   TicketPriority,
   TicketStatus,
   PriceQuote,
+  RechargeContact,
   Promotion,
   Coupon,
   CouponRedemption
@@ -90,6 +91,24 @@ export const cloudApi = createApi({
       query: () => '/wallet/entries',
       providesTags: ['Wallet']
     }),
+    getRechargeContact: builder.query<RechargeContact, void>({
+      query: () => '/recharge-contact'
+    }),
+    getAdminRechargeContact: builder.query<RechargeContact, void>({
+      query: () => '/admin/settings/recharge-contact',
+      providesTags: ['Admin']
+    }),
+    saveAdminRechargeContact: builder.mutation<
+      RechargeContact,
+      RechargeContact
+    >({
+      query: body => ({
+        url: '/admin/settings/recharge-contact',
+        method: 'PUT',
+        body
+      }),
+      invalidatesTags: ['Admin']
+    }),
     purchase: builder.mutation<
       { order: Order; task: Task },
       {
@@ -116,6 +135,14 @@ export const cloudApi = createApi({
         payFullPrice?: boolean
       }
     >({ query: body => ({ url: '/purchases/quote', method: 'POST', body }) }),
+    getPromotions: builder.query<Promotion[], void>({
+      query: () => '/promotions',
+      providesTags: ['Promotions']
+    }),
+    claimPromotion: builder.mutation<void, string>({
+      query: id => ({ url: `/promotions/${id}/claim`, method: 'POST' }),
+      invalidatesTags: ['Promotions', 'Wallet']
+    }),
     getNotifications: builder.query<Notification[], void>({
       query: () => '/notifications',
       providesTags: ['Notifications']
@@ -442,8 +469,13 @@ export const {
   useGetCatalogQuery,
   useGetWalletQuery,
   useGetWalletEntriesQuery,
+  useGetRechargeContactQuery,
+  useGetAdminRechargeContactQuery,
+  useSaveAdminRechargeContactMutation,
   usePurchaseMutation,
   useQuotePurchaseMutation,
+  useGetPromotionsQuery,
+  useClaimPromotionMutation,
   useGetNotificationsQuery,
   useReadNotificationMutation,
   useReadAllNotificationsMutation,

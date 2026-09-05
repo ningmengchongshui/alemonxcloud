@@ -42,7 +42,8 @@ const superPaths: Record<SuperPage, string> = {
   users: '/super/users',
   audit: '/super/audit',
   tickets: '/super/tickets',
-  promotions: '/super/promotions'
+  promotions: '/super/promotions',
+  settings: '/super/settings'
 }
 
 function message(error: unknown, fallback: string) {

@@ -53,6 +53,7 @@ type oidcUser struct {
 	ID          string   `json:"id"`
 	Username    string   `json:"username"`
 	Email       string   `json:"email"`
+	Phone       string   `json:"phone,omitempty"`
 	Avatar      string   `json:"avatar"`
 	Roles       []string `json:"roles"`
 	Permissions []string `json:"permissions"`
@@ -117,8 +118,12 @@ func Run() {
 	router.GET("/api/catalog", requireSession, catalog)
 	router.GET("/api/wallet", requireSession, walletHandler)
 	router.GET("/api/wallet/entries", requireSession, walletEntriesHandler)
+	router.GET("/api/recharge-contact", requireSession, rechargeContactHandler)
 	router.POST("/api/purchases", requireSession, purchaseHandler)
 	router.POST("/api/purchases/quote", requireSession, quotePurchaseHandler)
+	router.GET("/api/promotions", requireSession, publicPromotionsHandler)
+	router.GET("/api/coupons/backpack", requireSession, couponBackpackHandler)
+	router.POST("/api/promotions/:id/claim", requireSession, claimPromotionHandler)
 	router.GET("/api/notifications", requireSession, notificationsHandler)
 	router.POST("/api/telemetry/console-events", requireSession, consoleTelemetryHandler)
 	router.POST("/api/notifications/read-all", requireSession, readAllNotificationsHandler)
@@ -138,6 +143,8 @@ func Run() {
 	router.GET("/api/orders/:id/refund-quote", requireSession, refundQuoteHandler)
 	router.POST("/api/orders/:id/refund", requireSession, refundOrderHandler)
 	router.GET("/api/admin/catalog", requireAdmin, adminCatalog)
+	router.GET("/api/admin/settings/recharge-contact", requireAdmin, adminRechargeContactHandler)
+	router.PUT("/api/admin/settings/recharge-contact", requireAdmin, adminRechargeContactHandler)
 	router.POST("/api/admin/images", requireAdmin, adminSaveImage)
 	router.PUT("/api/admin/images/:id", requireAdmin, adminSaveImage)
 	router.POST("/api/admin/images/:id/versions", requireAdmin, adminSaveImageVersion)
@@ -460,6 +467,7 @@ func exchangeOIDCCode(code, verifier string) (oidcUser, error) {
 		Name              string   `json:"name"`
 		PreferredUsername string   `json:"preferred_username"`
 		Email             string   `json:"email"`
+		Phone             string   `json:"phone_number"`
 		Picture           string   `json:"picture"`
 		Roles             []string `json:"roles"`
 		Permissions       []string `json:"permissions"`
@@ -471,7 +479,7 @@ func exchangeOIDCCode(code, verifier string) (oidcUser, error) {
 	if username == "" {
 		username = profile.Name
 	}
-	return oidcUser{ID: profile.Subject, Username: username, Email: profile.Email, Avatar: profile.Picture, Roles: profile.Roles, Permissions: profile.Permissions, IsAdmin: hasPermission(profile.Permissions, env("AUTH_ADMIN_PERMISSION", "cloud:admin"))}, nil
+	return oidcUser{ID: profile.Subject, Username: username, Email: profile.Email, Phone: profile.Phone, Avatar: profile.Picture, Roles: profile.Roles, Permissions: profile.Permissions, IsAdmin: hasPermission(profile.Permissions, env("AUTH_ADMIN_PERMISSION", "cloud:admin"))}, nil
 }
 
 func requireSession(c *gin.Context) {

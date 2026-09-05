@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
   useGetWalletQuery,
+  useGetPromotionsQuery,
+  useClaimPromotionMutation,
   usePurchaseMutation,
   useQuotePurchaseMutation
 } from '@/services/cloudApi'
@@ -66,13 +68,14 @@ export function CreateServicePage({
   const [planID, setPlanID] = useState('')
   const [months, setMonths] = useState(1)
   const [error, setError] = useState('')
-  const [couponCode, setCouponCode] = useState('')
   const [selectionID, setSelectionID] = useState('')
   const [payFullPrice, setPayFullPrice] = useState(false)
   const [quote, setQuote] = useState<PriceQuote | null>(null)
   const [purchase, { isLoading: saving }] = usePurchaseMutation()
   const [quotePurchase, { isLoading: quoting }] = useQuotePurchaseMutation()
   const { data: wallet } = useGetWalletQuery()
+  const { data: promotions = [] } = useGetPromotionsQuery()
+  const [claimPromotion] = useClaimPromotionMutation()
   const images = catalog?.images ?? []
   const imageSources = images
   const selectedRef = imageRef || imageSources[0]?.imageRef || ''
@@ -87,18 +90,13 @@ export function CreateServicePage({
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
   const total = (selectedPlan?.monthlyPriceFen ?? 0) * months
-  function preview(
-    selected = selectionID,
-    code = couponCode,
-    fullPrice = payFullPrice
-  ) {
+  function preview(selected = selectionID, fullPrice = payFullPrice) {
     if (!selectedImage || !selectedPlan) return
     setError('')
     void quotePurchase({
       planId: selectedPlan.id,
       imageId: selectedImage.id,
       months,
-      couponCode: code,
       selectionId: selected,
       payFullPrice: fullPrice
     })
@@ -120,7 +118,7 @@ export function CreateServicePage({
     setQuote(null)
     setSelectionID('')
     setPayFullPrice(false)
-    if (selectedImage && selectedPlan) preview('', '', false)
+    if (selectedImage && selectedPlan) preview('', false)
   }, [selectedImage?.id, selectedPlan?.id, months])
 
   function submit() {
@@ -133,7 +131,6 @@ export function CreateServicePage({
       imageVersion: selectedVersion?.tag || 'latest',
       planId: selectedPlan.id,
       months,
-      couponCode: couponCode || undefined,
       selectionId: selectionID || undefined,
       payFullPrice
     })
@@ -331,26 +328,36 @@ export function CreateServicePage({
             </strong>
           </div>
           <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-            <label>
-              代金券码
-              <input
-                value={couponCode}
-                placeholder="输入券码后试算"
-                onChange={e => {
-                  setCouponCode(e.target.value)
-                  setSelectionID('')
-                  setPayFullPrice(false)
-                  setQuote(null)
-                }}
-              />
-            </label>
+            {promotions.length > 0 && (
+              <div className="grid gap-2">
+                <b>可领取活动券</b>
+                {promotions.map(item => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <span>{item.name}</span>
+                    <Button
+                      tone="secondary"
+                      onClick={() =>
+                        void claimPromotion(item.id)
+                          .unwrap()
+                          .then(() => preview())
+                      }
+                    >
+                      领取
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
             <Button
               tone="secondary"
               loading={quoting}
               disabled={!selectedImage || !selectedPlan}
               onClick={() => preview()}
             >
-              试算优惠
+              刷新可用优惠
             </Button>
             {quote && (
               <>
@@ -365,7 +372,7 @@ export function CreateServicePage({
                       const full = e.target.value === '__full__'
                       setPayFullPrice(full)
                       setSelectionID(full ? '' : e.target.value)
-                      preview(full ? '' : e.target.value, couponCode, full)
+                      preview(full ? '' : e.target.value, full)
                     }}
                   >
                     <option value="__full__">不使用优惠，按原价购买</option>

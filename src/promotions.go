@@ -28,6 +28,10 @@ type coupon struct {
 	TotalLimit, PerUserLimit, UsedCount int
 	CreatedAt                           time.Time
 }
+type couponClaim struct {
+	ID, OwnerID, PromotionID, CouponID, Status string
+	ClaimedAt                                  time.Time
+}
 type priceCandidate struct {
 	ID, Kind, Name                      string
 	CouponCode                          string `json:"-"`
@@ -158,6 +162,9 @@ func consumePromotionTx(ctx context.Context, tx *sql.Tx, ownerID, orderID string
 		return errors.New("优惠已失效或名额已用完")
 	}
 	if cp != nil {
+		if _, e := tx.ExecContext(ctx, `UPDATE xcloud_coupon_claims SET status='used',used_at=NOW(),order_id=? WHERE owner_id=? AND coupon_id=? AND status='active'`, orderID, ownerID, cp.ID); e != nil {
+			return e
+		}
 		if cp.PerUserLimit > 0 {
 			var used int
 			if e := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_coupon_redemptions WHERE coupon_id=? AND owner_id=? FOR UPDATE`, cp.ID, ownerID).Scan(&used); e != nil {
@@ -225,6 +232,22 @@ func activePromotions(ctx context.Context, tx *sql.Tx, lock bool) ([]promotion, 
 	}
 	return out, rows.Err()
 }
+func claimedCoupons(ctx context.Context, ownerID string) ([]couponClaim, error) {
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,owner_id,promotion_id,coupon_id,status,claimed_at FROM xcloud_coupon_claims WHERE owner_id=? AND status='active' ORDER BY claimed_at`, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []couponClaim{}
+	for rows.Next() {
+		var v couponClaim
+		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PromotionID, &v.CouponID, &v.Status, &v.ClaimedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
 func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, months, list int, couponCode, selectedID string, payFullPrice bool, tx *sql.Tx) (priceQuote, *promotion, *coupon, error) {
 	values, err := activePromotions(ctx, tx, false)
 	if err != nil {
@@ -249,6 +272,31 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 		if selectedID == values[i].ID {
 			selectedPromo = &values[i]
 		}
+	}
+	// Claimed vouchers are visible without exposing or requiring a raw code.
+	claims, claimErr := claimedCoupons(ctx, ownerID)
+	if claimErr != nil {
+		return priceQuote{}, nil, nil, claimErr
+	}
+	for _, claim := range claims {
+		var cp coupon
+		var p promotion
+		var a, b, c []byte
+		err := instanceDB.QueryRowContext(ctx, `SELECT c.id,c.promotion_id,c.code_mask,c.mode,c.enabled,c.total_limit,c.per_user_limit,c.used_count,c.created_at,p.id,p.name,p.kind,p.scope,p.discount_type,p.discount_value,p.min_amount_fen,p.max_discount_fen,COALESCE(p.plan_ids,JSON_ARRAY()),COALESCE(p.image_ids,JSON_ARRAY()),COALESCE(p.month_values,JSON_ARRAY()),p.starts_at,p.ends_at,p.total_limit,p.per_user_limit,p.used_count,p.enabled,p.created_by,p.created_at,p.updated_at FROM xcloud_coupons c JOIN xcloud_promotions p ON p.id=c.promotion_id WHERE c.id=?`, claim.CouponID).Scan(&cp.ID, &cp.PromotionID, &cp.CodeMask, &cp.Mode, &cp.Enabled, &cp.TotalLimit, &cp.PerUserLimit, &cp.UsedCount, &cp.CreatedAt, &p.ID, &p.Name, &p.Kind, &p.Scope, &p.DiscountType, &p.DiscountValue, &p.MinAmountFen, &p.MaxDiscountFen, &a, &b, &c, &p.StartsAt, &p.EndsAt, &p.TotalLimit, &p.PerUserLimit, &p.UsedCount, &p.Enabled, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
+		if err != nil {
+			continue
+		}
+		_ = json.Unmarshal(a, &p.PlanIDs)
+		_ = json.Unmarshal(b, &p.ImageIDs)
+		_ = json.Unmarshal(c, &p.MonthValues)
+		ok, e := promotionMatches(p, ownerID, scope, planID, imageID, months, list, now, tx)
+		if e != nil {
+			return priceQuote{}, nil, nil, e
+		}
+		if !ok || !cp.Enabled || (cp.TotalLimit > 0 && cp.UsedCount >= cp.TotalLimit) {
+			continue
+		}
+		candidates = append(candidates, priceCandidate{ID: claim.ID, Kind: "coupon", Name: p.Name + " · 已领取", DiscountAmountFen: promotionDiscount(p, list), PayableAmountFen: list - promotionDiscount(p, list)})
 	}
 	if couponCode != "" {
 		var cp coupon
@@ -330,6 +378,15 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 		if enteredCoupon != nil && q.SelectedID == enteredCoupon.ID {
 			selectedPromo = couponPromotion
 			selectedCoupon = enteredCoupon
+		}
+		for _, claim := range claims {
+			if claim.ID == q.SelectedID {
+				var cp coupon
+				var p promotion
+				_ = instanceDB.QueryRowContext(ctx, `SELECT c.id,c.promotion_id,c.code_mask,c.mode,c.enabled,c.total_limit,c.per_user_limit,c.used_count,c.created_at,p.id,p.name,p.kind,p.scope,p.discount_type,p.discount_value,p.min_amount_fen,p.max_discount_fen,p.total_limit,p.per_user_limit,p.used_count,p.enabled,p.created_by,p.created_at,p.updated_at FROM xcloud_coupons c JOIN xcloud_promotions p ON p.id=c.promotion_id WHERE c.id=?`, claim.CouponID).Scan(&cp.ID, &cp.PromotionID, &cp.CodeMask, &cp.Mode, &cp.Enabled, &cp.TotalLimit, &cp.PerUserLimit, &cp.UsedCount, &cp.CreatedAt, &p.ID, &p.Name, &p.Kind, &p.Scope, &p.DiscountType, &p.DiscountValue, &p.MinAmountFen, &p.MaxDiscountFen, &p.TotalLimit, &p.PerUserLimit, &p.UsedCount, &p.Enabled, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
+				selectedPromo = &p
+				selectedCoupon = &cp
+			}
 		}
 	}
 	return q, selectedPromo, selectedCoupon, nil

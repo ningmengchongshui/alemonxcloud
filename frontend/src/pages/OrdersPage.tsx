@@ -94,7 +94,6 @@ export function OrdersPage({
   const [refunding, setRefunding] = useState<Order | null>(null)
   const [refundQuote, setRefundQuote] = useState<RefundQuote | null>(null)
   const [months, setMonths] = useState('1')
-  const [renewCoupon, setRenewCoupon] = useState('')
   const [renewSelection, setRenewSelection] = useState('')
   const [renewFullPrice, setRenewFullPrice] = useState(false)
   const [renewQuote, setRenewQuote] = useState<
@@ -105,14 +104,12 @@ export function OrdersPage({
     useQuoteRenewalMutation()
   const refreshRenewQuote = (
     order: Order,
-    code = renewCoupon,
     selection = renewSelection,
     full = renewFullPrice
   ) =>
     void quoteRenewal({
       id: order.id,
       months: Number(months) || 1,
-      couponCode: code || undefined,
       selectionId: selection || undefined,
       payFullPrice: full
     })
@@ -295,7 +292,6 @@ export function OrdersPage({
                         onClick={() => {
                           setRenewalError('')
                           setMonths('1')
-                          setRenewCoupon('')
                           setRenewSelection('')
                           setRenewFullPrice(false)
                           setRenewQuote(null)
@@ -352,10 +348,6 @@ export function OrdersPage({
           inputValue={months}
           inputPlaceholder="例如 1"
           onInputChange={setMonths}
-          secondaryInputLabel="代金券码（可选）"
-          secondaryInputValue={renewCoupon}
-          secondaryInputPlaceholder="输入可用于续费的券码"
-          onSecondaryInputChange={setRenewCoupon}
           busy={renewalLoading}
           onCancel={() => setRenewing(null)}
           onConfirm={() => {
@@ -371,7 +363,6 @@ export function OrdersPage({
             void renewOrder({
               id: renewing.id,
               months: value,
-              couponCode: renewCoupon || undefined,
               selectionId: renewSelection || undefined,
               payFullPrice: renewFullPrice
             })
@@ -420,7 +411,6 @@ export function OrdersPage({
                       setRenewSelection(full ? '' : event.target.value)
                       refreshRenewQuote(
                         renewing,
-                        renewCoupon,
                         full ? '' : event.target.value,
                         full
                       )

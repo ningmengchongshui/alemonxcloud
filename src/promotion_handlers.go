@@ -41,6 +41,68 @@ func quotePurchaseHandler(c *gin.Context) {
 	}
 	c.JSON(200, q)
 }
+func couponBackpackHandler(c *gin.Context) {
+	user := c.MustGet("user").(oidcUser)
+	items, err := claimedCoupons(c.Request.Context(), user.ID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+func publicPromotionsHandler(c *gin.Context) {
+	items, err := activePromotions(c.Request.Context(), nil, false)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	out := []promotion{}
+	for _, item := range items {
+		if item.Kind == "campaign" && item.Enabled && (item.StartsAt == nil || !time.Now().Before(*item.StartsAt)) && (item.EndsAt == nil || time.Now().Before(*item.EndsAt)) {
+			out = append(out, item)
+		}
+	}
+	c.JSON(http.StatusOK, out)
+}
+func claimPromotionHandler(c *gin.Context) {
+	user := c.MustGet("user").(oidcUser)
+	tx, err := beginSerializableTx(c.Request.Context())
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer tx.Rollback()
+	var couponID string
+	err = tx.QueryRowContext(c.Request.Context(), `SELECT c.id FROM xcloud_coupons c JOIN xcloud_promotions p ON p.id=c.promotion_id WHERE p.id=? AND p.kind='campaign' AND p.enabled=TRUE AND c.mode='general' AND c.enabled=TRUE AND (p.starts_at IS NULL OR p.starts_at<=NOW()) AND (p.ends_at IS NULL OR p.ends_at>NOW()) ORDER BY c.created_at LIMIT 1 FOR UPDATE`, c.Param("id")).Scan(&couponID)
+	if err != nil {
+		businessError(c, errors.New("当前活动暂无可领取代金券"))
+		return
+	}
+	var count, limit int
+	if err = tx.QueryRowContext(c.Request.Context(), `SELECT COUNT(*),total_limit FROM xcloud_coupon_claims JOIN xcloud_coupons ON xcloud_coupons.id=xcloud_coupon_claims.coupon_id WHERE coupon_id=? FOR UPDATE`, couponID).Scan(&count, &limit); err != nil {
+		internalError(c, err)
+		return
+	}
+	if limit > 0 && count >= limit {
+		businessError(c, errors.New("代金券已领完"))
+		return
+	}
+	claim := couponClaim{ID: newID("clm"), OwnerID: user.ID, PromotionID: c.Param("id"), CouponID: couponID, Status: "active", ClaimedAt: time.Now()}
+	if _, err = tx.ExecContext(c.Request.Context(), `INSERT INTO xcloud_coupon_claims (id,owner_id,promotion_id,coupon_id,status,claimed_at) VALUES (?,?,?,?,?,?)`, claim.ID, claim.OwnerID, claim.PromotionID, claim.CouponID, claim.Status, claim.ClaimedAt); err != nil {
+		businessError(c, errors.New("你已领取该代金券"))
+		return
+	}
+	if err = writeAuditTx(c.Request.Context(), tx, user.ID, "coupon.claim", "promotion", claim.PromotionID, map[string]any{"claimId": claim.ID}); err != nil {
+		internalError(c, err)
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		internalError(c, err)
+		return
+	}
+	_ = createNotification(c.Request.Context(), user.ID, "promotion", "代金券已领取", "已放入你的优惠券包，可在结算时自动使用。", map[string]any{"claimId": claim.ID, "promotionId": claim.PromotionID})
+	c.JSON(http.StatusCreated, claim)
+}
 func quoteRenewHandler(c *gin.Context) {
 	var b struct {
 		Months       int    `json:"months"`

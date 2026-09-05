@@ -17,10 +17,18 @@ export type SuperPage =
   | 'tickets'
   | 'audit'
   | 'promotions'
+  | 'settings'
 
 export interface CurrentUser {
   username: string
   isAdmin: boolean
+  email?: string
+  phone?: string
+}
+
+export interface RechargeContact {
+  name: string
+  url: string
 }
 
 export interface Instance {

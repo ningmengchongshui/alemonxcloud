@@ -7,7 +7,7 @@ Agent 运行在裸机上，负责 Docker 容器、镜像、资源探测与实例
 
 ```bash
 docker network create xcloud_network
-sudo install -d -m 0750 /var/lib/xcloud/instances
+sudo chmod -R 777 /var/lib/xcloud/instances
 make agent-build VERSION=v1.0.0
 sudo ./agent/xcloud-agent
 systemctl status xcloud-agent

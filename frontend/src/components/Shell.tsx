@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type PropsWithChildren } from 'react'
 import classNames from 'classnames'
 import { BrandLogo } from '@/components/BrandLogo'
-import { Button } from '@/components/ui'
+import { Button, Dialog } from '@/components/ui'
 import { XCoinMark } from '@/components/XCoinMark'
 import {
   useGetNotificationsQuery,
+  useGetRechargeContactQuery,
   useGetWalletQuery,
   useReadAllNotificationsMutation
 } from '@/services/cloudApi'
@@ -25,6 +26,15 @@ interface ShellProps {
 type NavItem = { key: Page | SuperPage; icon: string; label: string }
 type NavGroup = { label?: string; items: NavItem[] }
 
+function maskEmail(value: string) {
+  const [local, domain] = value.split('@')
+  if (!local || !domain) return value
+  return `${local.slice(0, 2)}${'*'.repeat(Math.max(1, local.length - 2))}@${domain}`
+}
+function maskPhone(value: string) {
+  return value.length < 7 ? value : `${value.slice(0, 3)}****${value.slice(-4)}`
+}
+
 export function Shell({
   children,
   user,
@@ -42,6 +52,7 @@ export function Shell({
   const [helpOpen, setHelpOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const [rechargeOpen, setRechargeOpen] = useState(false)
   const profileRef = useRef<HTMLDivElement>(null)
   const helpRef = useRef<HTMLDivElement>(null)
   const { data: notifications = [] } = useGetNotificationsQuery(undefined, {
@@ -49,6 +60,7 @@ export function Shell({
   })
   const [readAll] = useReadAllNotificationsMutation()
   const { data: wallet, isLoading: walletLoading } = useGetWalletQuery()
+  const { data: rechargeContact } = useGetRechargeContactQuery()
   const unread = notifications.filter(item => !item.readAt).length
   const activeKey = area === 'me' ? page : superPage
   const userGroups: NavGroup[] = [
@@ -99,7 +111,8 @@ export function Shell({
       label: '账户与合规',
       items: [
         { key: 'users', icon: '♙', label: '用户与钱包' },
-        { key: 'audit', icon: '◷', label: '安全审计' }
+        { key: 'audit', icon: '◷', label: '安全审计' },
+        { key: 'settings', icon: '⚙', label: '平台设置' }
       ]
     }
   ]
@@ -307,6 +320,22 @@ export function Shell({
                       {user.username || '—'}
                     </dd>
                   </div>
+                  {user.phone && (
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-400">手机号</dt>
+                      <dd className="m-0 font-bold text-slate-700 dark:text-slate-100">
+                        {maskPhone(user.phone)}
+                      </dd>
+                    </div>
+                  )}
+                  {user.email && (
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-400">邮箱</dt>
+                      <dd className="m-0 max-w-36 truncate font-bold text-slate-700 dark:text-slate-100">
+                        {maskEmail(user.email)}
+                      </dd>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-slate-400">可用余额</dt>
                     <dd className="m-0 inline-flex items-center gap-1 font-bold text-slate-700 dark:text-slate-100">
@@ -319,6 +348,13 @@ export function Shell({
                         </>
                       )}
                     </dd>
+                    <button
+                      type="button"
+                      onClick={() => setRechargeOpen(true)}
+                      className="rounded px-2 py-1 text-[10px] font-bold text-blue-700 hover:bg-blue-50 dark:text-blue-200 dark:hover:bg-blue-950"
+                    >
+                      充值
+                    </button>
                   </div>
                 </dl>
                 <a
@@ -337,6 +373,39 @@ export function Shell({
                   退出登录
                 </Button>
               </div>
+            )}
+            {rechargeOpen && (
+              <Dialog
+                title="人工充值"
+                description="当前仅限人工充值，请点击加入售前咨询群联系官方人员。"
+                onClose={() => setRechargeOpen(false)}
+              >
+                <div className="space-y-4">
+                  {rechargeContact?.url ? (
+                    <a
+                      href={rechargeContact.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex min-h-11 items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200"
+                    >
+                      {rechargeContact.name}
+                      <span aria-hidden="true">↗</span>
+                    </a>
+                  ) : (
+                    <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                      售前咨询群暂未配置，请联系平台管理员。
+                    </p>
+                  )}
+                  <div className="flex justify-end">
+                    <Button
+                      tone="secondary"
+                      onClick={() => setRechargeOpen(false)}
+                    >
+                      关闭
+                    </Button>
+                  </div>
+                </div>
+              </Dialog>
             )}
           </div>
         </div>
