@@ -93,6 +93,7 @@ export function OrdersPage({
   const [refunding, setRefunding] = useState<Order | null>(null)
   const [refundQuote, setRefundQuote] = useState<RefundQuote | null>(null)
   const [months, setMonths] = useState('1')
+  const [renewCoupon, setRenewCoupon] = useState('')
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
   const [loadRefundQuote, { isFetching: quoteLoading }] =
     useLazyGetRefundQuoteQuery()
@@ -260,6 +261,7 @@ export function OrdersPage({
                         onClick={() => {
                           setRenewalError('')
                           setMonths('1')
+                          setRenewCoupon('')
                           setRenewing(order)
                         }}
                       >
@@ -310,6 +312,10 @@ export function OrdersPage({
           inputValue={months}
           inputPlaceholder="例如 1"
           onInputChange={setMonths}
+          secondaryInputLabel="代金券码（可选）"
+          secondaryInputValue={renewCoupon}
+          secondaryInputPlaceholder="输入可用于续费的券码"
+          onSecondaryInputChange={setRenewCoupon}
           busy={renewalLoading}
           onCancel={() => setRenewing(null)}
           onConfirm={() => {
@@ -322,7 +328,7 @@ export function OrdersPage({
             trackConsoleEvent('renew_order', 'me', 'orders', {
               result: 'started'
             })
-            void renewOrder({ id: renewing.id, months: value })
+            void renewOrder({ id: renewing.id, months: value, couponCode: renewCoupon || undefined })
               .unwrap()
               .then(() => {
                 trackConsoleEvent('renew_order', 'me', 'orders', {

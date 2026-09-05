@@ -16,6 +16,7 @@ export type SuperPage =
   | 'users'
   | 'tickets'
   | 'audit'
+  | 'promotions'
 
 export interface CurrentUser {
   username: string
@@ -57,6 +58,9 @@ export interface ImageVersion {
   tag: string
   imageDigest: string
   enabled: boolean
+  status: 'draft' | 'syncing' | 'ready' | 'failed' | 'disabled'
+  lastError?: string
+  publishedAt?: string
   createdAt?: string
 }
 export interface Plan {
@@ -79,6 +83,9 @@ export interface Order {
   imageId: string
   instanceId: string
   amountFen: number
+  listAmountFen: number
+  discountAmountFen: number
+  promotionSnapshot?: { name?: string; kind?: string; couponMask?: string }
   status: string
   paymentNote: string
   serviceStartsAt?: string
@@ -91,6 +98,11 @@ export interface Order {
   imageName: string
   imageVersion: string
 }
+export interface PriceCandidate { id: string; kind: 'new_user' | 'campaign' | 'coupon'; name: string; discountAmountFen: number; payableAmountFen: number; isDefault: boolean }
+export interface PriceQuote { listAmountFen: number; discountAmountFen: number; amountFen: number; selectedId?: string; candidates: PriceCandidate[] }
+export interface Promotion { id: string; name: string; kind: 'new_user' | 'campaign'; scope: 'purchase' | 'renewal' | 'both'; discountType: 'fixed' | 'percent'; discountValue: number; minAmountFen: number; maxDiscountFen: number; planIDs: string[]; imageIDs: string[]; monthValues: string[]; startsAt?: string; endsAt?: string; totalLimit: number; perUserLimit: number; usedCount: number; enabled: boolean; createdAt: string }
+export interface Coupon { id: string; promotionId: string; codeMask: string; mode: 'single' | 'general'; enabled: boolean; totalLimit: number; perUserLimit: number; usedCount: number; createdAt: string }
+export interface CouponRedemption { id: string; promotionId: string; couponId?: string; ownerId: string; orderId: string; discountAmountFen: number; createdAt: string }
 export interface Node {
   id: string
   name: string

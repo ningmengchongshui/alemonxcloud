@@ -3,6 +3,7 @@ import { AdminImagesPage } from '@/pages/admin/AdminImagesPage'
 import { AdminNodesPage } from '@/pages/admin/AdminNodesPage'
 import { AdminOverviewPage } from '@/pages/admin/AdminOverviewPage'
 import { AdminTicketsPage } from '@/pages/admin/AdminTicketsPage'
+import { AdminPromotionsPage } from '@/pages/admin/AdminPromotionsPage'
 import {
   AdminAuditPage,
   AdminOrdersPage,
@@ -25,6 +26,7 @@ export function AdminPage({
   if (page === 'orders') return <AdminOrdersPage />
   if (page === 'tasks') return <AdminTasksPage />
   if (page === 'tickets') return <AdminTicketsPage />
+  if (page === 'promotions') return <AdminPromotionsPage />
   if (page === 'users')
     return <AdminUsersPage onOpenWalletHistory={onOpenWalletHistory} />
   if (page === 'audit') return <AdminAuditPage />

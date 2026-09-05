@@ -58,3 +58,13 @@ func TestDeploymentImagePrefersApprovedDigest(t *testing.T) {
 		t.Fatalf("tag fallback is incorrect, got %q", got)
 	}
 }
+
+func TestImmutableDigestAcceptsOnlyVerifiedRepoDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("b", 64)
+	if got := immutableDigest([]string{"registry.example/alemonx@" + digest}); got != digest {
+		t.Fatalf("expected verified digest, got %q", got)
+	}
+	if got := immutableDigest([]string{"registry.example/alemonx:latest", "bad@sha256:short"}); got != "" {
+		t.Fatalf("unverified values must not be published, got %q", got)
+	}
+}

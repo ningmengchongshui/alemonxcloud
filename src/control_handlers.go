@@ -62,13 +62,15 @@ func purchaseHandler(c *gin.Context) {
 		ImageID      string `json:"imageId" binding:"required"`
 		ImageVersion string `json:"imageVersion"`
 		Months       int    `json:"months"`
+		CouponCode   string `json:"couponCode"`
+		PromotionID  string `json:"promotionId"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "购买参数无效"})
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	item, task, err := purchaseWithWallet(c.Request.Context(), user.ID, body.PlanID, body.ImageID, body.ImageVersion, body.Months)
+	item, task, err := purchaseWithWallet(c.Request.Context(), user.ID, body.PlanID, body.ImageID, body.ImageVersion, body.Months, body.CouponCode, body.PromotionID)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -177,7 +179,9 @@ func submitPaymentHandler(c *gin.Context) {
 func renewOrderHandler(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	var body struct {
-		Months int `json:"months"`
+		Months      int    `json:"months"`
+		CouponCode  string `json:"couponCode"`
+		PromotionID string `json:"promotionId"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "续费参数无效"})
@@ -206,14 +210,16 @@ func renewOrderHandler(c *gin.Context) {
 // (when necessary) restart task are committed as one transaction.
 func renewWithWalletHandler(c *gin.Context) {
 	var body struct {
-		Months int `json:"months"`
+		Months      int    `json:"months"`
+		CouponCode  string `json:"couponCode"`
+		PromotionID string `json:"promotionId"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "续费参数无效"})
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months)
+	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months, body.CouponCode, body.PromotionID)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -314,37 +320,90 @@ func adminSaveImageVersion(c *gin.Context) {
 func adminPullImageVersion(c *gin.Context) {
 	versionID := c.Param("versionID")
 	var imageRef, tag, digest string
-	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT i.image_ref,v.version_tag,COALESCE(v.image_digest,'') FROM xcloud_image_versions v JOIN xcloud_images i ON i.id=v.image_id WHERE v.id=?`, versionID).Scan(&imageRef, &tag, &digest)
+	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT i.image_ref,v.version_tag,COALESCE(v.image_digest,'') FROM xcloud_image_versions v JOIN xcloud_images i ON i.id=v.image_id WHERE v.id=? AND v.image_id=?`, versionID, c.Param("id")).Scan(&imageRef, &tag, &digest)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "镜像版本不存在"})
 		return
 	}
-	image := deploymentImage(imageRef, tag, digest)
+	// Always resolve from the tag during publication. A stored digest is a
+	// previous immutable snapshot, not a substitute for a fresh verification.
+	image := deploymentImage(imageRef, tag, "")
+	if _, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_image_versions SET enabled=FALSE,version_status='syncing',last_error=NULL,updated_at=NOW() WHERE id=?`, versionID); err != nil {
+		internalError(c, err)
+		return
+	}
 	user := c.MustGet("user").(oidcUser)
 	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image_version.pull", "image_version", versionID, map[string]any{"image": image})
 	go pullImageOnNodes(context.Background(), versionID, image)
-	c.JSON(http.StatusAccepted, gin.H{"message": "已提交节点预拉取", "image": image})
+	c.JSON(http.StatusAccepted, gin.H{"message": "已提交节点同步与发布校验", "image": image})
 }
 func pullImageOnNodes(ctx context.Context, versionID, image string) {
 	nodes, err := enabledNodes(ctx)
 	if err != nil {
+		markImageVersionFailed(ctx, versionID, "无法读取健康节点")
 		return
 	}
+	if len(nodes) == 0 {
+		markImageVersionFailed(ctx, versionID, "没有启用节点，无法验证镜像版本")
+		return
+	}
+	var expectedDigest string
+	var failure string
 	for _, n := range nodes {
 		if !n.supportsAgentCapability("image.pull.v1") {
 			_, _ = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_image_version_pulls (image_version_id,node_id,status,last_error,updated_at) VALUES (?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE status=VALUES(status),last_error=VALUES(last_error),updated_at=NOW()`, versionID, n.ID, "unsupported", "Agent 尚未声明 image.pull.v1；请先完成 Agent 升级")
+			failure = "存在不支持镜像拉取的 Agent 节点"
 			continue
 		}
 		_, _ = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_image_version_pulls (image_version_id,node_id,status,updated_at) VALUES (?,?,?,NOW()) ON DUPLICATE KEY UPDATE status=VALUES(status),last_error=NULL,updated_at=NOW()`, versionID, n.ID, "pulling")
+		var result struct {
+			ImageID     string   `json:"imageID"`
+			RepoDigests []string `json:"repoDigests"`
+		}
 		probe, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		err := nodeRequest(probe, n, http.MethodPost, "/container/pull", map[string]any{"image": image}, nil)
+		err := nodeRequest(probe, n, http.MethodPost, "/container/pull", map[string]any{"image": image}, &result)
 		cancel()
 		if err != nil {
 			_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_version_pulls SET status='failed',last_error=?,updated_at=NOW() WHERE image_version_id=? AND node_id=?`, truncateError(err.Error()), versionID, n.ID)
+			failure = "部分节点拉取镜像失败"
 			continue
 		}
-		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_version_pulls SET status='succeeded',last_error=NULL,pulled_at=NOW(),updated_at=NOW() WHERE image_version_id=? AND node_id=?`, versionID, n.ID)
+		digest := immutableDigest(result.RepoDigests)
+		if digest == "" {
+			_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_version_pulls SET status='failed',last_error=?,updated_at=NOW() WHERE image_version_id=? AND node_id=?`, "Agent 未返回可验证的 RepoDigest", versionID, n.ID)
+			failure = "部分节点未返回可验证镜像摘要"
+			continue
+		}
+		if expectedDigest == "" {
+			expectedDigest = digest
+		} else if expectedDigest != digest {
+			_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_version_pulls SET status='failed',resolved_digest=?,local_image_id=?,last_error=?,updated_at=NOW() WHERE image_version_id=? AND node_id=?`, digest, result.ImageID, "节点镜像摘要与其他节点不一致", versionID, n.ID)
+			failure = "节点镜像摘要不一致"
+			continue
+		}
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_version_pulls SET status='succeeded',resolved_digest=?,local_image_id=?,last_error=NULL,pulled_at=NOW(),updated_at=NOW() WHERE image_version_id=? AND node_id=?`, digest, result.ImageID, versionID, n.ID)
 	}
+	if failure != "" || expectedDigest == "" {
+		markImageVersionFailed(ctx, versionID, failure)
+		return
+	}
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_versions SET image_digest=?,enabled=TRUE,version_status='ready',last_error=NULL,published_at=NOW(),updated_at=NOW() WHERE id=?`, expectedDigest, versionID)
+}
+
+func immutableDigest(repoDigests []string) string {
+	for _, value := range repoDigests {
+		if _, digest, ok := strings.Cut(strings.TrimSpace(value), "@"); ok && validImageDigest(digest) {
+			return strings.ToLower(digest)
+		}
+	}
+	return ""
+}
+
+func markImageVersionFailed(ctx context.Context, versionID, reason string) {
+	if strings.TrimSpace(reason) == "" {
+		reason = "镜像发布校验失败"
+	}
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_versions SET enabled=FALSE,version_status='failed',last_error=?,updated_at=NOW() WHERE id=?`, truncateError(reason), versionID)
 }
 func adminSavePlan(c *gin.Context) {
 	var body plan

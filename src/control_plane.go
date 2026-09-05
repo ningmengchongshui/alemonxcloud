@@ -38,12 +38,15 @@ type catalogImage struct {
 	Versions    []imageVersion `json:"versions,omitempty"`
 }
 type imageVersion struct {
-	ID          string    `json:"id"`
-	ImageID     string    `json:"imageId"`
-	Tag         string    `json:"tag"`
-	ImageDigest string    `json:"imageDigest"`
-	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID          string     `json:"id"`
+	ImageID     string     `json:"imageId"`
+	Tag         string     `json:"tag"`
+	ImageDigest string     `json:"imageDigest"`
+	Enabled     bool       `json:"enabled"`
+	Status      string     `json:"status"`
+	LastError   string     `json:"lastError,omitempty"`
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
 }
 
 type plan struct {
@@ -101,24 +104,27 @@ func (n node) compatibility() string {
 }
 
 type order struct {
-	ID                  string     `json:"id"`
-	OwnerID             string     `json:"ownerId"`
-	PlanID              string     `json:"planId"`
-	ImageID             string     `json:"imageId"`
-	InstanceID          string     `json:"instanceId"`
-	Status              string     `json:"status"`
-	PaymentNote         string     `json:"paymentNote"`
-	AmountFen           int        `json:"amountFen"`
-	ServiceStartsAt     *time.Time `json:"serviceStartsAt,omitempty"`
-	ExpiresAt           *time.Time `json:"expiresAt"`
-	RefundedAt          *time.Time `json:"refundedAt,omitempty"`
-	RefundAmountFen     int        `json:"refundAmountFen,omitempty"`
-	RefundWalletEntryID string     `json:"refundWalletEntryId,omitempty"`
-	CreatedAt           *time.Time `json:"createdAt"`
-	UpdatedAt           *time.Time `json:"updatedAt"`
-	PlanName            string     `json:"planName"`
-	ImageName           string     `json:"imageName"`
-	ImageVersion        string     `json:"imageVersion"`
+	ID                  string          `json:"id"`
+	OwnerID             string          `json:"ownerId"`
+	PlanID              string          `json:"planId"`
+	ImageID             string          `json:"imageId"`
+	InstanceID          string          `json:"instanceId"`
+	Status              string          `json:"status"`
+	PaymentNote         string          `json:"paymentNote"`
+	AmountFen           int             `json:"amountFen"`
+	ListAmountFen       int             `json:"listAmountFen"`
+	DiscountAmountFen   int             `json:"discountAmountFen"`
+	PromotionSnapshot   json.RawMessage `json:"promotionSnapshot,omitempty"`
+	ServiceStartsAt     *time.Time      `json:"serviceStartsAt,omitempty"`
+	ExpiresAt           *time.Time      `json:"expiresAt"`
+	RefundedAt          *time.Time      `json:"refundedAt,omitempty"`
+	RefundAmountFen     int             `json:"refundAmountFen,omitempty"`
+	RefundWalletEntryID string          `json:"refundWalletEntryId,omitempty"`
+	CreatedAt           *time.Time      `json:"createdAt"`
+	UpdatedAt           *time.Time      `json:"updatedAt"`
+	PlanName            string          `json:"planName"`
+	ImageName           string          `json:"imageName"`
+	ImageVersion        string          `json:"imageVersion"`
 }
 
 type controlTask struct {
@@ -179,9 +185,9 @@ func listCatalog(ctx context.Context, includeDisabled bool) ([]catalogImage, []p
 	return images, plans, err
 }
 func listImageVersions(ctx context.Context, imageID string, includeDisabled bool) ([]imageVersion, error) {
-	statement := `SELECT id,image_id,version_tag,COALESCE(image_digest,''),enabled,created_at FROM xcloud_image_versions WHERE image_id=?`
+	statement := `SELECT id,image_id,version_tag,COALESCE(image_digest,''),enabled,version_status,COALESCE(last_error,''),published_at,created_at FROM xcloud_image_versions WHERE image_id=?`
 	if !includeDisabled {
-		statement += ` AND enabled=TRUE`
+		statement += ` AND enabled=TRUE AND version_status='ready'`
 	}
 	statement += ` ORDER BY created_at DESC,version_tag`
 	rows, err := instanceDB.QueryContext(ctx, statement, imageID)
@@ -192,7 +198,7 @@ func listImageVersions(ctx context.Context, imageID string, includeDisabled bool
 	items := []imageVersion{}
 	for rows.Next() {
 		var item imageVersion
-		if err := rows.Scan(&item.ID, &item.ImageID, &item.Tag, &item.ImageDigest, &item.Enabled, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ImageID, &item.Tag, &item.ImageDigest, &item.Enabled, &item.Status, &item.LastError, &item.PublishedAt, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -204,15 +210,16 @@ func saveImageVersion(ctx context.Context, value imageVersion) (imageVersion, er
 	if !validImageTag(value.Tag) {
 		return imageVersion{}, errors.New("镜像版本格式无效")
 	}
-	value.ImageDigest = strings.ToLower(strings.TrimSpace(value.ImageDigest))
-	if value.ImageDigest != "" && !validImageDigest(value.ImageDigest) {
-		return imageVersion{}, errors.New("镜像摘要格式无效")
-	}
+	// Digest is resolved by the Agent after pull. It is never trusted from a
+	// browser request, otherwise a tag could be published without verification.
+	value.ImageDigest = ""
+	isNew := value.ID == ""
 	if value.ID == "" {
 		var existing string
 		err := instanceDB.QueryRowContext(ctx, `SELECT id FROM xcloud_image_versions WHERE image_id=? AND version_tag=?`, value.ImageID, value.Tag).Scan(&existing)
 		if err == nil {
 			value.ID = existing
+			isNew = false
 		} else if err == sql.ErrNoRows {
 			value.ID = newID("ver")
 		} else {
@@ -227,8 +234,22 @@ func saveImageVersion(ctx context.Context, value imageVersion) (imageVersion, er
 	if err := instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_images WHERE id=?`, value.ImageID).Scan(&exists); err != nil || exists != 1 {
 		return imageVersion{}, errors.New("镜像来源不存在")
 	}
-	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_image_versions (id,image_id,version_tag,image_digest,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE version_tag=VALUES(version_tag),image_digest=VALUES(image_digest),enabled=VALUES(enabled),updated_at=VALUES(updated_at)`, value.ID, value.ImageID, value.Tag, nullableString(value.ImageDigest), value.Enabled, value.CreatedAt, now)
-	return value, err
+	if isNew {
+		value.Enabled = false
+		value.Status = "draft"
+		_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_image_versions (id,image_id,version_tag,image_digest,enabled,version_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`, value.ID, value.ImageID, value.Tag, nil, false, value.Status, value.CreatedAt, now)
+		return value, err
+	}
+	var current imageVersion
+	if err := instanceDB.QueryRowContext(ctx, `SELECT COALESCE(image_digest,''),enabled,version_status,COALESCE(last_error,''),published_at,created_at FROM xcloud_image_versions WHERE id=? AND image_id=? FOR UPDATE`, value.ID, value.ImageID).Scan(&current.ImageDigest, &current.Enabled, &current.Status, &current.LastError, &current.PublishedAt, &current.CreatedAt); err != nil {
+		return imageVersion{}, errors.New("镜像版本不存在")
+	}
+	if current.Status != "ready" && value.Enabled {
+		return imageVersion{}, errors.New("版本尚未完成节点校验，不能上架")
+	}
+	_, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_image_versions SET enabled=?,updated_at=? WHERE id=? AND image_id=?`, value.Enabled, now, value.ID, value.ImageID)
+	current.Enabled = value.Enabled
+	return current, err
 }
 
 func scanImages(ctx context.Context, statement string, args ...any) ([]catalogImage, error) {
@@ -313,7 +334,7 @@ func saveImage(ctx context.Context, value catalogImage) error {
 	if err != nil || !isNew {
 		return err
 	}
-	_, err = instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_image_versions (id,image_id,version_tag,image_digest,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`, newID("ver"), value.ID, "latest", nullableString(value.ImageDigest), true, value.CreatedAt, time.Now())
+	_, err = instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_image_versions (id,image_id,version_tag,image_digest,enabled,version_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`, newID("ver"), value.ID, "latest", nil, false, "draft", value.CreatedAt, time.Now())
 	return err
 }
 func nullableString(value string) any {
@@ -352,10 +373,10 @@ func createOrder(ctx context.Context, ownerID, planID, imageID string, months in
 }
 
 func listOrders(ctx context.Context, ownerID string) ([]order, error) {
-	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.owner_id=? ORDER BY o.created_at DESC`, ownerID)
+	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,COALESCE(o.list_amount_fen,o.amount_fen),COALESCE(o.discount_amount_fen,0),o.promotion_snapshot,o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.owner_id=? ORDER BY o.created_at DESC`, ownerID)
 }
 func listAllOrders(ctx context.Context) ([]order, error) {
-	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id ORDER BY o.created_at DESC`)
+	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,COALESCE(o.list_amount_fen,o.amount_fen),COALESCE(o.discount_amount_fen,0),o.promotion_snapshot,o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id ORDER BY o.created_at DESC`)
 }
 func scanOrders(ctx context.Context, statement string, args ...any) ([]order, error) {
 	rows, err := instanceDB.QueryContext(ctx, statement, args...)
@@ -366,7 +387,7 @@ func scanOrders(ctx context.Context, statement string, args ...any) ([]order, er
 	items := []order{}
 	for rows.Next() {
 		var v order
-		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.Status, &v.PaymentNote, &v.ServiceStartsAt, &v.ExpiresAt, &v.RefundedAt, &v.RefundAmountFen, &v.RefundWalletEntryID, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion); err != nil {
+		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.ListAmountFen, &v.DiscountAmountFen, &v.PromotionSnapshot, &v.Status, &v.PaymentNote, &v.ServiceStartsAt, &v.ExpiresAt, &v.RefundedAt, &v.RefundAmountFen, &v.RefundWalletEntryID, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion); err != nil {
 			return nil, err
 		}
 		items = append(items, v)

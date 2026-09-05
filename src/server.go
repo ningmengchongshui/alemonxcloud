@@ -118,6 +118,7 @@ func Run() {
 	router.GET("/api/wallet", requireSession, walletHandler)
 	router.GET("/api/wallet/entries", requireSession, walletEntriesHandler)
 	router.POST("/api/purchases", requireSession, purchaseHandler)
+	router.POST("/api/purchases/quote", requireSession, quotePurchaseHandler)
 	router.GET("/api/notifications", requireSession, notificationsHandler)
 	router.POST("/api/telemetry/console-events", requireSession, consoleTelemetryHandler)
 	router.POST("/api/notifications/read-all", requireSession, readAllNotificationsHandler)
@@ -133,6 +134,7 @@ func Run() {
 	router.POST("/api/orders/:id/cancel", requireSession, manualPaymentDisabled)
 	router.POST("/api/orders/:id/payment", requireSession, manualPaymentDisabled)
 	router.POST("/api/orders/:id/renew", requireSession, renewWithWalletHandler)
+	router.POST("/api/orders/:id/renew/quote", requireSession, quoteRenewHandler)
 	router.GET("/api/orders/:id/refund-quote", requireSession, refundQuoteHandler)
 	router.POST("/api/orders/:id/refund", requireSession, refundOrderHandler)
 	router.GET("/api/admin/catalog", requireAdmin, adminCatalog)
@@ -144,6 +146,13 @@ func Run() {
 	router.POST("/api/admin/plans", requireAdmin, adminSavePlan)
 	router.PUT("/api/admin/plans/:id", requireAdmin, adminSavePlan)
 	router.GET("/api/admin/orders", requireAdmin, adminOrders)
+	router.GET("/api/admin/promotions", requireAdmin, adminPromotions)
+	router.POST("/api/admin/promotions", requireAdmin, adminSavePromotion)
+	router.PUT("/api/admin/promotions/:id", requireAdmin, adminSavePromotion)
+	router.GET("/api/admin/coupons", requireAdmin, adminCoupons)
+	router.POST("/api/admin/coupons", requireAdmin, adminCreateCoupons)
+	router.POST("/api/admin/coupons/:id/status", requireAdmin, adminCouponStatus)
+	router.GET("/api/admin/coupon-redemptions", requireAdmin, adminRedemptions)
 	router.GET("/api/admin/tickets", requireAdmin, adminTicketsHandler)
 	router.GET("/api/admin/tickets/:id", requireAdmin, adminTicketDetailHandler)
 	router.POST("/api/admin/tickets/:id/messages", requireAdmin, adminTicketReplyHandler)
@@ -715,7 +724,7 @@ func envInt(key string, fallback int) int {
 }
 
 func validateProductionConfig() {
-	for _, key := range []string{"MYSQL_DSN", "SESSION_REDIS_URL", "RABBITMQ_URL", "AUTH_OIDC_ISSUER", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_REDIRECT_URL", "XCLOUD_NODE_TOKEN_ENCRYPTION_KEY", "XCLOUD_METRICS_TOKEN", "XCLOUD_INSTANCE_DOMAIN", "XCLOUD_INSTANCE_DATA_ROOT"} {
+	for _, key := range []string{"MYSQL_DSN", "SESSION_REDIS_URL", "RABBITMQ_URL", "AUTH_OIDC_ISSUER", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_REDIRECT_URL", "XCLOUD_NODE_TOKEN_ENCRYPTION_KEY", "XCLOUD_COUPON_CODE_SECRET", "XCLOUD_METRICS_TOKEN", "XCLOUD_INSTANCE_DOMAIN", "XCLOUD_INSTANCE_DATA_ROOT"} {
 		if strings.TrimSpace(os.Getenv(key)) == "" {
 			log.Fatalf("production configuration missing: %s", key)
 		}

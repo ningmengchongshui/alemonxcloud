@@ -20,6 +20,7 @@ import type {
   TicketDetail,
   TicketPriority,
   TicketStatus
+  ,PriceQuote, Promotion, Coupon, CouponRedemption
 } from '@/types/cloud'
 
 interface SessionResponse {
@@ -41,6 +42,7 @@ export const cloudApi = createApi({
     'Wallet',
     'Notifications',
     'Tickets'
+    ,'Promotions'
   ],
   endpoints: builder => ({
     getSession: builder.query<{ user: CurrentUser } | null, void>({
@@ -87,11 +89,12 @@ export const cloudApi = createApi({
     }),
     purchase: builder.mutation<
       { order: Order; task: Task },
-      { planId: string; imageId: string; imageVersion: string; months: number }
+      { planId: string; imageId: string; imageVersion: string; months: number; couponCode?: string; promotionId?: string }
     >({
       query: body => ({ url: '/purchases', method: 'POST', body }),
       invalidatesTags: ['Wallet', 'Orders', 'Instances']
     }),
+    quotePurchase: builder.mutation<PriceQuote, { planId: string; imageId: string; months: number; couponCode?: string; promotionId?: string }>({ query: body => ({ url: '/purchases/quote', method: 'POST', body }) }),
     getNotifications: builder.query<Notification[], void>({
       query: () => '/notifications',
       providesTags: ['Notifications']
@@ -154,7 +157,7 @@ export const cloudApi = createApi({
     }),
     renewOrder: builder.mutation<
       { order: Order; task?: Task },
-      { id: string; months: number }
+      { id: string; months: number; couponCode?: string; promotionId?: string }
     >({
       query: ({ id, months }) => ({
         url: `/orders/${id}/renew`,
@@ -163,6 +166,13 @@ export const cloudApi = createApi({
       }),
       invalidatesTags: ['Wallet', 'Orders', 'Instances']
     }),
+    quoteRenewal: builder.mutation<PriceQuote, { id: string; months: number; couponCode?: string; promotionId?: string }>({ query: ({ id, ...body }) => ({ url: `/orders/${id}/renew/quote`, method: 'POST', body }) }),
+    getAdminPromotions: builder.query<Promotion[], void>({ query: () => '/admin/promotions', providesTags: ['Promotions', 'Admin'] }),
+    saveAdminPromotion: builder.mutation<Promotion, Promotion>({ query: body => ({ url: body.id ? `/admin/promotions/${body.id}` : '/admin/promotions', method: body.id ? 'PUT' : 'POST', body }), invalidatesTags: ['Promotions', 'Admin'] }),
+    getAdminCoupons: builder.query<Coupon[], void>({ query: () => '/admin/coupons', providesTags: ['Promotions', 'Admin'] }),
+    getAdminCouponRedemptions: builder.query<CouponRedemption[], void>({ query: () => '/admin/coupon-redemptions', providesTags: ['Promotions', 'Admin'] }),
+    createAdminCoupons: builder.mutation<{ coupons: Array<{ id: string; code: string; codeMask: string }> }, { promotionId: string; mode: 'single' | 'general'; count: number; code?: string; totalLimit?: number; perUserLimit?: number }>({ query: body => ({ url: '/admin/coupons', method: 'POST', body }), invalidatesTags: ['Promotions', 'Admin'] }),
+    updateAdminCouponStatus: builder.mutation<void, { id: string; enabled: boolean }>({ query: ({ id, enabled }) => ({ url: `/admin/coupons/${id}/status`, method: 'POST', body: { enabled } }), invalidatesTags: ['Promotions', 'Admin'] }),
     getRefundQuote: builder.query<RefundQuote, string>({
       query: id => `/orders/${id}/refund-quote`
     }),
@@ -291,7 +301,10 @@ export const cloudApi = createApi({
       invalidatesTags: ['Admin', 'Catalog']
     }),
     pullAdminImageVersion: builder.mutation<{ message: string }, ImageVersion>({
-      query: version => ({ url: `/admin/images/${version.imageId}/versions/${version.id}/pull`, method: 'POST' }),
+      query: version => ({
+        url: `/admin/images/${version.imageId}/versions/${version.id}/pull`,
+        method: 'POST'
+      }),
       invalidatesTags: ['Admin']
     }),
     saveAdminPlan: builder.mutation<Plan, Plan>({
@@ -349,6 +362,7 @@ export const {
   useGetWalletQuery,
   useGetWalletEntriesQuery,
   usePurchaseMutation,
+  useQuotePurchaseMutation,
   useGetNotificationsQuery,
   useReadNotificationMutation,
   useReadAllNotificationsMutation,
@@ -360,9 +374,16 @@ export const {
   useReplyTicketMutation,
   useReopenTicketMutation,
   useRenewOrderMutation,
+  useQuoteRenewalMutation,
   useLazyGetRefundQuoteQuery,
   useRefundOrderMutation,
   useGetAdminCatalogQuery,
+  useGetAdminPromotionsQuery,
+  useSaveAdminPromotionMutation,
+  useGetAdminCouponsQuery,
+  useGetAdminCouponRedemptionsQuery,
+  useCreateAdminCouponsMutation,
+  useUpdateAdminCouponStatusMutation,
   useGetAdminOrdersQuery,
   useGetAdminTicketsQuery,
   useGetAdminTicketQuery,

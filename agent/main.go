@@ -138,7 +138,37 @@ func pullImage(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "镜像拉取失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"image": input.Image, "status": "pulled"})
+	metadata, err := inspectLocalImage(ctx, input.Image)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "镜像拉取后无法确认摘要"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"image": input.Image, "status": "pulled", "imageID": metadata.id, "repoDigests": metadata.repoDigests})
+}
+
+type localImageMetadata struct {
+	id          string
+	repoDigests []string
+	sizeBytes   string
+}
+
+func inspectLocalImage(ctx context.Context, image string) (localImageMetadata, error) {
+	output, err := docker(ctx, "image", "inspect", "--format", "{{.Id}}|{{join .RepoDigests \",\"}}|{{.Size}}", image)
+	if err != nil {
+		return localImageMetadata{}, err
+	}
+	parts := strings.SplitN(strings.TrimSpace(output), "|", 3)
+	item := localImageMetadata{}
+	if len(parts) > 0 {
+		item.id = parts[0]
+	}
+	if len(parts) > 1 && parts[1] != "" {
+		item.repoDigests = strings.Split(parts[1], ",")
+	}
+	if len(parts) > 2 {
+		item.sizeBytes = parts[2]
+	}
+	return item, nil
 }
 
 // listImages and inspectImage intentionally expose only Docker metadata. They
@@ -171,23 +201,12 @@ func inspectImage(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	output, err := docker(ctx, "image", "inspect", "--format", "{{.Id}}|{{join .RepoDigests \",\"}}|{{.Size}}", image)
+	metadata, err := inspectLocalImage(ctx, image)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "镜像尚未拉取"})
 		return
 	}
-	parts := strings.SplitN(strings.TrimSpace(output), "|", 3)
-	result := gin.H{"image": image}
-	if len(parts) > 0 {
-		result["id"] = parts[0]
-	}
-	if len(parts) > 1 && parts[1] != "" {
-		result["repoDigests"] = strings.Split(parts[1], ",")
-	}
-	if len(parts) > 2 {
-		result["sizeBytes"] = parts[2]
-	}
-	c.JSON(http.StatusOK, result)
+	c.JSON(http.StatusOK, gin.H{"image": image, "id": metadata.id, "repoDigests": metadata.repoDigests, "sizeBytes": metadata.sizeBytes})
 }
 
 func installAndStartService() error {

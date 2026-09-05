@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useGetWalletQuery, usePurchaseMutation } from '@/services/cloudApi'
+import { useGetWalletQuery, usePurchaseMutation, useQuotePurchaseMutation } from '@/services/cloudApi'
 import {
   Alert,
   Button,
@@ -8,7 +8,7 @@ import {
   PageHeader
 } from '@/components/ui'
 import { trackConsoleEvent } from '@/services/telemetry'
-import type { Catalog, Plan } from '@/types/cloud'
+import type { Catalog, Plan, PriceQuote } from '@/types/cloud'
 
 const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`
 
@@ -62,7 +62,11 @@ export function CreateServicePage({
   const [planID, setPlanID] = useState('')
   const [months, setMonths] = useState(1)
   const [error, setError] = useState('')
+  const [couponCode, setCouponCode] = useState('')
+  const [promotionID, setPromotionID] = useState('')
+  const [quote, setQuote] = useState<PriceQuote | null>(null)
   const [purchase, { isLoading: saving }] = usePurchaseMutation()
+  const [quotePurchase, { isLoading: quoting }] = useQuotePurchaseMutation()
   const { data: wallet } = useGetWalletQuery()
   const images = catalog?.images ?? []
   const imageSources = images
@@ -77,6 +81,13 @@ export function CreateServicePage({
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
   const total = (selectedPlan?.monthlyPriceFen ?? 0) * months
+  function preview(selected = promotionID, code = couponCode) {
+    if (!selectedImage || !selectedPlan) return
+    setError('')
+    void quotePurchase({ planId: selectedPlan.id, imageId: selectedImage.id, months, couponCode: code, promotionId: selected })
+      .unwrap().then(value => { setQuote(value); setPromotionID(value.selectedId ?? '') })
+      .catch(value => setError(typeof value?.data?.message === 'string' ? value.data.message : '暂时无法计算优惠'))
+  }
 
   function submit() {
     if (!selectedImage || !selectedPlan) return
@@ -88,6 +99,7 @@ export function CreateServicePage({
       imageVersion: selectedVersion?.tag || 'latest',
       planId: selectedPlan.id,
       months
+      ,couponCode: couponCode || undefined, promotionId: promotionID || undefined
     })
       .unwrap()
       .then(() => {
@@ -253,7 +265,7 @@ export function CreateServicePage({
               <dt>镜像</dt>
               <dd>
                 {selectedImage
-                  ? `${selectedImage.name} · ${selectedImage.version || 'latest'}`
+                  ? `${selectedImage.name} · ${selectedVersion?.tag ?? '请选择版本'}`
                   : '请选择镜像'}
               </dd>
             </div>
@@ -277,8 +289,13 @@ export function CreateServicePage({
           <div className="summary-total">
             <span>应付 XCoin</span>
             <strong>
-              {selectedPlan ? `${(total / 100).toFixed(2)} XCoin` : '—'}
+              {selectedPlan ? `${((quote?.amountFen ?? total) / 100).toFixed(2)} XCoin` : '—'}
             </strong>
+          </div>
+          <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
+            <label>代金券码<input value={couponCode} placeholder="输入券码后试算" onChange={e => { setCouponCode(e.target.value); setPromotionID(''); setQuote(null) }} /></label>
+            <Button tone="secondary" loading={quoting} disabled={!selectedImage || !selectedPlan} onClick={() => preview()}>试算优惠</Button>
+            {quote && <><p className="m-0 text-slate-500">原价 {(quote.listAmountFen / 100).toFixed(2)} XCoin，已优惠 {(quote.discountAmountFen / 100).toFixed(2)} XCoin</p>{quote.candidates.length > 1 && <select value={promotionID} onChange={e => { setPromotionID(e.target.value); preview(e.target.value, '') }}><option value="">不使用优惠</option>{quote.candidates.map(item => <option key={item.id} value={item.id}>{item.name} · 减 {(item.discountAmountFen / 100).toFixed(2)} XCoin</option>)}</select>}</>}
           </div>
           <p className="summary-note">
             当前余额：
