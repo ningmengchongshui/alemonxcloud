@@ -15,6 +15,7 @@ func startControlLoops() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
+			syncBenefitProgramStates(context.Background())
 			scheduleLifecycle(context.Background())
 			recoverExpiredTaskLeases(context.Background())
 			recoverPendingTasks()
@@ -30,9 +31,25 @@ func startControlLoops() {
 		}
 	}()
 	syncNodeHeartbeat(context.Background())
+	syncBenefitProgramStates(context.Background())
 	syncInstanceStates(context.Background())
 	recoverExpiredTaskLeases(context.Background())
 	reconcileBandwidthTasks(context.Background())
+}
+
+func syncBenefitProgramStates(ctx context.Context) {
+	if instanceDB == nil {
+		return
+	}
+	if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_benefit_programs SET status='active',updated_at=NOW() WHERE status='scheduled' AND (starts_at IS NULL OR starts_at<=NOW()) AND (ends_at IS NULL OR ends_at>NOW())`); err != nil {
+		log.Printf("activate benefit programs: %v", err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_benefit_programs SET status='ended',updated_at=NOW() WHERE status IN ('scheduled','active') AND ends_at IS NOT NULL AND ends_at<=NOW()`); err != nil {
+		log.Printf("end benefit programs: %v", err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_benefit_codes c JOIN xcloud_benefit_programs p ON p.id=c.program_id SET c.enabled=FALSE WHERE p.status IN ('paused','ended') AND c.enabled=TRUE`); err != nil {
+		log.Printf("disable inactive benefit codes: %v", err)
+	}
 }
 
 // reconcileBandwidthTasks is intentionally limited to running instances on a

@@ -8,7 +8,7 @@ func TestConsoleTelemetryValidation(t *testing.T) {
 			t.Fatalf("expected %q to be allowed", event)
 		}
 	}
-	for _, page := range []string{"promotions", "settings"} {
+	for _, page := range []string{"benefits", "benefit-redemptions", "price-tiers", "settings"} {
 		if !allowedConsolePage(page) {
 			t.Fatalf("expected page %q to be allowed", page)
 		}

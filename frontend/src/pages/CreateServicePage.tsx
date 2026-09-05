@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useDispatch } from 'react-redux'
 import { BalanceSettlement } from '@/components/BalanceSettlement'
-import { PriceQuoteSelector } from '@/components/PriceQuoteSelector'
 import {
   useGetWalletQuery,
   usePurchaseMutation,
@@ -71,8 +70,7 @@ export function CreateServicePage({
   const [months, setMonths] = useState(1)
   const [periodMode, setPeriodMode] = useState<'month' | 'year'>('month')
   const [error, setError] = useState('')
-  const [selectionID, setSelectionID] = useState('')
-  const [payFullPrice, setPayFullPrice] = useState(false)
+  const [promoCode, setPromoCode] = useState('')
   const [quote, setQuote] = useState<PriceQuote | null>(null)
   const [purchase, { isLoading: saving }] = usePurchaseMutation()
   const [quotePurchase] = useQuotePurchaseMutation()
@@ -94,21 +92,18 @@ export function CreateServicePage({
       selectedImage && selectedPlan && wallet && payableFen !== undefined
     ) && (wallet?.balanceFen ?? 0) >= (payableFen ?? 0)
   const preview = useCallback(
-    (selected: string, fullPrice: boolean) => {
+    (code = promoCode) => {
       if (!selectedImage || !selectedPlan) return
       setError('')
       void quotePurchase({
         planId: selectedPlan.id,
         imageId: selectedImage.id,
         months,
-        selectionId: selected,
-        payFullPrice: fullPrice
+        promoCode: code || undefined
       })
         .unwrap()
         .then(value => {
           setQuote(value)
-          setSelectionID(value.selectedId ?? '')
-          setPayFullPrice(Boolean(value.payFullPrice))
         })
         .catch(value =>
           setError(
@@ -118,13 +113,11 @@ export function CreateServicePage({
           )
         )
     },
-    [months, quotePurchase, selectedImage, selectedPlan]
+    [months, promoCode, quotePurchase, selectedImage, selectedPlan]
   )
   useEffect(() => {
     setQuote(null)
-    setSelectionID('')
-    setPayFullPrice(false)
-    if (selectedImage && selectedPlan) preview('', false)
+    if (selectedImage && selectedPlan) preview('')
   }, [selectedImage, selectedPlan, months, preview])
 
   function submit() {
@@ -137,8 +130,7 @@ export function CreateServicePage({
       imageVersion: selectedVersion?.tag || 'latest',
       planId: selectedPlan.id,
       months,
-      selectionId: selectionID || undefined,
-      payFullPrice
+      promoCode: promoCode || undefined
     })
       .unwrap()
       .then(value => {
@@ -370,16 +362,41 @@ export function CreateServicePage({
               </dd>
             </div>
           </dl>
-          <PriceQuoteSelector
-            quote={quote}
-            selectionID={selectionID}
-            payFullPrice={payFullPrice}
-            onSelect={(selected, fullPrice) => {
-              setPayFullPrice(fullPrice)
-              setSelectionID(fullPrice ? '' : selected)
-              preview(fullPrice ? '' : selected, fullPrice)
-            }}
-          />
+          <div className="mt-5 rounded-xl border border-slate-200 p-4 text-sm">
+            <label className="grid gap-1.5 font-medium">
+              推广码（可选）
+              <div className="flex gap-2">
+                <input
+                  value={promoCode}
+                  onChange={event => setPromoCode(event.target.value)}
+                  placeholder="有推广码再输入"
+                />
+                <Button tone="secondary" onClick={() => preview(promoCode)}>
+                  应用
+                </Button>
+              </div>
+            </label>
+            <div className="mt-3 flex justify-between">
+              <span>
+                套餐价格
+                {quote?.tierMonths ? `（${quote.tierMonths} 个月阶梯价）` : ''}
+              </span>
+              <b>{quote ? money(quote.listAmountFen) : '—'}</b>
+            </div>
+            {quote?.program && (
+              <div className="mt-2 flex justify-between text-emerald-700">
+                <span>
+                  已自动应用：{quote.program.name}
+                  {quote.bonusDays ? ` · 赠送 ${quote.bonusDays} 天` : ''}
+                </span>
+                <b>
+                  {quote.discountAmountFen
+                    ? `-${money(quote.discountAmountFen)}`
+                    : '权益已生效'}
+                </b>
+              </div>
+            )}
+          </div>
           <div className="my-4">
             <BalanceSettlement
               balanceFen={wallet?.balanceFen}

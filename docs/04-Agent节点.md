@@ -9,7 +9,7 @@ Agent 运行在裸机上，负责 Docker 容器、镜像、资源探测与实例
 docker network create xcloud_network
 sudo dnf install -y iproute util-linux # Debian/Ubuntu 使用 apt install iproute2 util-linux
 sudo chmod -R 777 /var/lib/xcloud/instances
-make agent-build VERSION=v1.0.8
+make agent-build VERSION=v1.0.9
 sudo ./agent/xcloud-agent
 systemctl status xcloud-agent
 ```

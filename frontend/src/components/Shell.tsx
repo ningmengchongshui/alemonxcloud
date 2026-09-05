@@ -77,7 +77,6 @@ export function Shell({
       label: '账户中心',
       items: [
         { key: 'wallet', icon: '◈', label: '钱包与流水' },
-        { key: 'offers', icon: '✦', label: '优惠中心' },
         {
           key: 'notifications',
           icon: '●',
@@ -108,9 +107,9 @@ export function Shell({
     {
       label: '营销运营',
       items: [
-        { key: 'promotions', icon: '✦', label: '活动管理' },
-        { key: 'coupons', icon: '▣', label: '代金券管理' },
-        { key: 'redemptions', icon: '◷', label: '优惠核销记录' }
+        { key: 'benefits', icon: '✦', label: '商业权益方案' },
+        { key: 'price-tiers', icon: '≋', label: '套餐阶梯价' },
+        { key: 'benefit-redemptions', icon: '◷', label: '权益核销记录' }
       ]
     },
     {

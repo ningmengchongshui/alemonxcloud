@@ -55,9 +55,11 @@ export function Button({
 export function StatusBadge({
   tone = 'neutral',
   children,
+  status,
   className
 }: PropsWithChildren<{
   tone?: 'success' | 'pending' | 'danger' | 'neutral' | 'progress'
+  status?: string
   className?: string
 }>) {
   const tones = {
@@ -77,7 +79,7 @@ export function StatusBadge({
       )}
     >
       <i className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-      {children}
+      {children ?? status}
     </span>
   )
 }

@@ -4,7 +4,6 @@ export type Page =
   | 'create'
   | 'orders'
   | 'wallet'
-  | 'offers'
   | 'notifications'
   | 'tickets'
 export type SuperPage =
@@ -17,9 +16,9 @@ export type SuperPage =
   | 'users'
   | 'tickets'
   | 'audit'
-  | 'promotions'
-  | 'coupons'
-  | 'redemptions'
+  | 'benefits'
+  | 'benefit-redemptions'
+  | 'price-tiers'
   | 'settings'
 
 export interface CurrentUser {
@@ -116,7 +115,14 @@ export interface Order {
   amountFen: number
   listAmountFen: number
   discountAmountFen: number
-  promotionSnapshot?: { name?: string; kind?: string; couponMask?: string }
+  benefitSnapshot?: {
+    name?: string
+    goal?: string
+    benefitType?: string
+    bonusDays?: number
+  }
+  bonusDays?: number
+  promoCodeMask?: string
   status: string
   paymentNote: string
   serviceStartsAt?: string
@@ -129,94 +135,57 @@ export interface Order {
   imageName: string
   imageVersion: string
 }
-export interface PriceCandidate {
-  id: string
-  kind: 'newcomer' | 'first_plan_purchase' | 'campaign' | 'coupon'
-  name: string
-  label: string
-  eligibilityReason?: string
-  discountAmountFen: number
-  payableAmountFen: number
-  isDefault: boolean
-}
 export interface PriceQuote {
   listAmountFen: number
   discountAmountFen: number
   amountFen: number
-  selectedId?: string
-  payFullPrice?: boolean
-  candidates: PriceCandidate[]
+  bonusDays: number
+  tierMonths?: number
+  quoteSummary: string
+  program?: {
+    id: string
+    name: string
+    goal: string
+    benefitType: string
+    triggerType: string
+    codeMask?: string
+  }
 }
-export interface Promotion {
+export interface PlanPriceTier {
+  id: string
+  planId: string
+  months: number
+  discountBps: number
+  enabled: boolean
+}
+export interface BenefitProgram {
   id: string
   name: string
-  kind: 'newcomer' | 'first_plan_purchase' | 'campaign'
-  scope: 'purchase' | 'renewal' | 'both'
-  discountType: 'fixed' | 'percent'
-  discountValue: number
+  goal: 'first_purchase' | 'multi_month' | 'renewal_recovery' | 'channel'
+  status: 'draft' | 'scheduled' | 'active' | 'paused' | 'ended'
+  triggerType: 'automatic' | 'promo_code' | 'targeted'
+  orderScope: 'purchase' | 'renewal' | 'both'
+  benefitType: 'fixed_discount' | 'percent_discount' | 'bonus_days'
+  benefitValue: number
   minAmountFen: number
-  maxDiscountFen: number
-  planIDs: string[]
-  imageIDs: string[]
-  monthValues: string[]
+  planIds: string[]
+  monthValues: number[]
+  audienceType: string
   startsAt?: string
   endsAt?: string
+  perUserLimit: number
   totalLimit: number
-  perUserLimit: number
   usedCount: number
-  enabled: boolean
-  createdAt: string
-}
-export interface Coupon {
-  id: string
-  promotionId: string
-  codeMask: string
-  mode: 'single' | 'general'
-  enabled: boolean
-  totalLimit: number
-  perUserLimit: number
-  usedCount: number
-  createdAt: string
-}
-export interface CouponRedemption {
-  id: string
-  promotionId: string
-  couponId?: string
-  ownerId: string
-  orderId: string
-  discountAmountFen: number
-  createdAt: string
-}
-export interface CouponBatch {
-  id: string
-  name: string
-  status: 'active' | 'paused'
-  distributionMode: 'public' | 'targeted'
-  discountType: 'fixed' | 'percent'
-  discountValue: number
-  minAmountFen: number
-  maxDiscountFen: number
-  scope: 'purchase' | 'renewal' | 'both'
-  planIDs: string[]
-  imageIDs: string[]
-  monthValues: string[]
-  startsAt?: string
-  endsAt?: string
-  issueLimit: number
-  perUserLimit: number
-  issuedCount: number
-  createdAt: string
-}
-export interface UserCoupon {
-  id: string
-  batchId: string
-  ownerId: string
-  status: 'available' | 'used' | 'expired' | 'voided'
-  issueSource: 'public' | 'targeted' | 'legacy'
-  expiresAt?: string
-  usedAt?: string
-  createdAt: string
-  batch?: CouponBatch
+  cashBudgetFen: number
+  cashSpentFen: number
+  grantDaysLimit: number
+  grantDaysUsed: number
+  priority: number
+  channelLabel?: string
+  code?: string
+  codeMask?: string
+  codeTotalLimit?: number
+  codePerUserLimit?: number
 }
 export interface Node {
   id: string

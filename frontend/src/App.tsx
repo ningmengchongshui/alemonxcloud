@@ -13,6 +13,7 @@ import { Shell } from './components/Shell'
 import { CreateServicePage } from './pages/CreateServicePage'
 import { InstancesPage } from './pages/InstancesPage'
 import { InstanceLogsPage } from './pages/InstanceLogsPage'
+import { InstanceExecutionPage } from './pages/InstanceExecutionPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { TicketsPage } from './pages/TicketsPage'
 import { WalletPage } from './pages/WalletPage'
@@ -21,8 +22,6 @@ import { UserOverviewPage } from './pages/UserOverviewPage'
 import { LoginPage } from './pages/LoginPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { AdminPage } from './pages/AdminPage'
-import { OffersPage } from './pages/OffersPage'
-import { AdminPromotionEditor } from './pages/admin/AdminPromotionEditor'
 import type { Page, SuperPage } from '@/types/cloud'
 
 const userPaths = new Set([
@@ -31,24 +30,23 @@ const userPaths = new Set([
   '/me/create',
   '/me/orders',
   '/me/wallet',
-  '/me/offers',
   '/me/notifications',
   '/me/tickets'
 ])
 const superPaths: Record<SuperPage, string> = {
-  overview: '/super',
-  catalog: '/super/catalog',
-  images: '/super/images',
-  nodes: '/super/nodes',
-  orders: '/super/orders',
-  tasks: '/super/tasks',
-  users: '/super/users',
-  audit: '/super/audit',
-  tickets: '/super/tickets',
-  promotions: '/super/promotions',
-  coupons: '/super/coupons',
-  redemptions: '/super/redemptions',
-  settings: '/super/settings'
+  'overview': '/super',
+  'catalog': '/super/catalog',
+  'images': '/super/images',
+  'nodes': '/super/nodes',
+  'orders': '/super/orders',
+  'tasks': '/super/tasks',
+  'users': '/super/users',
+  'audit': '/super/audit',
+  'tickets': '/super/tickets',
+  'benefits': '/super/benefits',
+  'benefit-redemptions': '/super/benefit-redemptions',
+  'price-tiers': '/super/price-tiers',
+  'settings': '/super/settings'
 }
 
 function message(error: unknown, fallback: string) {
@@ -70,7 +68,6 @@ function userPageFor(path: string): Page {
   if (path === '/me/create') return 'create'
   if (path === '/me/orders') return 'orders'
   if (path === '/me/wallet') return 'wallet'
-  if (path === '/me/offers') return 'offers'
   if (path === '/me/notifications') return 'notifications'
   if (path === '/me/tickets') return 'tickets'
   return 'overview'
@@ -99,8 +96,8 @@ function instanceLogID(path: string) {
     return null
   }
 }
-function ticketID(path: string) {
-  const match = path.match(/^\/me\/tickets\/([^/]+)$/)
+function instanceExecutionID(path: string) {
+  const match = path.match(/^\/me\/instances\/([^/]+)\/executions$/)
   if (!match) return null
   try {
     return decodeURIComponent(match[1])
@@ -108,9 +105,8 @@ function ticketID(path: string) {
     return null
   }
 }
-function promotionEditorID(path: string) {
-  if (path === '/super/promotions/new') return ''
-  const match = path.match(/^\/super\/promotions\/([^/]+)\/edit$/)
+function ticketID(path: string) {
+  const match = path.match(/^\/me\/tickets\/([^/]+)$/)
   if (!match) return null
   try {
     return decodeURIComponent(match[1])
@@ -131,9 +127,13 @@ export default function App() {
   const [error, setError] = useState('')
   const { data: session, isLoading } = useGetSessionQuery()
   const logInstanceID = instanceLogID(path)
+  const executionInstanceID = instanceExecutionID(path)
   const selectedTicketID = ticketID(path)
   const isUserArea =
-    userPaths.has(path) || Boolean(logInstanceID) || Boolean(selectedTicketID)
+    userPaths.has(path) ||
+    Boolean(logInstanceID) ||
+    Boolean(executionInstanceID) ||
+    Boolean(selectedTicketID)
   const {
     data: instances = [],
     isLoading: instancesLoading,
@@ -258,8 +258,7 @@ export default function App() {
   }
   const walletUserID = walletHistoryUserID(path)
   const superPage = superPageFor(path)
-  const promotionEditor = promotionEditorID(path)
-  if (superPage || walletUserID || promotionEditor !== null) {
+  if (superPage || walletUserID) {
     if (!session.user.isAdmin) {
       navigate('/me', true)
       return null
@@ -268,17 +267,12 @@ export default function App() {
       <Shell
         user={session.user}
         area="super"
-        superPage={superPage ?? 'promotions'}
+        superPage={superPage ?? 'benefits'}
         onSuperPageChange={next => navigate(superPaths[next])}
         onGoToMe={() => navigate('/me')}
         onLogout={signOut}
       >
-        {promotionEditor !== null ? (
-          <AdminPromotionEditor
-            promotionID={promotionEditor || undefined}
-            onBack={() => navigate('/super/promotions')}
-          />
-        ) : walletUserID ? (
+        {walletUserID ? (
           <WalletHistoryPage
             userID={walletUserID}
             onBack={() => navigate('/super/users')}
@@ -286,10 +280,6 @@ export default function App() {
         ) : (
           <AdminPage
             page={superPage!}
-            onCreatePromotion={() => navigate('/super/promotions/new')}
-            onEditPromotion={id =>
-              navigate(`/super/promotions/${encodeURIComponent(id)}/edit`)
-            }
             onOpenWalletHistory={user =>
               navigate(`/super/users/${encodeURIComponent(user.id)}/wallet`)
             }
@@ -312,7 +302,6 @@ export default function App() {
               create: '/me/create',
               orders: '/me/orders',
               wallet: '/me/wallet',
-              offers: '/me/offers',
               notifications: '/me/notifications',
               tickets: '/me/tickets'
             }[next]
@@ -332,6 +321,39 @@ export default function App() {
       </Shell>
     )
   }
+  if (executionInstanceID) {
+    return (
+      <Shell
+        user={session.user}
+        area="me"
+        page="instances"
+        onPageChange={next =>
+          navigate(
+            {
+              overview: '/me',
+              instances: '/me/instances',
+              create: '/me/create',
+              orders: '/me/orders',
+              wallet: '/me/wallet',
+              notifications: '/me/notifications',
+              tickets: '/me/tickets'
+            }[next]
+          )
+        }
+        onGoToMe={() => navigate('/me')}
+        onGoToSuper={
+          session.user.isAdmin ? () => navigate('/super') : undefined
+        }
+        onLogout={signOut}
+      >
+        <InstanceExecutionPage
+          instanceID={executionInstanceID}
+          instance={instances.find(item => item.id === executionInstanceID)}
+          onBack={() => navigate('/me/instances')}
+        />
+      </Shell>
+    )
+  }
   if (selectedTicketID) {
     return (
       <Shell
@@ -346,7 +368,6 @@ export default function App() {
               create: '/me/create',
               orders: '/me/orders',
               wallet: '/me/wallet',
-              offers: '/me/offers',
               notifications: '/me/notifications',
               tickets: '/me/tickets'
             }[next]
@@ -381,7 +402,6 @@ export default function App() {
     create: '/me/create',
     orders: '/me/orders',
     wallet: '/me/wallet',
-    offers: '/me/offers',
     notifications: '/me/notifications',
     tickets: '/me/tickets'
   }
@@ -401,11 +421,12 @@ export default function App() {
         onOpenLogs={instanceID =>
           navigate(`/me/instances/${encodeURIComponent(instanceID)}/logs`)
         }
+        onOpenExecutions={instanceID =>
+          navigate(`/me/instances/${encodeURIComponent(instanceID)}/executions`)
+        }
       />
     ) : page === 'wallet' ? (
       <WalletPage />
-    ) : page === 'offers' ? (
-      <OffersPage />
     ) : page === 'notifications' ? (
       <NotificationsPage
         onOpenTicket={id => navigate(`/me/tickets/${encodeURIComponent(id)}`)}

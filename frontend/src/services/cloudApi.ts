@@ -24,11 +24,8 @@ import type {
   TicketStatus,
   PriceQuote,
   RechargeContact,
-  Promotion,
-  Coupon,
-  CouponRedemption,
-  CouponBatch,
-  UserCoupon
+  BenefitProgram,
+  PlanPriceTier
 } from '@/types/cloud'
 
 interface SessionResponse {
@@ -54,8 +51,7 @@ export const cloudApi = createApi({
     'Admin',
     'Wallet',
     'Notifications',
-    'Tickets',
-    'Promotions'
+    'Tickets'
   ],
   endpoints: builder => ({
     getSession: builder.query<{ user: CurrentUser } | null, void>({
@@ -94,8 +90,14 @@ export const cloudApi = createApi({
       }),
       invalidatesTags: ['Instances', 'Orders']
     }),
-    getInstanceLogs: builder.query<{ lines: string[] }, string>({
-      query: id => `/instances/${id}/logs`
+    getInstanceLogs: builder.query<
+      { lines: string[]; tail: number; truncated: boolean },
+      { id: string; tail: number; since?: string }
+    >({
+      query: ({ id, tail, since }) => ({
+        url: `/instances/${id}/logs`,
+        params: { tail, ...(since ? { since } : {}) }
+      })
     }),
     getCatalog: builder.query<Catalog, void>({
       query: () => '/catalog',
@@ -134,8 +136,7 @@ export const cloudApi = createApi({
         imageId: string
         imageVersion: string
         months: number
-        selectionId?: string
-        payFullPrice?: boolean
+        promoCode?: string
       }
     >({
       query: body => ({ url: '/purchases', method: 'POST', body }),
@@ -147,30 +148,9 @@ export const cloudApi = createApi({
         planId: string
         imageId: string
         months: number
-        selectionId?: string
-        payFullPrice?: boolean
+        promoCode?: string
       }
     >({ query: body => ({ url: '/purchases/quote', method: 'POST', body }) }),
-    getPromotions: builder.query<Promotion[], void>({
-      query: () => '/promotions',
-      providesTags: ['Promotions']
-    }),
-    claimPromotion: builder.mutation<void, string>({
-      query: id => ({ url: `/promotions/${id}/claim`, method: 'POST' }),
-      invalidatesTags: ['Promotions', 'Wallet']
-    }),
-    getPublicCouponBatches: builder.query<CouponBatch[], void>({
-      query: () => '/coupon-batches/public',
-      providesTags: ['Promotions']
-    }),
-    getMyCoupons: builder.query<UserCoupon[], void>({
-      query: () => '/my-coupons',
-      providesTags: ['Promotions']
-    }),
-    claimCouponBatch: builder.mutation<void, string>({
-      query: id => ({ url: `/coupon-batches/${id}/claim`, method: 'POST' }),
-      invalidatesTags: ['Promotions', 'Notifications']
-    }),
     getNotifications: builder.query<Notification[], void>({
       query: () => '/notifications',
       providesTags: ['Notifications']
@@ -239,8 +219,7 @@ export const cloudApi = createApi({
       {
         id: string
         months: number
-        selectionId?: string
-        payFullPrice?: boolean
+        promoCode?: string
       }
     >({
       query: ({ id, ...body }) => ({
@@ -255,8 +234,7 @@ export const cloudApi = createApi({
       {
         id: string
         months: number
-        selectionId?: string
-        payFullPrice?: boolean
+        promoCode?: string
       }
     >({
       query: ({ id, ...body }) => ({
@@ -265,101 +243,81 @@ export const cloudApi = createApi({
         body
       })
     }),
-    getAdminPromotions: builder.query<Promotion[], void>({
-      query: () => '/admin/promotions',
-      providesTags: ['Promotions', 'Admin']
+    getAdminPlanPriceTiers: builder.query<PlanPriceTier[], void>({
+      query: () => '/admin/plan-price-tiers',
+      providesTags: ['Admin', 'Catalog']
     }),
-    saveAdminPromotion: builder.mutation<Promotion, Promotion>({
-      query: promotion => {
-        const {
-          createdAt: _createdAt,
-          usedCount: _usedCount,
-          ...body
-        } = promotion
-        void _createdAt
-        void _usedCount
-        return {
-          url: body.id ? `/admin/promotions/${body.id}` : '/admin/promotions',
-          method: body.id ? 'PUT' : 'POST',
-          body
-        }
-      },
-      invalidatesTags: ['Promotions', 'Admin']
-    }),
-    getAdminCoupons: builder.query<Coupon[], void>({
-      query: () => '/admin/coupons',
-      providesTags: ['Promotions', 'Admin']
-    }),
-    getAdminCouponRedemptions: builder.query<CouponRedemption[], void>({
-      query: () => '/admin/coupon-redemptions',
-      providesTags: ['Promotions', 'Admin']
-    }),
-    getAdminCouponBatches: builder.query<CouponBatch[], void>({
-      query: () => '/admin/coupon-batches',
-      providesTags: ['Promotions', 'Admin']
-    }),
-    saveAdminCouponBatch: builder.mutation<CouponBatch, CouponBatch>({
+    saveAdminPlanPriceTier: builder.mutation<PlanPriceTier, PlanPriceTier>({
       query: body => ({
         url: body.id
-          ? `/admin/coupon-batches/${body.id}`
-          : '/admin/coupon-batches',
+          ? `/admin/plan-price-tiers/${body.id}`
+          : '/admin/plan-price-tiers',
         method: body.id ? 'PUT' : 'POST',
         body
       }),
-      invalidatesTags: ['Promotions', 'Admin']
+      invalidatesTags: ['Admin', 'Catalog']
     }),
-    issueAdminCouponBatch: builder.mutation<
-      {
-        runId: string
-        items: Array<{ ownerId: string; status: string; reason?: string }>
-      },
-      { id: string; ownerIds: string[] }
+    getAdminBenefitPrograms: builder.query<BenefitProgram[], void>({
+      query: () => '/admin/benefit-programs',
+      providesTags: ['Admin']
+    }),
+    saveAdminBenefitProgram: builder.mutation<BenefitProgram, BenefitProgram>({
+      query: body => ({
+        url: body.id
+          ? `/admin/benefit-programs/${body.id}`
+          : '/admin/benefit-programs',
+        method: body.id ? 'PUT' : 'POST',
+        body
+      }),
+      invalidatesTags: ['Admin']
+    }),
+    grantAdminBenefitProgram: builder.mutation<
+      { created: number },
+      { id: string; ownerIds: string[]; expiresAt?: string }
     >({
-      query: ({ id, ownerIds }) => ({
-        url: `/admin/coupon-batches/${id}/issue`,
+      query: ({ id, ...body }) => ({
+        url: `/admin/benefit-programs/${id}/grants`,
         method: 'POST',
-        body: { ownerIds }
+        body
       }),
-      invalidatesTags: ['Promotions', 'Admin']
+      invalidatesTags: ['Admin']
     }),
-    voidAdminCouponBatch: builder.mutation<{ voidedCount: number }, string>({
-      query: id => ({
-        url: `/admin/coupon-batches/${id}/void-unused`,
-        method: 'POST'
-      }),
-      invalidatesTags: ['Promotions', 'Admin']
-    }),
-    searchAdminCouponUsers: builder.query<
-      Array<{ id: string; username: string; email: string }>,
+    getAdminBenefitGrants: builder.query<
+      Array<{
+        id: string
+        ownerId: string
+        status: string
+        expiresAt?: string
+        usedOrderId?: string
+        createdAt: string
+      }>,
       string
     >({
-      query: q => `/admin/coupon-users?q=${encodeURIComponent(q)}`
+      query: id => `/admin/benefit-programs/${id}/grants`,
+      providesTags: ['Admin']
     }),
-    createAdminCoupons: builder.mutation<
-      { coupons: Array<{ id: string; code: string; codeMask: string }> },
-      {
-        promotionId: string
-        mode: 'single' | 'general'
-        count: number
-        code?: string
-        totalLimit?: number
-        perUserLimit?: number
-      }
-    >({
-      query: body => ({ url: '/admin/coupons', method: 'POST', body }),
-      invalidatesTags: ['Promotions', 'Admin']
-    }),
-    updateAdminCouponStatus: builder.mutation<
+    voidAdminBenefitGrant: builder.mutation<
       void,
-      { id: string; enabled: boolean }
+      { id: string; grantId: string }
     >({
-      query: ({ id, enabled }) => ({
-        url: `/admin/coupons/${id}/status`,
-        method: 'POST',
-        body: { enabled }
+      query: ({ id, grantId }) => ({
+        url: `/admin/benefit-programs/${id}/grants/${grantId}/void`,
+        method: 'POST'
       }),
-      invalidatesTags: ['Promotions', 'Admin']
+      invalidatesTags: ['Admin']
     }),
+    getAdminBenefitRedemptions: builder.query<
+      Array<{
+        id: string
+        programId: string
+        ownerId: string
+        orderId: string
+        discountAmountFen: number
+        bonusDays: number
+        createdAt: string
+      }>,
+      void
+    >({ query: () => '/admin/benefit-redemptions', providesTags: ['Admin'] }),
     getRefundQuote: builder.query<RefundQuote, string>({
       query: id => `/orders/${id}/refund-quote`
     }),
@@ -588,11 +546,6 @@ export const {
   useSaveAdminRechargeContactMutation,
   usePurchaseMutation,
   useQuotePurchaseMutation,
-  useGetPromotionsQuery,
-  useClaimPromotionMutation,
-  useGetPublicCouponBatchesQuery,
-  useGetMyCouponsQuery,
-  useClaimCouponBatchMutation,
   useGetNotificationsQuery,
   useReadNotificationMutation,
   useReadAllNotificationsMutation,
@@ -609,17 +562,14 @@ export const {
   useLazyGetRefundQuoteQuery,
   useRefundOrderMutation,
   useGetAdminCatalogQuery,
-  useGetAdminPromotionsQuery,
-  useSaveAdminPromotionMutation,
-  useGetAdminCouponsQuery,
-  useGetAdminCouponRedemptionsQuery,
-  useGetAdminCouponBatchesQuery,
-  useSaveAdminCouponBatchMutation,
-  useIssueAdminCouponBatchMutation,
-  useVoidAdminCouponBatchMutation,
-  useSearchAdminCouponUsersQuery,
-  useCreateAdminCouponsMutation,
-  useUpdateAdminCouponStatusMutation,
+  useGetAdminPlanPriceTiersQuery,
+  useSaveAdminPlanPriceTierMutation,
+  useGetAdminBenefitProgramsQuery,
+  useSaveAdminBenefitProgramMutation,
+  useGrantAdminBenefitProgramMutation,
+  useGetAdminBenefitGrantsQuery,
+  useVoidAdminBenefitGrantMutation,
+  useGetAdminBenefitRedemptionsQuery,
   useGetAdminOrdersQuery,
   useGetAdminTicketsQuery,
   useGetAdminTicketQuery,

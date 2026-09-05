@@ -884,7 +884,26 @@ func containerLogs(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	output, err := docker(ctx, "logs", "--tail", "200", "--timestamps", name)
+	tail := 300
+	if raw := strings.TrimSpace(c.Query("tail")); raw != "" {
+		value, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || value < 50 || value > 1000 {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日志行数必须介于 50 和 1000 之间"})
+			return
+		}
+		tail = value
+	}
+	args := []string{"logs", "--tail", strconv.Itoa(tail), "--timestamps"}
+	if raw := strings.TrimSpace(c.Query("since")); raw != "" {
+		since, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil || since.After(time.Now().Add(time.Minute)) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日志起始时间无效"})
+			return
+		}
+		args = append(args, "--since", since.UTC().Format(time.RFC3339))
+	}
+	args = append(args, name)
+	output, err := docker(ctx, args...)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "读取容器日志失败"})
 		return
@@ -892,7 +911,11 @@ func containerLogs(c *gin.Context) {
 	if len(output) > 64*1024 {
 		output = output[len(output)-64*1024:]
 	}
-	c.JSON(http.StatusOK, gin.H{"lines": strings.Split(strings.TrimSpace(output), "\n")})
+	lines := []string{}
+	if trimmed := strings.TrimSpace(output); trimmed != "" {
+		lines = strings.Split(trimmed, "\n")
+	}
+	c.JSON(http.StatusOK, gin.H{"lines": lines, "tail": tail, "truncated": len(output) >= 64*1024})
 }
 
 func agentStatus(c *gin.Context) {

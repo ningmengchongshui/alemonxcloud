@@ -422,7 +422,7 @@ func nodeRequest(ctx context.Context, n node, method, path string, payload any, 
 	return nil
 }
 
-func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVersion string, months int, selectionID string, payFullPrice bool) (order, controlTask, error) {
+func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVersion string, months int, promoCode string) (order, controlTask, error) {
 	if months < 1 || months > 60 {
 		return order{}, controlTask{}, errors.New("订阅周期应为 1 至 60 个月")
 	}
@@ -465,7 +465,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {
 		return order{}, controlTask{}, errors.New("请重新登录后再购买")
 	}
-	quote, selectedPromotion, selectedCoupon, err := quoteForModern(ctx, ownerID, "purchase", p.ID, img.ID, months, p.MonthlyFen*months, selectionID, payFullPrice, tx)
+	quote, err := quoteCommercialBenefit(ctx, ownerID, "purchase", p.ID, "", months, p.MonthlyFen, promoCode, tx, true)
 	if err != nil {
 		return order{}, controlTask{}, err
 	}
@@ -482,7 +482,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	orderID := newID("ord")
 	route := routeKey(ownerID + "\x00" + instanceID)
 	container := fmt.Sprintf("xcloud-%s", strings.TrimPrefix(routeKey(instanceID), "r"))
-	expires := now.AddDate(0, months, 0)
+	expires := now.AddDate(0, months, 0).AddDate(0, 0, quote.BonusDays)
 	entry := walletEntry{UserID: ownerID, BalanceAfterFen: balance - amount}
 	if amount > 0 {
 		entry = walletEntry{ID: newID("wal"), UserID: ownerID, AmountFen: -amount, BalanceAfterFen: balance - amount, Type: "purchase", Note: "购买 " + p.Name, ActorID: ownerID, OrderID: orderID, CreatedAt: now}
@@ -497,7 +497,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,list_amount_fen,discount_amount_fen,bandwidth_mbps,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,selected_image_digest,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, quote.ListAmountFen, quote.DiscountAmountFen, p.BandwidthMbps, orderDeploy, "wallet", nullableString(entry.ID), n.ID, imageVersion, nullableString(selectedDigest), now, expires, now, now); err != nil {
 		return order{}, controlTask{}, err
 	}
-	if err = consumePromotionTx(ctx, tx, ownerID, o.ID, quote, selectedPromotion, selectedCoupon); err != nil {
+	if err = consumeCommercialBenefitTx(ctx, tx, ownerID, o.ID, quote); err != nil {
 		return order{}, controlTask{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,bandwidth_mbps,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, img.Name, img.ImageRef, imageVersion, fmt.Sprintf("%g 核 / %d GB / 最高 %d Mbps", p.CPU, p.MemoryMB/1024, p.BandwidthMbps), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, p.BandwidthMbps, n.ID, o.ID, route, expires); err != nil {
@@ -515,12 +515,13 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	}
 	appendTaskEvent(ctx, t.ID, "queued", "钱包扣款后等待部署")
 	_ = createNotification(ctx, ownerID, "purchase", "购买已提交", fmt.Sprintf("已扣除 %.2f XCoin，正在部署。", float64(amount)/100), map[string]any{"orderId": o.ID, "instanceId": instanceID, "taskId": t.ID})
-	if quote.DiscountAmountFen > 0 {
-		title := "优惠已使用"
-		if selectedPromotion != nil {
-			title = promotionLabel(selectedPromotion.Kind) + "已使用"
-		}
-		_ = createNotification(ctx, ownerID, "promotion", title, fmt.Sprintf("本次订单已优惠 %.2f XCoin。", float64(quote.DiscountAmountFen)/100), map[string]any{"orderId": o.ID, "promotionId": quote.SelectedID})
+	if quote.Program != nil {
+		_ = createNotification(ctx, ownerID, "benefit", "权益已生效", fmt.Sprintf("%s%s", fmtBenefit(quote.program), func() string {
+			if quote.DiscountAmountFen > 0 {
+				return fmt.Sprintf("，已优惠 %.2f XCoin", float64(quote.DiscountAmountFen)/100)
+			}
+			return ""
+		}()), map[string]any{"orderId": o.ID, "benefitProgramId": quote.program.ID})
 	}
 	return o, t, nil
 }
@@ -528,7 +529,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 // renewWithWallet extends one existing instance.  It deliberately does not
 // reserve fresh capacity: the instance already owns its node reservation until
 // it is purged.  Expired instances are restarted only after the debit commits.
-func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months int, selectionID string, payFullPrice bool) (order, *controlTask, error) {
+func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months int, promoCode string) (order, *controlTask, error) {
 	if months < 1 || months > 60 {
 		return order{}, nil, errors.New("订阅周期应为 1 至 60 个月")
 	}
@@ -569,7 +570,7 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {
 		return order{}, nil, errors.New("请重新登录后再续费")
 	}
-	quote, selectedPromotion, selectedCoupon, err := quoteForModern(ctx, ownerID, "renewal", p.ID, img.ID, months, p.MonthlyFen*months, selectionID, payFullPrice, tx)
+	quote, err := quoteCommercialBenefit(ctx, ownerID, "renewal", p.ID, source.InstanceID, months, p.MonthlyFen, promoCode, tx, true)
 	if err != nil {
 		return order{}, nil, err
 	}
@@ -583,7 +584,7 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if currentExpiry.Valid && currentExpiry.Time.After(now) {
 		base = currentExpiry.Time
 	}
-	expires := base.AddDate(0, months, 0)
+	expires := base.AddDate(0, months, 0).AddDate(0, 0, quote.BonusDays)
 	entry := walletEntry{UserID: ownerID, BalanceAfterFen: balance - amount}
 	if amount > 0 {
 		entry = walletEntry{ID: newID("wal"), UserID: ownerID, AmountFen: -amount, BalanceAfterFen: balance - amount, Type: "renewal", Note: "续费 " + p.Name, ActorID: ownerID, OrderID: orderID, CreatedAt: now}
@@ -599,7 +600,7 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,list_amount_fen,discount_amount_fen,status,payment_note,payment_source,wallet_entry_id,selected_image_version,selected_image_digest,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, item.ID, ownerID, p.ID, img.ID, source.InstanceID, amount, quote.ListAmountFen, quote.DiscountAmountFen, status, "续费订单："+sourceOrderID, "wallet", nullableString(entry.ID), renewalVersion, nullableString(renewalDigest), base, expires, now, now); err != nil {
 		return order{}, nil, err
 	}
-	if err = consumePromotionTx(ctx, tx, ownerID, item.ID, quote, selectedPromotion, selectedCoupon); err != nil {
+	if err = consumeCommercialBenefitTx(ctx, tx, ownerID, item.ID, quote); err != nil {
 		return order{}, nil, err
 	}
 	if runtimeStatus != "running" && runtimeStatus != "stopped" {
@@ -635,12 +636,8 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 		appendTaskEvent(ctx, task.ID, "queued", "钱包扣款后等待续费恢复")
 	}
 	_ = createNotification(ctx, ownerID, "renewal", "续费成功", fmt.Sprintf("已扣除 %.2f XCoin，服务有效期已延长。", float64(amount)/100), map[string]any{"orderId": item.ID, "instanceId": source.InstanceID})
-	if quote.DiscountAmountFen > 0 {
-		title := "续费优惠已使用"
-		if selectedPromotion != nil {
-			title = promotionLabel(selectedPromotion.Kind) + "已使用"
-		}
-		_ = createNotification(ctx, ownerID, "promotion", title, fmt.Sprintf("本次续费已优惠 %.2f XCoin。", float64(quote.DiscountAmountFen)/100), map[string]any{"orderId": item.ID, "promotionId": quote.SelectedID})
+	if quote.Program != nil {
+		_ = createNotification(ctx, ownerID, "benefit", "续费权益已生效", fmtBenefit(quote.program), map[string]any{"orderId": item.ID, "benefitProgramId": quote.program.ID})
 	}
 	return item, task, nil
 }

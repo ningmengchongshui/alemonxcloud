@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,15 +83,14 @@ func purchaseHandler(c *gin.Context) {
 		ImageID      string `json:"imageId" binding:"required"`
 		ImageVersion string `json:"imageVersion"`
 		Months       int    `json:"months"`
-		SelectionID  string `json:"selectionId"`
-		PayFullPrice bool   `json:"payFullPrice"`
+		PromoCode    string `json:"promoCode"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "购买参数无效"})
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	item, task, err := purchaseWithWallet(c.Request.Context(), user.ID, body.PlanID, body.ImageID, body.ImageVersion, body.Months, body.SelectionID, body.PayFullPrice)
+	item, task, err := purchaseWithWallet(c.Request.Context(), user.ID, body.PlanID, body.ImageID, body.ImageVersion, body.Months, body.PromoCode)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -217,51 +218,21 @@ func submitPaymentHandler(c *gin.Context) {
 	_ = writeAudit(c.Request.Context(), user.ID, "payment.submit", "order", c.Param("id"), map[string]any{"reference": body.Reference})
 	c.Status(http.StatusAccepted)
 }
-func renewOrderHandler(c *gin.Context) {
-	user := c.MustGet("user").(oidcUser)
-	var body struct {
-		Months       int    `json:"months"`
-		SelectionID  string `json:"selectionId"`
-		PayFullPrice bool   `json:"payFullPrice"`
-	}
-	if c.ShouldBindJSON(&body) != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "续费参数无效"})
-		return
-	}
-	var planID, imageID, instanceID string
-	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT plan_id,image_id,instance_id FROM xcloud_orders WHERE id=? AND owner_id=? AND status IN (?,?,?)`, c.Param("id"), user.ID, orderActive, orderExpired, orderRefund).Scan(&planID, &imageID, &instanceID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"message": "订单不可续费"})
-		return
-	}
-	item, err := createOrder(c.Request.Context(), user.ID, planID, imageID, body.Months, "续费订单："+c.Param("id"))
-	if err != nil {
-		businessError(c, err)
-		return
-	}
-	if _, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_orders SET renewal_instance_id=? WHERE id=?`, instanceID, item.ID); err != nil {
-		internalError(c, err)
-		return
-	}
-	c.JSON(http.StatusCreated, item)
-}
 
 // renewWithWalletHandler renews an existing service without reviving the
 // retired manual-payment flow.  The debit, ledger entry, renewal order and
 // (when necessary) restart task are committed as one transaction.
 func renewWithWalletHandler(c *gin.Context) {
 	var body struct {
-		Months       int    `json:"months"`
-		CouponCode   string `json:"couponCode"`
-		SelectionID  string `json:"selectionId"`
-		PayFullPrice bool   `json:"payFullPrice"`
+		Months    int    `json:"months"`
+		PromoCode string `json:"promoCode"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "续费参数无效"})
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months, body.SelectionID, body.PayFullPrice)
+	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months, body.PromoCode)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -1093,10 +1064,29 @@ func instanceLogs(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "实例节点不可用"})
 		return
 	}
-	var body struct {
-		Lines []string `json:"lines"`
+	tail := 300
+	if raw := strings.TrimSpace(c.Query("tail")); raw != "" {
+		value, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || value < 50 || value > 1000 {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日志行数必须介于 50 和 1000 之间"})
+			return
+		}
+		tail = value
 	}
-	if err := nodeRequest(c.Request.Context(), n, http.MethodGet, "/container/"+item.ContainerName+"/logs", nil, &body); err != nil {
+	path := "/container/" + item.ContainerName + "/logs?tail=" + strconv.Itoa(tail)
+	if raw := strings.TrimSpace(c.Query("since")); raw != "" {
+		if _, parseErr := time.Parse(time.RFC3339, raw); parseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日志起始时间无效"})
+			return
+		}
+		path += "&since=" + url.QueryEscape(raw)
+	}
+	var body struct {
+		Lines     []string `json:"lines"`
+		Tail      int      `json:"tail"`
+		Truncated bool     `json:"truncated"`
+	}
+	if err := nodeRequest(c.Request.Context(), n, http.MethodGet, path, nil, &body); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "读取实例日志失败"})
 		return
 	}

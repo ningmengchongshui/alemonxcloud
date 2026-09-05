@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useDispatch } from 'react-redux'
 import { ActionDialog } from '@/components/ActionDialog'
 import { BalanceSettlement } from '@/components/BalanceSettlement'
-import { PriceQuoteSelector } from '@/components/PriceQuoteSelector'
 import {
   Alert,
   Button,
@@ -14,7 +13,6 @@ import {
 } from '@/components/ui'
 import {
   useInstanceActionMutation,
-  useGetInstanceTasksQuery,
   useGetWalletQuery,
   useQuoteRenewalMutation,
   useRenewOrderMutation
@@ -105,13 +103,15 @@ export function InstancesPage({
   orders,
   loading,
   onCreate,
-  onOpenLogs
+  onOpenLogs,
+  onOpenExecutions
 }: {
   instances: Instance[]
   orders: Order[]
   loading: boolean
   onCreate: () => void
   onOpenLogs: (instanceID: string) => void
+  onOpenExecutions: (instanceID: string) => void
 }) {
   const [error, setError] = useState('')
   const [pending, setPending] = useState<{
@@ -119,19 +119,14 @@ export function InstancesPage({
     action: InstanceAction
   } | null>(null)
   const [renewing, setRenewing] = useState<Order | null>(null)
-  const [recordInstance, setRecordInstance] = useState<Instance | null>(null)
   const [months, setMonths] = useState('1')
-  const [renewSelection, setRenewSelection] = useState('')
-  const [renewFullPrice, setRenewFullPrice] = useState(false)
+  const [renewPromoCode, setRenewPromoCode] = useState('')
   const [renewQuote, setRenewQuote] = useState<PriceQuote | null>(null)
   const [renewalError, setRenewalError] = useState('')
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
   const [quoteRenewal] = useQuoteRenewalMutation()
   const { data: wallet } = useGetWalletQuery()
-  const records = useGetInstanceTasksQuery(recordInstance?.id ?? '', {
-    skip: !recordInstance
-  })
   const dispatch = useDispatch()
   const sorted = [...instances].sort(
     (left, right) =>
@@ -154,23 +149,16 @@ export function InstancesPage({
       renewableOrderByInstance.set(order.instanceId, order)
   }
 
-  function refreshRenewQuote(
-    order: Order,
-    selection = renewSelection,
-    full = renewFullPrice
-  ) {
+  function refreshRenewQuote(order: Order, promoCode = renewPromoCode) {
     setRenewalError('')
     void quoteRenewal({
       id: order.id,
       months: Number(months) || 1,
-      selectionId: selection || undefined,
-      payFullPrice: full
+      promoCode: promoCode || undefined
     })
       .unwrap()
       .then(value => {
         setRenewQuote(value)
-        setRenewSelection(value.selectedId ?? '')
-        setRenewFullPrice(Boolean(value.payFullPrice))
       })
       .catch(error =>
         setRenewalError(
@@ -183,17 +171,14 @@ export function InstancesPage({
 
   function openRenewal(order: Order) {
     setMonths('1')
-    setRenewSelection('')
-    setRenewFullPrice(false)
+    setRenewPromoCode('')
     setRenewQuote(null)
     setRenewalError('')
     setRenewing(order)
-    void quoteRenewal({ id: order.id, months: 1, payFullPrice: false })
+    void quoteRenewal({ id: order.id, months: 1 })
       .unwrap()
       .then(value => {
         setRenewQuote(value)
-        setRenewSelection(value.selectedId ?? '')
-        setRenewFullPrice(Boolean(value.payFullPrice))
       })
       .catch(error =>
         setRenewalError(
@@ -369,7 +354,7 @@ export function InstancesPage({
                     )}
                     <Button
                       tone="secondary"
-                      onClick={() => setRecordInstance(item)}
+                      onClick={() => onOpenExecutions(item.id)}
                     >
                       执行记录
                     </Button>
@@ -511,82 +496,6 @@ export function InstancesPage({
           onConfirm={confirmAction}
         />
       )}
-      {recordInstance && (
-        <Dialog
-          eyebrow="实例执行记录"
-          title={`${imageName(recordInstance.image)} ｜ ${recordInstance.id.slice(0, 12)}`}
-          description="包括用户操作、自动部署、恢复、隔离与失败原因。"
-          onClose={() => setRecordInstance(null)}
-        >
-          <div className="mb-3 flex justify-end">
-            <Button
-              tone="secondary"
-              loading={records.isFetching}
-              onClick={() => void records.refetch()}
-            >
-              ↻ 刷新
-            </Button>
-          </div>
-          {records.isLoading ? (
-            <LoadingState>正在读取执行记录…</LoadingState>
-          ) : records.isError ? (
-            <Alert tone="error">执行记录加载失败，请稍后重试。</Alert>
-          ) : (records.data?.length ?? 0) === 0 ? (
-            <EmptyState
-              title="暂无执行记录"
-              description="实例尚未产生异步执行任务。"
-            />
-          ) : (
-            <div className="max-h-[55vh] space-y-3 overflow-auto pr-1">
-              {records.data?.map(({ task, events }) => (
-                <article
-                  key={task.id}
-                  className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <b>{task.action}</b>
-                    <StatusBadge
-                      tone={
-                        task.status === 'succeeded'
-                          ? 'success'
-                          : ['failed', 'needs_review'].includes(task.status)
-                            ? 'danger'
-                            : 'progress'
-                      }
-                    >
-                      {task.status === 'needs_review'
-                        ? '待人工复核'
-                        : task.status}
-                    </StatusBadge>
-                  </div>
-                  <p className="mb-1 mt-1 text-xs text-slate-500 dark:text-slate-300">
-                    创建于 {new Date(task.createdAt).toLocaleString('zh-CN')} ·
-                    尝试 {task.attempts} 次
-                  </p>
-                  {task.lastError && (
-                    <p className="mb-0 rounded bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:bg-rose-950 dark:text-rose-100">
-                      {task.lastError}
-                    </p>
-                  )}
-                  {events.length > 0 && (
-                    <ol className="mb-0 mt-2 space-y-1 border-l border-slate-200 pl-3 text-xs dark:border-slate-600">
-                      {events.map(event => (
-                        <li key={event.id}>
-                          <span className="font-medium">{event.event}</span>
-                          {event.detail ? `：${event.detail}` : ''}
-                          <small className="ml-2 text-slate-500">
-                            {new Date(event.createdAt).toLocaleString('zh-CN')}
-                          </small>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </article>
-              ))}
-            </div>
-          )}
-        </Dialog>
-      )}
       {renewing && (
         <Dialog
           eyebrow="实例续费"
@@ -606,20 +515,52 @@ export function InstancesPage({
             />
           </label>
           <div className="mt-4">
-            <PriceQuoteSelector
-              quote={renewQuote}
-              selectionID={renewSelection}
-              payFullPrice={renewFullPrice}
-              onSelect={(selected, fullPrice) => {
-                setRenewFullPrice(fullPrice)
-                setRenewSelection(fullPrice ? '' : selected)
-                refreshRenewQuote(
-                  renewing,
-                  fullPrice ? '' : selected,
-                  fullPrice
-                )
-              }}
-            />
+            <div className="rounded-xl border border-slate-200 p-4 text-sm">
+              <label className="grid gap-1.5 font-medium">
+                推广码（可选）
+                <div className="flex gap-2">
+                  <input
+                    value={renewPromoCode}
+                    onChange={event => setRenewPromoCode(event.target.value)}
+                    placeholder="有推广码再输入"
+                  />
+                  <Button
+                    tone="secondary"
+                    onClick={() => refreshRenewQuote(renewing, renewPromoCode)}
+                  >
+                    应用
+                  </Button>
+                </div>
+              </label>
+              <div className="mt-3 flex justify-between">
+                <span>
+                  套餐价格
+                  {renewQuote?.tierMonths
+                    ? `（${renewQuote.tierMonths} 个月阶梯价）`
+                    : ''}
+                </span>
+                <b>
+                  {renewQuote
+                    ? `¥${(renewQuote.listAmountFen / 100).toFixed(2)}`
+                    : '—'}
+                </b>
+              </div>
+              {renewQuote?.program && (
+                <div className="mt-2 flex justify-between text-emerald-700">
+                  <span>
+                    已自动应用：{renewQuote.program.name}
+                    {renewQuote.bonusDays
+                      ? ` · 赠送 ${renewQuote.bonusDays} 天`
+                      : ''}
+                  </span>
+                  <b>
+                    {renewQuote.discountAmountFen
+                      ? `-¥${(renewQuote.discountAmountFen / 100).toFixed(2)}`
+                      : '权益已生效'}
+                  </b>
+                </div>
+              )}
+            </div>
           </div>
           <div className="mt-4">
             <BalanceSettlement
@@ -649,8 +590,7 @@ export function InstancesPage({
                 void renewOrder({
                   id: renewing.id,
                   months: value,
-                  selectionId: renewSelection || undefined,
-                  payFullPrice: renewFullPrice
+                  promoCode: renewPromoCode || undefined
                 })
                   .unwrap()
                   .then(() => {
