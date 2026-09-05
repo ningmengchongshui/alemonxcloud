@@ -46,24 +46,13 @@ func TestBandwidthIFBNameIsStableAndFitsLinuxInterfaceLimit(t *testing.T) {
 	}
 }
 
-func TestInstanceDownloadMbpsUsesSafeConfig(t *testing.T) {
-	t.Setenv("XCLOUD_INSTANCE_DOWNLOAD_MBPS", "48")
-	if got := instanceDownloadMbps(); got != 48 {
-		t.Fatalf("download limit = %d, want 48", got)
+func TestBurstBandwidthBorrowsIdleCapacityWithinConfiguredLimit(t *testing.T) {
+	t.Setenv("XCLOUD_BANDWIDTH_BURST_MULTIPLIER", "5")
+	if got := burstBandwidthMbps(6); got != 30 {
+		t.Fatalf("burst rate = %d, want 30", got)
 	}
-	t.Setenv("XCLOUD_INSTANCE_DOWNLOAD_MBPS", "invalid")
-	if got := instanceDownloadMbps(); got != 20 {
-		t.Fatalf("invalid download limit = %d, want fallback 20", got)
-	}
-}
-
-func TestNodeDownloadBudgetMbpsUsesSafeConfig(t *testing.T) {
-	t.Setenv("XCLOUD_NODE_DOWNLOAD_MBPS", "120")
-	if got := nodeDownloadBudgetMbps(); got != 120 {
-		t.Fatalf("node download budget = %d, want 120", got)
-	}
-	t.Setenv("XCLOUD_NODE_DOWNLOAD_MBPS", "0")
-	if got := nodeDownloadBudgetMbps(); got != 20 {
-		t.Fatalf("invalid node budget = %d, want fallback 20", got)
+	t.Setenv("XCLOUD_BANDWIDTH_BURST_MULTIPLIER", "invalid")
+	if got := burstBandwidthMbps(6); got != 24 {
+		t.Fatalf("fallback burst rate = %d, want 24", got)
 	}
 }

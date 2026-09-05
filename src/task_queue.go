@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,7 +130,8 @@ func enqueueTask(ctx context.Context, task deploymentTask) error {
 
 func consumeTasks() {} // consumer is started whenever a connection is established.
 func consumeTaskChannel(channel *amqp091.Channel) {
-	if err := channel.Qos(1, 0, false); err != nil {
+	workers := taskWorkerConcurrency()
+	if err := channel.Qos(workers, 0, false); err != nil {
 		log.Printf("configure task consumer: %v", err)
 		return
 	}
@@ -137,9 +140,23 @@ func consumeTaskChannel(channel *amqp091.Channel) {
 		log.Printf("start task consumer: %v", err)
 		return
 	}
+	sem := make(chan struct{}, workers)
 	for delivery := range deliveries {
-		processDelivery(delivery)
+		sem <- struct{}{}
+		go func(delivery amqp091.Delivery) {
+			defer func() { <-sem }()
+			processDelivery(delivery)
+		}(delivery)
 	}
+}
+
+func taskWorkerConcurrency() int {
+	const fallback = 4
+	value, err := strconv.Atoi(strings.TrimSpace(env("XCLOUD_TASK_WORKERS", strconv.Itoa(fallback))))
+	if err != nil || value < 1 || value > 16 {
+		return fallback
+	}
+	return value
 }
 func processDelivery(delivery amqp091.Delivery) {
 	var message deploymentTask

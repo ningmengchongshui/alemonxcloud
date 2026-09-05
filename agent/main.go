@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +32,18 @@ import (
 // Agent 作为宿主机 systemd 服务运行，绝不能作为 Docker 容器或暴露到公网。
 var safeContainerName = regexp.MustCompile(`^xcloud-[a-z0-9]{8,32}$`)
 var safeRouteKey = regexp.MustCompile(`^r[0-9a-f]{16}$`)
+
+type cachedRouteTarget struct {
+	ip         string
+	expiresAt  time.Time
+	staleUntil time.Time
+}
+
+var routeTargetCache = struct {
+	sync.RWMutex
+	values   map[string]cachedRouteTarget
+	inflight map[string]chan struct{}
+}{values: map[string]cachedRouteTarget{}, inflight: map[string]chan struct{}{}}
 
 // Version is injected by the release build.  The API version changes only for
 // backwards-incompatible protocol changes; individual additions are announced
@@ -462,13 +475,9 @@ func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 		return err
 	}
 	// The host-side veth root controls host -> container traffic (downloads and
-	// dependency installation). It has a separate, higher safety ceiling from
-	// the user-facing service egress plan: leaving it unlimited lets one install
-	// exhaust a node uplink, while tying it to a small plan makes installs fail.
+	// dependency installation). A plan's published peak applies to service
+	// egress, never to ordinary server use such as installation and downloads.
 	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "root").CombinedOutput()
-	if err := applyQueuedRate(ctx, host, effectiveDownloadMbps(ctx)); err != nil {
-		return fmt.Errorf("应用安装下载带宽上限: %w", err)
-	}
 	// Remove the legacy ingress police rule before installing clsact. Its packet
 	// drops were the source of intermittent package-install and WebSocket pain.
 	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "ingress").CombinedOutput()
@@ -484,61 +493,30 @@ func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 	if _, err = exec.CommandContext(ctx, "tc", "filter", "replace", "dev", host, "ingress", "protocol", "all", "pref", "10", "u32", "match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", ifb).CombinedOutput(); err != nil {
 		return err
 	}
-	return applyQueuedRate(ctx, ifb, mbps)
+	// The plan value is a stable shared rate, not a permanent ceiling. When the
+	// node is idle HTB lets a user borrow unused capacity up to the burst ceil.
+	return applyQueuedRate(ctx, ifb, mbps, burstBandwidthMbps(mbps))
 }
 
-func instanceDownloadMbps() int {
-	const fallback = 20
-	value, err := strconv.Atoi(strings.TrimSpace(env("XCLOUD_INSTANCE_DOWNLOAD_MBPS", strconv.Itoa(fallback))))
-	if err != nil || value < 1 || value > 10000 {
-		return fallback
+func burstBandwidthMbps(stableMbps int) int {
+	const fallbackMultiplier = 4
+	multiplier, err := strconv.Atoi(strings.TrimSpace(env("XCLOUD_BANDWIDTH_BURST_MULTIPLIER", strconv.Itoa(fallbackMultiplier))))
+	if err != nil || multiplier < 1 || multiplier > 20 {
+		multiplier = fallbackMultiplier
 	}
-	return value
+	if stableMbps > 100000/multiplier {
+		return 100000
+	}
+	return stableMbps * multiplier
 }
 
-func nodeDownloadBudgetMbps() int {
-	const fallback = 20
-	value, err := strconv.Atoi(strings.TrimSpace(env("XCLOUD_NODE_DOWNLOAD_MBPS", strconv.Itoa(fallback))))
-	if err != nil || value < 1 || value > 100000 {
-		return fallback
-	}
-	return value
-}
-
-// effectiveDownloadMbps divides the node's download budget among currently
-// running managed instances. This prevents several simultaneous dependency
-// installs from individually observing their per-instance ceiling and jointly
-// exhausting the physical uplink.
-func effectiveDownloadMbps(ctx context.Context) int {
-	output, err := docker(ctx, "ps", "--filter", "label=xcloud.managed=true", "--format", "{{.ID}}")
-	if err != nil {
-		return instanceDownloadMbps()
-	}
-	count := 0
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		if strings.TrimSpace(line) != "" {
-			count++
-		}
-	}
-	if count < 1 {
-		count = 1
-	}
-	share := nodeDownloadBudgetMbps() / count
-	if share < 1 {
-		share = 1
-	}
-	if share < instanceDownloadMbps() {
-		return share
-	}
-	return instanceDownloadMbps()
-}
-
-func applyQueuedRate(ctx context.Context, device string, mbps int) error {
-	rate := strconv.Itoa(mbps) + "mbit"
+func applyQueuedRate(ctx context.Context, device string, stableMbps, ceilingMbps int) error {
+	rate := strconv.Itoa(stableMbps) + "mbit"
+	ceiling := strconv.Itoa(ceilingMbps) + "mbit"
 	if _, err := exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", device, "root", "handle", "1:", "htb", "default", "10").CombinedOutput(); err != nil {
 		return err
 	}
-	if _, err := exec.CommandContext(ctx, "tc", "class", "replace", "dev", device, "parent", "1:", "classid", "1:10", "htb", "rate", rate, "ceil", rate).CombinedOutput(); err != nil {
+	if _, err := exec.CommandContext(ctx, "tc", "class", "replace", "dev", device, "parent", "1:", "classid", "1:10", "htb", "rate", rate, "ceil", ceiling).CombinedOutput(); err != nil {
 		return err
 	}
 	_, err := exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", device, "parent", "1:10", "handle", "10:", "fq_codel").CombinedOutput()
@@ -928,26 +906,111 @@ func proxyContainer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "缺少实例路由信息"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-	defer cancel()
-	output, err := docker(ctx, "ps", "--filter", "label=xcloud.managed=true", "--filter", "label=xcloud.route="+route, "--format", "{{.Names}}")
-	name := strings.TrimSpace(output)
-	if err != nil || !safeContainerName.MatchString(name) {
-		c.JSON(http.StatusNotFound, gin.H{"message": "未找到运行中的实例"})
-		return
-	}
-	ip, err := docker(ctx, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name)
-	if err != nil || net.ParseIP(strings.TrimSpace(ip)) == nil {
+	ip, err := resolveRouteTarget(c.Request.Context(), route)
+	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "实例网络暂不可用"})
 		return
 	}
-	target, _ := url.Parse("http://" + strings.TrimSpace(ip) + ":17390")
+	target, _ := url.Parse("http://" + ip + ":17390")
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		invalidateRouteTarget(route)
 		http.Error(w, "实例暂不可用", http.StatusBadGateway)
 	}
 	c.Request.Header.Del("X-Route-Key")
 	proxy.ServeHTTP(c.Writer, c.Request)
+}
+
+func resolveRouteTarget(ctx context.Context, route string) (string, error) {
+	now := time.Now()
+	routeTargetCache.RLock()
+	cached, ok := routeTargetCache.values[route]
+	routeTargetCache.RUnlock()
+	if ok && cached.expiresAt.After(now) {
+		return cached.ip, nil
+	}
+	if ok && cached.staleUntil.After(now) {
+		refreshRouteTargetInBackground(route)
+		return cached.ip, nil
+	}
+
+	routeTargetCache.Lock()
+	if cached, ok = routeTargetCache.values[route]; ok && cached.expiresAt.After(now) {
+		routeTargetCache.Unlock()
+		return cached.ip, nil
+	}
+	if wait, resolving := routeTargetCache.inflight[route]; resolving {
+		routeTargetCache.Unlock()
+		select {
+		case <-wait:
+			return resolveRouteTarget(ctx, route)
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	wait := make(chan struct{})
+	routeTargetCache.inflight[route] = wait
+	routeTargetCache.Unlock()
+
+	ip, err := lookupRouteTarget(ctx, route)
+	finishRouteTargetLookup(route, wait, ip, err)
+	return ip, err
+}
+
+func refreshRouteTargetInBackground(route string) {
+	routeTargetCache.Lock()
+	if _, resolving := routeTargetCache.inflight[route]; resolving {
+		routeTargetCache.Unlock()
+		return
+	}
+	wait := make(chan struct{})
+	routeTargetCache.inflight[route] = wait
+	routeTargetCache.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ip, err := lookupRouteTarget(ctx, route)
+		finishRouteTargetLookup(route, wait, ip, err)
+	}()
+}
+
+func lookupRouteTarget(ctx context.Context, route string) (string, error) {
+	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	output, err := docker(lookup, "ps", "--filter", "label=xcloud.managed=true", "--filter", "label=xcloud.route="+route, "--format", "{{.Names}}")
+	name := strings.TrimSpace(output)
+	if err == nil && !safeContainerName.MatchString(name) {
+		return "", errors.New("未找到运行中的实例")
+	}
+	if err != nil {
+		return "", err
+	}
+	output, err = docker(lookup, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name)
+	ip := strings.TrimSpace(output)
+	if err != nil {
+		return "", err
+	}
+	if net.ParseIP(ip) == nil {
+		return "", errors.New("实例网络不可用")
+	}
+	return ip, nil
+}
+
+func finishRouteTargetLookup(route string, wait chan struct{}, ip string, err error) {
+	routeTargetCache.Lock()
+	delete(routeTargetCache.inflight, route)
+	close(wait)
+	if err == nil {
+		now := time.Now()
+		routeTargetCache.values[route] = cachedRouteTarget{ip: ip, expiresAt: now.Add(time.Minute), staleUntil: now.Add(10 * time.Minute)}
+	}
+	routeTargetCache.Unlock()
+}
+
+func invalidateRouteTarget(route string) {
+	routeTargetCache.Lock()
+	delete(routeTargetCache.values, route)
+	routeTargetCache.Unlock()
 }
 
 func docker(ctx context.Context, args ...string) (string, error) {
