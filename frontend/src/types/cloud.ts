@@ -20,10 +20,12 @@ export type SuperPage =
   | 'settings'
 
 export interface CurrentUser {
+  id?: string
   username: string
   isAdmin: boolean
   email?: string
   phone?: string
+  avatar?: string
 }
 
 export interface RechargeContact {

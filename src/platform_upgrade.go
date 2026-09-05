@@ -292,7 +292,7 @@ func createNotification(ctx context.Context, userID, kind, title, body string, d
 	return err
 }
 func notifications(ctx context.Context, userID string, limit int) ([]notification, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,notification_type,title,body,COALESCE(data,JSON_OBJECT()),read_at,created_at FROM xcloud_notifications WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, userID, limit)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,notification_type,title,body,COALESCE(data,JSON_OBJECT()),read_at,created_at FROM xcloud_notifications WHERE user_id=? AND notification_type NOT IN ('task','task_failed') ORDER BY created_at DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err
 	}

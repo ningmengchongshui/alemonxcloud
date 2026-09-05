@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type PropsWithChildren } from 'react'
 import classNames from 'classnames'
 import { BrandLogo } from '@/components/BrandLogo'
 import { Button, Dialog } from '@/components/ui'
-import { XCoinMark } from '@/components/XCoinMark'
+import { XCoinAmount } from '@/components/XCoinMark'
+import { TaskNotification } from '@/components/TaskNotification'
 import {
   useGetNotificationsQuery,
   useGetRechargeContactQuery,
@@ -153,6 +154,7 @@ export function Shell({
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100">
+      <TaskNotification />
       {navOpen && (
         <button
           type="button"
@@ -285,9 +287,7 @@ export function Shell({
                 collapsed && 'lg:justify-center lg:px-0'
               )}
             >
-              <span className="grid size-7 shrink-0 place-items-center rounded-full bg-blue-600 text-[10px] font-extrabold text-white">
-                {displayName.slice(0, 2).toUpperCase()}
-              </span>
+              {user.avatar ? <img src={user.avatar} alt="" className="size-7 shrink-0 rounded-full object-cover" /> : <span className="grid size-7 shrink-0 place-items-center rounded-full bg-blue-600 text-[10px] font-extrabold text-white">{displayName.slice(0, 2).toUpperCase()}</span>}
               <span
                 className={classNames(
                   'min-w-0 flex-1',
@@ -303,23 +303,13 @@ export function Shell({
             {profileOpen && (
               <div className="absolute bottom-[calc(100%+8px)] left-0 z-50 w-64 rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-800">
                 <div className="flex items-center gap-2.5">
-                  <span className="grid size-9 place-items-center rounded-full bg-blue-600 text-xs font-extrabold text-white">
-                    {displayName.slice(0, 2).toUpperCase()}
-                  </span>
+                  {user.avatar ? <img src={user.avatar} alt="" className="size-9 rounded-full object-cover" /> : <span className="grid size-9 place-items-center rounded-full bg-blue-600 text-xs font-extrabold text-white">{displayName.slice(0, 2).toUpperCase()}</span>}
                   <div className="min-w-0">
                     <b className="block truncate text-sm">{displayName}</b>
-                    <small className="block text-[10px] text-slate-400">
-                      {area === 'super' ? '超级管理员' : '个人工作区'}
-                    </small>
+                    <small className="block truncate text-[10px] text-slate-400">ID · {user.id || '—'}</small>
                   </div>
                 </div>
                 <dl className="my-4 space-y-2 border-y border-slate-100 py-3 text-[11px] dark:border-slate-700">
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-400">登录账号</dt>
-                    <dd className="m-0 max-w-36 truncate font-bold text-slate-700 dark:text-slate-100">
-                      {user.username || '—'}
-                    </dd>
-                  </div>
                   {user.phone && (
                     <div className="flex items-center justify-between gap-3">
                       <dt className="text-slate-400">手机号</dt>
@@ -342,29 +332,12 @@ export function Shell({
                       {walletLoading ? (
                         '同步中'
                       ) : (
-                        <>
-                          <XCoinMark />
-                          {((wallet?.balanceFen ?? 0) / 100).toFixed(2)} XCoin
-                        </>
+                        <XCoinAmount value={((wallet?.balanceFen ?? 0) / 100).toFixed(2)} />
                       )}
                     </dd>
-                    <button
-                      type="button"
-                      onClick={() => setRechargeOpen(true)}
-                      className="rounded px-2 py-1 text-[10px] font-bold text-blue-700 hover:bg-blue-50 dark:text-blue-200 dark:hover:bg-blue-950"
-                    >
-                      充值
-                    </button>
                   </div>
                 </dl>
-                <a
-                  href="https://auth.alemonjs.com"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex min-h-10 w-full items-center justify-between rounded-md px-3 text-xs font-bold text-blue-700 hover:bg-blue-50 dark:text-blue-200 dark:hover:bg-blue-950"
-                >
-                  安全中心 <span aria-hidden="true">↗</span>
-                </a>
+                <div className="grid grid-cols-2 gap-1"><button type="button" onClick={() => setRechargeOpen(true)} className="flex min-h-10 items-center justify-between rounded-md px-3 text-xs font-bold text-blue-700 hover:bg-blue-50 dark:text-blue-200 dark:hover:bg-blue-950">充值 <span aria-hidden="true">↗</span></button><a href="https://auth.alemonjs.com" target="_blank" rel="noreferrer" className="flex min-h-10 items-center justify-between rounded-md px-3 text-xs font-bold text-blue-700 hover:bg-blue-50 dark:text-blue-200 dark:hover:bg-blue-950">安全中心 <span aria-hidden="true">↗</span></a></div>
                 <Button
                   tone="danger"
                   className="mt-2 w-full"
@@ -374,42 +347,10 @@ export function Shell({
                 </Button>
               </div>
             )}
-            {rechargeOpen && (
-              <Dialog
-                title="人工充值"
-                description="当前仅限人工充值，请点击加入售前咨询群联系官方人员。"
-                onClose={() => setRechargeOpen(false)}
-              >
-                <div className="space-y-4">
-                  {rechargeContact?.url ? (
-                    <a
-                      href={rechargeContact.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex min-h-11 items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200"
-                    >
-                      {rechargeContact.name}
-                      <span aria-hidden="true">↗</span>
-                    </a>
-                  ) : (
-                    <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-950 dark:text-amber-100">
-                      售前咨询群暂未配置，请联系平台管理员。
-                    </p>
-                  )}
-                  <div className="flex justify-end">
-                    <Button
-                      tone="secondary"
-                      onClick={() => setRechargeOpen(false)}
-                    >
-                      关闭
-                    </Button>
-                  </div>
-                </div>
-              </Dialog>
-            )}
           </div>
         </div>
       </aside>
+      {rechargeOpen && <Dialog title="人工充值" description="当前仅限人工充值，请点击加入售前咨询群联系官方人员。" onClose={() => setRechargeOpen(false)}><div className="space-y-4">{rechargeContact?.url ? <a href={rechargeContact.url} target="_blank" rel="noreferrer" className="flex min-h-11 items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">{rechargeContact.name}<span aria-hidden="true">↗</span></a> : <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-950 dark:text-amber-100">售前咨询群暂未配置，请联系平台管理员。</p>}<div className="flex justify-end"><Button tone="secondary" onClick={() => setRechargeOpen(false)}>关闭</Button></div></div></Dialog>}
       <main className="min-w-0 flex-1">
         <header className="sticky top-0 z-20 flex h-13 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur dark:border-slate-700 dark:bg-slate-950/95 sm:px-7">
           <button

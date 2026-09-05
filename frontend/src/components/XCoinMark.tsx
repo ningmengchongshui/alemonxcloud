@@ -1,4 +1,5 @@
 import classNames from 'classnames'
+import type { ReactNode } from 'react'
 
 export function XCoinMark({
   className,
@@ -34,4 +35,8 @@ export function XCoinMark({
       />
     </svg>
   )
+}
+
+export function XCoinAmount({ value, className }: { value: ReactNode; className?: string }) {
+  return <span className={classNames('inline-flex items-center gap-1 whitespace-nowrap', className)}><XCoinMark />{value}</span>
 }

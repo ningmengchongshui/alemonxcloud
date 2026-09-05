@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useDispatch } from 'react-redux'
 import { ActionDialog } from '@/components/ActionDialog'
 import {
   Alert,
@@ -10,6 +11,7 @@ import {
 } from '@/components/ui'
 import { useInstanceActionMutation } from '@/services/cloudApi'
 import { trackConsoleEvent } from '@/services/telemetry'
+import { watchTask } from '@/store/uiSlice'
 import type { Instance } from '@/types/cloud'
 
 type InstanceAction = 'start' | 'stop' | 'restart' | 'delete'
@@ -58,6 +60,7 @@ export function InstancesPage({
     action: InstanceAction
   } | null>(null)
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
+  const dispatch = useDispatch()
   const sorted = [...instances].sort(
     (left, right) =>
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
@@ -73,12 +76,15 @@ export function InstancesPage({
     })
     void operate(value)
       .unwrap()
-      .then(() => {
+      .then(response => {
         trackConsoleEvent('instance_action', 'me', 'instances', {
           action: value.action,
           result: 'success',
           durationMs: performance.now() - started
         })
+        dispatch(
+          watchTask({ id: response.task.id, action: response.task.action })
+        )
         setPending(null)
       })
       .catch(() => {

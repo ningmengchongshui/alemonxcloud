@@ -130,6 +130,28 @@ func readAllNotificationsHandler(c *gin.Context) {
 	}
 	c.Status(http.StatusNoContent)
 }
+func taskStatusHandler(c *gin.Context) {
+	user := c.MustGet("user").(oidcUser)
+	task, err := loadTask(c.Request.Context(), c.Param("id"))
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
+		return
+	}
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	var ownerID string
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT owner_id FROM xcloud_instances WHERE id=?`, task.InstanceID).Scan(&ownerID); err != nil {
+		internalError(c, err)
+		return
+	}
+	if ownerID != user.ID {
+		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
 func instanceTasksHandler(c *gin.Context) {
 	if _, ok := ownedInstance(c); !ok {
 		return

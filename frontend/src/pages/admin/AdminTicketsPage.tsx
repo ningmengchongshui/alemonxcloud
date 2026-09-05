@@ -15,6 +15,7 @@ import {
   PageHeader,
   StatusBadge
 } from '@/components/ui'
+import { TicketReplyComposer } from '@/components/TicketReplyComposer'
 import type { TicketPriority, TicketStatus } from '@/types/cloud'
 
 const stateLabel: Record<TicketStatus, string> = {
@@ -275,35 +276,24 @@ function AdminTicketDetail({ id, onBack }: { id: string; onBack: () => void }) {
         ))}
       </div>
       {ticket.status !== 'closed' && (
-        <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-          <label>
-            <span className="flex items-center justify-between">
-              <span>回复用户</span>
-              <small className="text-slate-400">{reply.length}/4000</small>
-            </span>
-            <textarea
-              rows={4}
-              maxLength={4000}
-              value={reply}
-              onChange={event => setReply(event.target.value)}
-              placeholder="请输入处理结果或需要用户补充的信息"
-            />
-          </label>
-          <div className="mt-3 flex justify-end">
-            <Button
-              loading={sending}
-              disabled={!reply.trim()}
-              onClick={() =>
-                void send({ id, body: reply })
-                  .unwrap()
-                  .then(() => setReply(''))
-                  .catch(value => setError(value?.data?.message ?? '回复失败'))
-              }
-            >
-              发送回复
-            </Button>
-          </div>
-        </div>
+        <TicketReplyComposer
+          title="回复用户"
+          helper="说明处理结果、下一步安排，或请用户补充必要的信息。"
+          placeholder="请输入处理结果或需要用户补充的信息"
+          value={reply}
+          error={error}
+          sending={sending}
+          onChange={value => {
+            setReply(value)
+            setError('')
+          }}
+          onSubmit={() =>
+            void send({ id, body: reply })
+              .unwrap()
+              .then(() => setReply(''))
+              .catch(value => setError(value?.data?.message ?? '回复失败'))
+          }
+        />
       )}
     </section>
   )

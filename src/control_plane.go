@@ -679,7 +679,6 @@ func finishTask(ctx context.Context, task controlTask, err error) error {
 		_, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=NULL,finished_at=NOW(),updated_at=NOW() WHERE id=?`, taskDone, task.ID)
 		if e == nil {
 			appendTaskEvent(ctx, task.ID, "succeeded", "任务执行成功")
-			notifyTaskOutcome(ctx, task, "任务执行成功", "实例操作已完成", false)
 		}
 		return e
 	}
@@ -688,7 +687,6 @@ func finishTask(ctx context.Context, task controlTask, err error) error {
 		_, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,finished_at=NOW(),updated_at=NOW() WHERE id=?`, taskFailed, message, task.ID)
 		if e == nil {
 			appendTaskEvent(ctx, task.ID, "dead_letter", message)
-			notifyTaskOutcome(ctx, task, "任务执行失败", message, true)
 		}
 		return e
 	}
@@ -698,17 +696,6 @@ func finishTask(ctx context.Context, task controlTask, err error) error {
 		appendTaskEvent(ctx, task.ID, "retry", message)
 	}
 	return e
-}
-func notifyTaskOutcome(ctx context.Context, task controlTask, title, body string, failed bool) {
-	var owner, instanceID string
-	if err := instanceDB.QueryRowContext(ctx, `SELECT owner_id,id FROM xcloud_instances WHERE id=?`, task.InstanceID).Scan(&owner, &instanceID); err != nil {
-		return
-	}
-	kind := "task"
-	if failed {
-		kind = "task_failed"
-	}
-	_ = createNotification(ctx, owner, kind, title, body, map[string]any{"taskId": task.ID, "instanceId": instanceID, "action": task.Action})
 }
 func truncateError(value string) string {
 	value = strings.TrimSpace(value)

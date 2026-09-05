@@ -1,5 +1,5 @@
 import { EmptyState, LoadingState, PageHeader } from '@/components/ui'
-import { XCoinMark } from '@/components/XCoinMark'
+import { XCoinAmount } from '@/components/XCoinMark'
 import {
   useGetWalletEntriesQuery,
   useGetWalletQuery
@@ -44,10 +44,7 @@ export function WalletPage() {
               {walletLoading ? (
                 '—'
               ) : (
-                <>
-                  <XCoinMark />
-                  {((wallet?.balanceFen ?? 0) / 100).toFixed(2)} XCoin
-                </>
+                <XCoinAmount value={((wallet?.balanceFen ?? 0) / 100).toFixed(2)} />
               )}
             </strong>
           </p>

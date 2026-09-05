@@ -64,7 +64,7 @@ export const cloudApi = createApi({
       providesTags: ['Instances']
     }),
     instanceAction: builder.mutation<
-      void,
+      { task: Task; message?: string },
       { id: string; action: 'start' | 'stop' | 'restart' | 'delete' }
     >({
       query: ({ id, action }) => ({
@@ -157,6 +157,9 @@ export const cloudApi = createApi({
     }),
     getInstanceTasks: builder.query<Array<{ task: Task }>, string>({
       query: id => `/instances/${id}/tasks`
+    }),
+    getTask: builder.query<Task, string>({
+      query: id => `/tasks/${id}`
     }),
     getOrders: builder.query<Order[], void>({
       query: () => '/orders',
@@ -480,6 +483,7 @@ export const {
   useReadNotificationMutation,
   useReadAllNotificationsMutation,
   useGetInstanceTasksQuery,
+  useGetTaskQuery,
   useGetOrdersQuery,
   useGetTicketsQuery,
   useGetTicketQuery,

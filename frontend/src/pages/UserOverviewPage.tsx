@@ -1,6 +1,6 @@
 import { useGetWalletQuery } from '@/services/cloudApi'
 import { Button, InlineAction, PageHeader } from '@/components/ui'
-import { XCoinMark } from '@/components/XCoinMark'
+import { XCoinAmount } from '@/components/XCoinMark'
 import type { Instance } from '@/types/cloud'
 
 function isRunning(status: string) {
@@ -54,10 +54,7 @@ export function UserOverviewPage({
           余额{' '}
           <b className="inline-flex items-center gap-1 text-slate-900 dark:text-white">
             {wallet ? (
-              <>
-                <XCoinMark />
-                {(wallet.balanceFen / 100).toFixed(2)} XCoin
-              </>
+              <XCoinAmount value={(wallet.balanceFen / 100).toFixed(2)} />
             ) : (
               '同步中'
             )}

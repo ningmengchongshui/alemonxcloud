@@ -17,6 +17,7 @@ import {
   PageHeader,
   StatusBadge
 } from '@/components/ui'
+import { TicketReplyComposer } from '@/components/TicketReplyComposer'
 import type { Ticket, TicketCategory, TicketPriority } from '@/types/cloud'
 
 const categoryLabels: Record<TicketCategory, string> = {
@@ -403,36 +404,24 @@ function TicketConversation({
           </Button>
         </div>
       ) : (
-        <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-          <label>
-            <span className="flex items-center justify-between">
-              <span>补充回复</span>
-              <small className="text-slate-400">{reply.length}/4000</small>
-            </span>
-            <textarea
-              rows={4}
-              maxLength={4000}
-              value={reply}
-              onChange={event => setReply(event.target.value)}
-              placeholder="补充问题或回复管理员"
-            />
-          </label>
-          {error && <Alert tone="error">{error}</Alert>}
-          <div className="mt-3 flex justify-end">
-            <Button
-              loading={sending}
-              disabled={!reply.trim()}
-              onClick={() =>
-                void send({ id, body: reply })
-                  .unwrap()
-                  .then(() => setReply(''))
-                  .catch(value => setError(value?.data?.message ?? '回复失败'))
-              }
-            >
-              发送回复
-            </Button>
-          </div>
-        </div>
+        <TicketReplyComposer
+          title="补充回复"
+          helper="补充现象、操作结果或继续回复管理员，便于快速处理。"
+          placeholder="请补充问题信息或回复管理员"
+          value={reply}
+          error={error}
+          sending={sending}
+          onChange={value => {
+            setReply(value)
+            setError('')
+          }}
+          onSubmit={() =>
+            void send({ id, body: reply })
+              .unwrap()
+              .then(() => setReply(''))
+              .catch(value => setError(value?.data?.message ?? '回复失败'))
+          }
+        />
       )}
     </section>
   )

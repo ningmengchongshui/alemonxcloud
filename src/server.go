@@ -128,6 +128,7 @@ func Run() {
 	router.POST("/api/telemetry/console-events", requireSession, consoleTelemetryHandler)
 	router.POST("/api/notifications/read-all", requireSession, readAllNotificationsHandler)
 	router.POST("/api/notifications/:id/read", requireSession, readNotificationHandler)
+	router.GET("/api/tasks/:id", requireSession, taskStatusHandler)
 	router.GET("/api/instances/:id/tasks", requireSession, instanceTasksHandler)
 	router.GET("/api/orders", requireSession, myOrders)
 	router.GET("/api/tickets", requireSession, myTicketsHandler)

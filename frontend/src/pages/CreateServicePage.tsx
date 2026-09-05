@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useDispatch } from 'react-redux'
 import {
   useGetWalletQuery,
   useGetPromotionsQuery,
@@ -14,6 +15,7 @@ import {
   PageHeader
 } from '@/components/ui'
 import { trackConsoleEvent } from '@/services/telemetry'
+import { watchTask } from '@/store/uiSlice'
 import type { Catalog, Plan, PriceQuote } from '@/types/cloud'
 
 const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`
@@ -76,6 +78,7 @@ export function CreateServicePage({
   const { data: wallet } = useGetWalletQuery()
   const { data: promotions = [] } = useGetPromotionsQuery()
   const [claimPromotion] = useClaimPromotionMutation()
+  const dispatch = useDispatch()
   const images = catalog?.images ?? []
   const imageSources = images
   const selectedRef = imageRef || imageSources[0]?.imageRef || ''
@@ -135,11 +138,12 @@ export function CreateServicePage({
       payFullPrice
     })
       .unwrap()
-      .then(() => {
+      .then(value => {
         trackConsoleEvent('create_service', 'me', 'create', {
           result: 'success',
           durationMs: performance.now() - started
         })
+        dispatch(watchTask({ id: value.task.id, action: value.task.action }))
         onCreated()
       })
       .catch(value => {
