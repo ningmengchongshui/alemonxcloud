@@ -6,14 +6,19 @@ import (
 )
 
 func TestInstanceComposeCarriesPlanLimitsAndRuntimeTuning(t *testing.T) {
-	compose := instanceCompose(createRequest{Name: "xcloud-12345678", Image: "registry.example/alemonx:latest", CPU: 4, MemoryMB: 8192, BandwidthMbps: 10, Route: "r0123456789abcdef"}, "/data/xcloud-12345678", "/data/xcloud-12345678/workspace")
-	for _, expected := range []string{"container_name: \"xcloud-12345678\"", "cpus: \"4\"", "mem_limit: \"8192m\"", "memswap_limit: \"8192m\"", "pids_limit: 512", "cgroup: private", "GOMAXPROCS: \"4\"", "NODE_OPTIONS: \"--max-old-space-size=6144\"", "xcloud.bandwidth_mbps: \"10\"", "xcloud.route: \"r0123456789abcdef\""} {
+	compose := instanceCompose(createRequest{Name: "xcloud-12345678", Image: "registry.example/alemonx:latest", CPU: 4, MemoryMB: 8192, BandwidthMbps: 10, Route: "r0123456789abcdef"}, "/data/xcloud-12345678/data", "/data/xcloud-12345678/workspace")
+	for _, expected := range []string{"container_name: \"xcloud-12345678\"", "cpus: \"4\"", "mem_limit: \"8192m\"", "memswap_limit: \"8192m\"", "GOMAXPROCS: \"4\"", "NODE_OPTIONS: \"--max-old-space-size=6144\"", "xcloud.bandwidth_mbps: \"10\"", "xcloud.route: \"r0123456789abcdef\"", "\"/data/xcloud-12345678/data:/root\"", "\"/data/xcloud-12345678/workspace:/app/workspace\""} {
 		if !strings.Contains(compose, expected) {
 			t.Fatalf("compose missing %q:\n%s", expected, compose)
 		}
 	}
 	if strings.Contains(compose, "ports:") {
 		t.Fatal("user container must not publish host ports")
+	}
+	for _, incompatible := range []string{"cap_drop:", "no-new-privileges", "cgroup: private", "pids_limit:"} {
+		if strings.Contains(compose, incompatible) {
+			t.Fatalf("official AlemonX runtime must not add %q:\n%s", incompatible, compose)
+		}
 	}
 }
 
