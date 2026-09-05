@@ -347,9 +347,6 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 			return node{}, err
 		}
 		_ = json.Unmarshal(capabilities, &n.AgentCapabilities)
-		if !n.supportsAgentCapability("network.bandwidth.v1") || !n.supportsAgentCapability("network.bandwidth.status.v1") || !n.supportsAgentCapability("network.bandwidth.queue.v1") {
-			continue
-		}
 		candidates = append(candidates, n)
 	}
 	if err := rows.Err(); err != nil {

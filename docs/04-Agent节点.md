@@ -9,7 +9,7 @@ Agent 运行在裸机上，负责 Docker 容器、镜像、资源探测与实例
 docker network create xcloud_network
 sudo dnf install -y iproute util-linux # Debian/Ubuntu 使用 apt install iproute2 util-linux
 sudo chmod -R 777 /var/lib/xcloud/instances
-make agent-build VERSION=v1.0.4
+make agent-build VERSION=v1.0.5
 sudo ./agent/xcloud-agent
 systemctl status xcloud-agent
 ```
@@ -21,8 +21,9 @@ AGENT_ADDR=0.0.0.0:13092
 XCLOUD_AGENT_TOKEN=<本节点独立令牌>
 XCLOUD_DOCKER_NETWORK=xcloud_network
 XCLOUD_INSTANCE_DATA_ROOT=/var/lib/xcloud/instances
-# 套餐速率可在节点空闲时借用带宽；默认允许 4 倍突发。
-XCLOUD_BANDWIDTH_BURST_MULTIPLIER=4
+# 默认不对用户流量进行整形。只有完成隔离压测后才可显式开启：
+# XCLOUD_ENABLE_BANDWIDTH_SHAPING=true
+# XCLOUD_BANDWIDTH_BURST_MULTIPLIER=4
 ```
 
 仅本地运行可使用 `./agent/xcloud-agent --serve`。
@@ -41,11 +42,11 @@ curl -H "Authorization: Bearer <本节点令牌>" http://127.0.0.1:13092/contain
 | 能力 | 接口 | 用途 |
 | --- | --- | --- |
 | 节点资源 | `GET /container/status` | Docker 版本、CPU、内存、磁盘、托管容器数量、协议能力 |
-| 容器生命周期 | `POST /container/create`、`/:name/start`、`/:name/stop`、`/:name/restart`、`/:name/destroy`、`DELETE /:name?purge=true` | 创建、启停、重启、销毁运行资源，或在保留期后清理数据 |
+| 容器生命周期 | `POST /container/create`、`/:name/start`、`/:name/stop`、`/:name/restart`、`/:name/destroy`、`DELETE /:name?purge=true` | 创建、启停、按当前控制面配置重建重启、销毁运行资源，或在保留期后清理数据 |
 | 容器查询 | `GET /container`、`/:name/status`、`/:name/inspect`、`/:name/logs` | 托管容器清单、运行/健康、有限元数据、最近 200 行日志 |
 | 镜像管理 | `POST /container/pull`、`GET /container/images`、`GET /container/images/inspect?image=` | 预拉取、查看节点本地镜像和验证摘要 |
 | 实例访问 | 非控制路径 + `X-Route-Key` | 仅按受控路由键反代到受管容器，不公开宿主机端口 |
-| 带宽上限 | `network.bandwidth.v1`、`network.bandwidth.status.v1`、`network.bandwidth.queue.v1`、`POST /container/:name/bandwidth` | 服务出口以套餐速率稳定运行，节点空闲时可按配置突发借用带宽；拥塞时 FQ-CoDel 公平回落；安装、下载等普通服务器流量不受套餐限速影响 |
+| 带宽上限 | `network.bandwidth.v1`、`network.bandwidth.status.v1`、`network.bandwidth.queue.v1`、`POST /container/:name/bandwidth` | 默认关闭，套餐带宽仅作展示；仅在完成隔离压测并显式启用后，才以服务出口整形方式执行 |
 
 控制面不会用“接口是否返回 404”来猜 Agent 是否需要更新。未声明某项能力的节点保留既有生命周期服务，但新功能会显示为不支持并跳过。例如镜像版本的“预拉取”只会调用声明 `image.pull.v1` 的节点。
 
@@ -73,7 +74,10 @@ Agent 使用该文件执行 `docker compose up -d`。配置包含套餐 CPU、�
 限制，私有 cgroup namespace，Go/Node/Python 的运行时并发参数，健康检查、
 路由标签和数据卷。用户容器不声明 `ports`，也不挂载 Docker socket。
 
-可以人工查看该文件排障；平台重新创建同一实例时会依据控制面套餐重新生成。
+可以人工查看该文件排障；平台重新创建或从用户实例页执行“重启”时，都会依据
+控制面保存的当前实例配置重新生成。重启会强制重建运行容器，但保留数据目录；它
+不会拉取新镜像，也不会改变实例选择的版本标记或订单中的镜像快照。需要获得同一
+版本标记的最新镜像时，必须由用户明确执行“更新实例”。
 
 ## 安全要求
 

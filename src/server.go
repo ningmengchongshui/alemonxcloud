@@ -350,6 +350,7 @@ func instanceGateway(c *gin.Context) {
 	}
 	c.Request.Header.Set("X-Route-Key", route)
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.FlushInterval = -1
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
 		log.Printf("instance gateway %s: %v", route, e)
 		http.Error(w, "实例暂不可用", http.StatusBadGateway)

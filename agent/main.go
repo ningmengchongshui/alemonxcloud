@@ -58,6 +58,7 @@ var agentCapabilities = []string{
 	"container.logs.v1",
 	"container.list.v1",
 	"container.compose.v1",
+	"container.compose.restart.v1",
 	"container.destroy.v1",
 	"image.pull.v1",
 	"image.inspect.v1",
@@ -140,6 +141,8 @@ func runServer() {
 	// See docs/03-部署指南.md for the required allow rule.
 	address := env("AGENT_ADDR", "0.0.0.0:13092")
 	go reconcileBandwidthLoop()
+	refreshRouteTargetCache(context.Background())
+	go refreshRouteTargetCacheLoop()
 	log.Printf("xcloud agent listening on %s", address)
 	if err := r.Run(address); err != nil {
 		log.Fatal(err)
@@ -366,7 +369,7 @@ func requireControlToken(c *gin.Context) {
 
 func createContainer(c *gin.Context) {
 	var input createRequest
-	if c.ShouldBindJSON(&input) != nil || !safeContainerName.MatchString(input.Name) || !safeRouteKey.MatchString(input.Route) || !validManagedImage(input.Image) || input.CPU <= 0 || input.CPU > 64 || input.MemoryMB < 256 || input.MemoryMB > 262144 || input.BandwidthMbps < 1 || input.BandwidthMbps > 10000 {
+	if c.ShouldBindJSON(&input) != nil || !validCreateRequest(input) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "容器参数无效"})
 		return
 	}
@@ -375,6 +378,7 @@ func createContainer(c *gin.Context) {
 	if _, err := docker(ctx, "inspect", input.Name); err == nil {
 		// A worker may retry after the Docker command succeeded but before its
 		// database acknowledgement. Treat the managed name as an idempotent key.
+		cacheRouteTarget(ctx, input.Name, input.Route)
 		respondWithBandwidthStatus(c, http.StatusOK, input.Name, "existing", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
 		return
 	}
@@ -393,6 +397,7 @@ func createContainer(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 创建容器失败"})
 		return
 	}
+	cacheRouteTarget(ctx, input.Name, input.Route)
 	// Resource availability comes first. A transient traffic-control failure
 	// must never turn a successful deployment into a destroyed container.
 	respondWithBandwidthStatus(c, http.StatusCreated, input.Name, "running", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
@@ -467,6 +472,12 @@ func hostVethForContainer(name string) (string, error) {
 }
 
 func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
+	if !bandwidthShapingEnabled() {
+		// Traffic shaping is opt-in. Clearing the old qdiscs during a rollout is
+		// essential: otherwise a new Agent binary would leave a broken legacy
+		// rule attached to an otherwise healthy instance.
+		return clearBandwidthLimit(ctx, name)
+	}
 	if !bandwidthToolsAvailable() {
 		return errors.New("tc/ip/nsenter unavailable")
 	}
@@ -496,6 +507,10 @@ func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 	// The plan value is a stable shared rate, not a permanent ceiling. When the
 	// node is idle HTB lets a user borrow unused capacity up to the burst ceil.
 	return applyQueuedRate(ctx, ifb, mbps, burstBandwidthMbps(mbps))
+}
+
+func bandwidthShapingEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(env("XCLOUD_ENABLE_BANDWIDTH_SHAPING", "false")), "true")
 }
 
 func burstBandwidthMbps(stableMbps int) int {
@@ -638,9 +653,46 @@ func composeProject(route string) string    { return "xcloud-" + route }
 func yamlString(value string) string        { encoded, _ := json.Marshal(value); return string(encoded) }
 func envString(key, fallback string) string { return env(key, fallback) }
 
-func startContainer(c *gin.Context)   { containerAction(c, "start") }
-func stopContainer(c *gin.Context)    { containerAction(c, "stop") }
-func restartContainer(c *gin.Context) { containerAction(c, "restart") }
+func startContainer(c *gin.Context) { containerAction(c, "start") }
+func stopContainer(c *gin.Context)  { containerAction(c, "stop") }
+func restartContainer(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	var input createRequest
+	if c.ShouldBindJSON(&input) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "重启需要当前实例配置"})
+		return
+	}
+	input.Name = name // The URL is the authority for the managed container name.
+	if !validCreateRequest(input) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "实例 Compose 配置无效"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
+	defer cancel()
+	dataDir := filepath.Join(env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances"), input.Name)
+	workspaceDir := filepath.Join(dataDir, "workspace")
+	if err := os.MkdirAll(workspaceDir, 0750); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法准备实例数据目录"})
+		return
+	}
+	composePath := filepath.Join(dataDir, "docker-compose.yml")
+	if err := writeFileAtomically(composePath, []byte(instanceCompose(input, dataDir, workspaceDir)), 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法写入实例 Compose 配置"})
+		return
+	}
+	// Restart is a desired-state reconciliation: regenerate the managed Compose
+	// file and recreate the service. --pull never is intentional; image updates
+	// are an explicit user action and must not be smuggled into a restart.
+	if _, err := docker(ctx, "compose", "-p", composeProject(input.Route), "-f", composePath, "up", "-d", "--pull", "never", "--force-recreate", "--remove-orphans"); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 重启容器失败"})
+		return
+	}
+	cacheRouteTarget(ctx, input.Name, input.Route)
+	respondWithBandwidthStatus(c, http.StatusOK, input.Name, "restarted", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
+}
 func deleteContainer(c *gin.Context) {
 	name, ok := checkedName(c)
 	if !ok {
@@ -832,7 +884,7 @@ func agentStatus(c *gin.Context) {
 		}
 	}
 	queueCheck, queueCancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-	toolsReady := bandwidthQueueReady(queueCheck)
+	toolsReady := bandwidthShapingEnabled() && bandwidthQueueReady(queueCheck)
 	queueCancel()
 	capabilities := make([]string, 0, len(agentCapabilities))
 	for _, capability := range agentCapabilities {
@@ -891,6 +943,10 @@ func containerAction(c *gin.Context, action string) {
 	}
 	c.JSON(http.StatusOK, gin.H{"name": name, "status": action, "bandwidthApplied": true})
 }
+
+func validCreateRequest(input createRequest) bool {
+	return safeContainerName.MatchString(input.Name) && safeRouteKey.MatchString(input.Route) && validManagedImage(input.Image) && input.CPU > 0 && input.CPU <= 64 && input.MemoryMB >= 256 && input.MemoryMB <= 262144 && input.BandwidthMbps >= 1 && input.BandwidthMbps <= 10000
+}
 func checkedName(c *gin.Context) (string, bool) {
 	name := c.Param("name")
 	if !safeContainerName.MatchString(name) {
@@ -908,13 +964,21 @@ func proxyContainer(c *gin.Context) {
 	}
 	ip, err := resolveRouteTarget(c.Request.Context(), route)
 	if err != nil {
+		log.Printf("resolve instance route %s: %v", route, err)
 		c.JSON(http.StatusBadGateway, gin.H{"message": "实例网络暂不可用"})
 		return
 	}
 	target, _ := url.Parse("http://" + ip + ":17390")
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
-		invalidateRouteTarget(route)
+	// Terminals stream output and upgrade to WebSocket. Flush immediately rather
+	// than waiting for the reverse proxy's normal response buffering cadence.
+	proxy.FlushInterval = -1
+	proxy.ErrorHandler = func(w http.ResponseWriter, request *http.Request, err error) {
+		log.Printf("instance proxy route=%s method=%s path=%s: %v", route, request.Method, request.URL.Path, err)
+		// A client cancelling a terminal stream, a WebSocket reconnect, or a
+		// transient upstream reset does not mean the container changed IP. The
+		// previous invalidation turned ordinary long-connection churn into a
+		// Docker lookup storm and cascaded 502s for every subsequent request.
 		http.Error(w, "实例暂不可用", http.StatusBadGateway)
 	}
 	c.Request.Header.Del("X-Route-Key")
@@ -1007,9 +1071,73 @@ func finishRouteTargetLookup(route string, wait chan struct{}, ip string, err er
 	routeTargetCache.Unlock()
 }
 
-func invalidateRouteTarget(route string) {
+func refreshRouteTargetCacheLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		refreshRouteTargetCache(context.Background())
+	}
+}
+
+// refreshRouteTargetCache uses one docker ps and one batched docker inspect;
+// it never runs from a user request. This is especially important for browser
+// terminals, which open several HTTP and WebSocket requests at once.
+func refreshRouteTargetCache(ctx context.Context) {
+	lookup, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	output, err := docker(lookup, "ps", "--filter", "label=xcloud.managed=true", "--format", "{{.Names}}|{{.Label \"xcloud.route\"}}")
+	if err != nil {
+		log.Printf("refresh instance routes: %v", err)
+		return
+	}
+	routesByName := map[string]string{}
+	names := make([]string, 0)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 || !safeContainerName.MatchString(parts[0]) || !safeRouteKey.MatchString(parts[1]) {
+			continue
+		}
+		routesByName[parts[0]] = parts[1]
+		names = append(names, parts[0])
+	}
+	if len(names) == 0 {
+		return
+	}
+	args := append([]string{"inspect", "--format", "{{.Name}}|{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"}, names...)
+	output, err = docker(lookup, args...)
+	if err != nil {
+		log.Printf("refresh instance route IPs: %v", err)
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		name := strings.TrimPrefix(strings.TrimSpace(parts[0]), "/")
+		route := routesByName[name]
+		ip := strings.TrimSpace(parts[1])
+		if route != "" && net.ParseIP(ip) != nil {
+			storeRouteTarget(route, ip)
+		}
+	}
+}
+
+func cacheRouteTarget(ctx context.Context, name, route string) {
+	if !safeContainerName.MatchString(name) || !safeRouteKey.MatchString(route) {
+		return
+	}
+	output, err := docker(ctx, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name)
+	ip := strings.TrimSpace(output)
+	if err == nil && net.ParseIP(ip) != nil {
+		storeRouteTarget(route, ip)
+	}
+}
+
+func storeRouteTarget(route, ip string) {
+	now := time.Now()
 	routeTargetCache.Lock()
-	delete(routeTargetCache.values, route)
+	routeTargetCache.values[route] = cachedRouteTarget{ip: ip, expiresAt: now.Add(time.Minute), staleUntil: now.Add(10 * time.Minute)}
 	routeTargetCache.Unlock()
 }
 

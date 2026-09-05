@@ -912,20 +912,12 @@ func executeTask(ctx context.Context, task controlTask) error {
 	}
 	switch task.Action {
 	case "create":
-		var cpu float64
-		var memoryMB, bandwidthMbps int
-		err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb,bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB, &bandwidthMbps)
-		if err != nil {
-			return err
+		payload, payloadErr := instanceRuntimePayload(ctx, item.ID, item.ContainerName, route)
+		if payloadErr != nil {
+			return payloadErr
 		}
-		var imageRef, digest, selectedVersion string
-		err = instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(ins.image_digest,o.selected_image_digest,i.image_digest,''),COALESCE(ins.version,o.selected_image_version,i.version) FROM xcloud_instances ins JOIN xcloud_orders o ON o.instance_id=ins.id JOIN xcloud_images i ON i.id=o.image_id WHERE ins.id=? ORDER BY o.created_at DESC LIMIT 1`, item.ID).Scan(&imageRef, &digest, &selectedVersion)
-		if err != nil {
-			return err
-		}
-		image := deploymentImage(imageRef, selectedVersion, digest)
 		var lifecycleResult agentLifecycleResult
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": image, "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, &lifecycleResult)
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", payload, &lifecycleResult)
 		if err == nil {
 			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"
@@ -964,16 +956,17 @@ func executeTask(ctx context.Context, task controlTask) error {
 			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
 		}
 	case "restart":
-		// The Agent deliberately exposes only the primitive lifecycle calls.  A
-		// restart remains an auditable persisted task while preserving that small
-		// Agent surface: stop must complete before start is attempted.
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
+		if !n.supportsAgentCapability("container.compose.restart.v1") {
+			return errors.New("节点 Agent 尚未支持按 Compose 配置重启，请先升级该节点 Agent")
+		}
+		payload, payloadErr := instanceRuntimePayload(ctx, item.ID, item.ContainerName, route)
+		if payloadErr != nil {
+			return payloadErr
+		}
+		var lifecycleResult agentLifecycleResult
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/restart", payload, &lifecycleResult)
 		if err == nil {
-			var lifecycleResult agentLifecycleResult
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, &lifecycleResult)
-			if err == nil {
-				persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
-			}
+			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 		}
 		if err == nil {
 			runtime := "running"
@@ -1040,6 +1033,23 @@ func executeTask(ctx context.Context, task controlTask) error {
 		return errors.New("未知任务动作")
 	}
 	return err
+}
+
+// instanceRuntimePayload is the single source of desired Compose state for
+// creation and restart. It deliberately reads the order's immutable image
+// snapshot: a restart applies current platform configuration, while a user
+// initiated update is the only operation allowed to pull a newer image.
+func instanceRuntimePayload(ctx context.Context, instanceID, containerName, route string) (map[string]any, error) {
+	var cpu float64
+	var memoryMB, bandwidthMbps int
+	if err := instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb,bandwidth_mbps FROM xcloud_instances WHERE id=?`, instanceID).Scan(&cpu, &memoryMB, &bandwidthMbps); err != nil {
+		return nil, err
+	}
+	var imageRef, digest, selectedVersion string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(ins.image_digest,o.selected_image_digest,i.image_digest,''),COALESCE(ins.version,o.selected_image_version,i.version) FROM xcloud_instances ins JOIN xcloud_orders o ON o.instance_id=ins.id JOIN xcloud_images i ON i.id=o.image_id WHERE ins.id=? ORDER BY o.created_at DESC LIMIT 1`, instanceID).Scan(&imageRef, &digest, &selectedVersion); err != nil {
+		return nil, err
+	}
+	return map[string]any{"name": containerName, "image": deploymentImage(imageRef, selectedVersion, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, nil
 }
 
 func executePurgeTask(ctx context.Context, instanceID, containerName string, n node) error {
