@@ -756,8 +756,12 @@ func containerAction(c *gin.Context, action string) {
 		raw, err := docker(ctx, "inspect", "-f", "{{ index .Config.Labels \"xcloud.bandwidth_mbps\" }}", name)
 		mbps, parseErr := strconv.Atoi(strings.TrimSpace(raw))
 		if err != nil || parseErr != nil || mbps < 1 || applyBandwidthLimit(ctx, name, mbps) != nil {
-			_, _ = docker(ctx, "stop", name)
-			c.JSON(http.StatusBadGateway, gin.H{"message": "带宽规则恢复失败，容器已停止"})
+			// A bandwidth rule is an operational safeguard, not a reason to undo a
+			// successful user-requested start. Stopping here made a stopped instance
+			// impossible to recover when a node temporarily lost tc/ip/nsenter or its
+			// veth could not be resolved. The periodic reconciler can retry later.
+			log.Printf("bandwidth restore warning for %s after %s: inspect=%v parse=%v mbps=%d", name, action, err, parseErr, mbps)
+			c.JSON(http.StatusOK, gin.H{"name": name, "status": action, "bandwidthWarning": "带宽规则恢复失败，已保留容器运行，系统将自动重试"})
 			return
 		}
 	}
