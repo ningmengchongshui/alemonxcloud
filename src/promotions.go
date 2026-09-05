@@ -56,12 +56,15 @@ type couponClaim struct {
 	ClaimedAt   time.Time `json:"claimedAt"`
 }
 type priceCandidate struct {
-	ID, Kind, Name                      string
-	CouponCode                          string `json:"-"`
-	DiscountAmountFen, PayableAmountFen int
-	IsDefault                           bool
-	Label                               string `json:"label"`
-	EligibilityReason                   string `json:"eligibilityReason,omitempty"`
+	ID                string `json:"id"`
+	Kind              string `json:"kind"`
+	Name              string `json:"name"`
+	CouponCode        string `json:"-"`
+	DiscountAmountFen int    `json:"discountAmountFen"`
+	PayableAmountFen  int    `json:"payableAmountFen"`
+	IsDefault         bool   `json:"isDefault"`
+	Label             string `json:"label"`
+	EligibilityReason string `json:"eligibilityReason,omitempty"`
 }
 type priceQuote struct {
 	ListAmountFen     int              `json:"listAmountFen"`

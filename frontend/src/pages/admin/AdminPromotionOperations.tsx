@@ -13,6 +13,7 @@ import {
 import {
   useGetAdminCouponBatchesQuery,
   useGetAdminCouponRedemptionsQuery,
+  useGetAdminCatalogQuery,
   useIssueAdminCouponBatchMutation,
   useSaveAdminCouponBatchMutation,
   useSearchAdminCouponUsersQuery,
@@ -40,11 +41,18 @@ const blank = (): CouponBatch => ({
 })
 export function AdminCouponsPage() {
   const batches = useGetAdminCouponBatchesQuery()
+  const catalog = useGetAdminCatalogQuery()
   const [save, { isLoading }] = useSaveAdminCouponBatchMutation()
   const [voidUnused] = useVoidAdminCouponBatchMutation()
   const [editing, setEditing] = useState<CouponBatch | null>(null)
   const [issuing, setIssuing] = useState<CouponBatch | null>(null)
   const [error, setError] = useState('')
+  const missingPlanIDs = (editing?.planIDs ?? []).filter(
+    id => !(catalog.data?.plans ?? []).some(plan => plan.id === id)
+  )
+  const missingImageIDs = (editing?.imageIDs ?? []).filter(
+    id => !(catalog.data?.images ?? []).some(image => image.id === id)
+  )
   const submit = async () => {
     if (!editing) return
     try {
@@ -97,7 +105,7 @@ export function AdminCouponsPage() {
       {editing && (
         <Dialog
           title={editing.id ? '编辑券批次' : '创建券批次'}
-          description="设置发放方式、优惠规则与库存上限。保存后可在列表中继续管理。"
+          description="设置发放、优惠与适用条件；套餐、镜像和周期留空时表示不限制。"
           className="max-w-3xl"
           onClose={() => {
             setEditing(null)
@@ -112,150 +120,321 @@ export function AdminCouponsPage() {
             }}
           >
             <div className="grid gap-4 sm:grid-cols-2">
-            <label className={dialogLabelClass} htmlFor="coupon-batch-name">
-              名称
-              <input
-                id="coupon-batch-name"
-                className={dialogFieldClass}
-                value={editing.name}
-                onChange={e => setEditing({ ...editing, name: e.target.value })}
-                placeholder="例如：新用户体验券"
-                data-autofocus
-              />
-            </label>
-            <label className={dialogLabelClass} htmlFor="coupon-batch-distribution">
-              发放方式
-              <select
-                id="coupon-batch-distribution"
-                className={dialogFieldClass}
-                value={editing.distributionMode}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    distributionMode: e.target
-                      .value as CouponBatch['distributionMode']
-                  })
-                }
+              <label className={dialogLabelClass} htmlFor="coupon-batch-name">
+                名称
+                <input
+                  id="coupon-batch-name"
+                  className={dialogFieldClass}
+                  value={editing.name}
+                  onChange={e =>
+                    setEditing({ ...editing, name: e.target.value })
+                  }
+                  placeholder="例如：新用户体验券"
+                  data-autofocus
+                />
+              </label>
+              <label
+                className={dialogLabelClass}
+                htmlFor="coupon-batch-distribution"
               >
-                <option value="public">公开领取</option>
-                <option value="targeted">定向发放</option>
-              </select>
-            </label>
-            <label className={dialogLabelClass} htmlFor="coupon-batch-discount-type">
-              优惠类型
-              <select
-                id="coupon-batch-discount-type"
-                className={dialogFieldClass}
-                value={editing.discountType}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    discountType: e.target.value as CouponBatch['discountType']
-                  })
-                }
+                发放方式
+                <select
+                  id="coupon-batch-distribution"
+                  className={dialogFieldClass}
+                  value={editing.distributionMode}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      distributionMode: e.target
+                        .value as CouponBatch['distributionMode']
+                    })
+                  }
+                >
+                  <option value="public">公开领取</option>
+                  <option value="targeted">定向发放</option>
+                </select>
+              </label>
+              <label
+                className={dialogLabelClass}
+                htmlFor="coupon-batch-discount-type"
               >
-                <option value="fixed">固定减免</option>
-                <option value="percent">实付折扣</option>
-              </select>
-            </label>
-            <label className={dialogLabelClass} htmlFor="coupon-batch-discount-value">
-              {editing.discountType === 'fixed'
-                ? '减免金额（分）'
-                : '实付折数（95=95折）'}
-              <input
-                id="coupon-batch-discount-value"
-                className={dialogFieldClass}
-                type="number"
-                min="0"
-                value={
-                  editing.discountType === 'percent'
-                    ? editing.discountValue / 100
-                    : editing.discountValue
-                }
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    discountValue:
-                      editing.discountType === 'percent'
-                        ? Number(e.target.value) * 100
-                        : Number(e.target.value)
-                  })
-                }
-              />
-            </label>
-            <label className={dialogLabelClass} htmlFor="coupon-batch-issue-limit">
-              总发放量（0不限）
-              <input
-                id="coupon-batch-issue-limit"
-                className={dialogFieldClass}
-                type="number"
-                min="0"
-                value={editing.issueLimit}
-                onChange={e =>
-                  setEditing({ ...editing, issueLimit: Number(e.target.value) })
-                }
-              />
-            </label>
-            <label className={dialogLabelClass} htmlFor="coupon-batch-user-limit">
-              每人限领
-              <input
-                id="coupon-batch-user-limit"
-                className={dialogFieldClass}
-                type="number"
-                min="1"
-                value={editing.perUserLimit}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    perUserLimit: Number(e.target.value)
-                  })
-                }
-              />
-            </label>
-            <label className={dialogLabelClass} htmlFor="coupon-batch-scope">
-              适用范围
-              <select
-                id="coupon-batch-scope"
-                className={dialogFieldClass}
-                value={editing.scope}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    scope: e.target.value as CouponBatch['scope']
-                  })
-                }
+                优惠类型
+                <select
+                  id="coupon-batch-discount-type"
+                  className={dialogFieldClass}
+                  value={editing.discountType}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      discountType: e.target
+                        .value as CouponBatch['discountType']
+                    })
+                  }
+                >
+                  <option value="fixed">固定减免</option>
+                  <option value="percent">实付折扣</option>
+                </select>
+              </label>
+              <label
+                className={dialogLabelClass}
+                htmlFor="coupon-batch-discount-value"
               >
-                <option value="both">新购与续费</option>
-                <option value="purchase">仅新购</option>
-                <option value="renewal">仅续费</option>
-              </select>
-            </label>
-            <label className={dialogLabelClass} htmlFor="coupon-batch-status">
-              状态
-              <select
-                id="coupon-batch-status"
-                className={dialogFieldClass}
-                value={editing.status}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    status: e.target.value as CouponBatch['status']
-                  })
-                }
+                {editing.discountType === 'fixed'
+                  ? '减免金额（分）'
+                  : '实付折数（95=95折）'}
+                <input
+                  id="coupon-batch-discount-value"
+                  className={dialogFieldClass}
+                  type="number"
+                  min="0"
+                  value={
+                    editing.discountType === 'percent'
+                      ? editing.discountValue / 100
+                      : editing.discountValue
+                  }
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      discountValue:
+                        editing.discountType === 'percent'
+                          ? Number(e.target.value) * 100
+                          : Number(e.target.value)
+                    })
+                  }
+                />
+              </label>
+              <label
+                className={dialogLabelClass}
+                htmlFor="coupon-batch-issue-limit"
               >
-                <option value="paused">暂停</option>
-                <option value="active">启用</option>
-              </select>
-            </label>
+                总发放量（0不限）
+                <input
+                  id="coupon-batch-issue-limit"
+                  className={dialogFieldClass}
+                  type="number"
+                  min="0"
+                  value={editing.issueLimit}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      issueLimit: Number(e.target.value)
+                    })
+                  }
+                />
+              </label>
+              <label
+                className={dialogLabelClass}
+                htmlFor="coupon-batch-user-limit"
+              >
+                每人限领
+                <input
+                  id="coupon-batch-user-limit"
+                  className={dialogFieldClass}
+                  type="number"
+                  min="1"
+                  value={editing.perUserLimit}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      perUserLimit: Number(e.target.value)
+                    })
+                  }
+                />
+              </label>
+              <label className={dialogLabelClass} htmlFor="coupon-batch-scope">
+                适用范围
+                <select
+                  id="coupon-batch-scope"
+                  className={dialogFieldClass}
+                  value={editing.scope}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      scope: e.target.value as CouponBatch['scope']
+                    })
+                  }
+                >
+                  <option value="both">新购与续费</option>
+                  <option value="purchase">仅新购</option>
+                  <option value="renewal">仅续费</option>
+                </select>
+              </label>
+              <label className={dialogLabelClass} htmlFor="coupon-batch-status">
+                状态
+                <select
+                  id="coupon-batch-status"
+                  className={dialogFieldClass}
+                  value={editing.status}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      status: e.target.value as CouponBatch['status']
+                    })
+                  }
+                >
+                  <option value="paused">暂停</option>
+                  <option value="active">启用</option>
+                </select>
+              </label>
             </div>
+            <section className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label
+                  className={dialogLabelClass}
+                  htmlFor="coupon-batch-plans"
+                >
+                  限定套餐（留空不限）
+                  <select
+                    id="coupon-batch-plans"
+                    multiple
+                    className={dialogFieldClass}
+                    value={editing.planIDs}
+                    onChange={event =>
+                      setEditing({
+                        ...editing,
+                        planIDs: Array.from(
+                          event.target.selectedOptions,
+                          option => option.value
+                        )
+                      })
+                    }
+                  >
+                    {missingPlanIDs.map(id => (
+                      <option key={id} value={id}>
+                        {id} · 当前已下架（可取消选择）
+                      </option>
+                    ))}
+                    {(catalog.data?.plans ?? []).map(plan => (
+                      <option key={plan.id} value={plan.id}>
+                        {plan.name} · {plan.cpu} 核 / {plan.memoryMB / 1024} GB
+                      </option>
+                    ))}
+                  </select>
+                  <small className="mt-1.5 block font-normal text-slate-400">
+                    按住 Ctrl 或 Command 可多选。
+                  </small>
+                </label>
+                <label
+                  className={dialogLabelClass}
+                  htmlFor="coupon-batch-images"
+                >
+                  限定镜像（留空不限）
+                  <select
+                    id="coupon-batch-images"
+                    multiple
+                    className={dialogFieldClass}
+                    value={editing.imageIDs}
+                    onChange={event =>
+                      setEditing({
+                        ...editing,
+                        imageIDs: Array.from(
+                          event.target.selectedOptions,
+                          option => option.value
+                        )
+                      })
+                    }
+                  >
+                    {missingImageIDs.map(id => (
+                      <option key={id} value={id}>
+                        {id} · 当前已下架（可取消选择）
+                      </option>
+                    ))}
+                    {(catalog.data?.images ?? []).map(image => (
+                      <option key={image.id} value={image.id}>
+                        {image.name} · {image.version}
+                      </option>
+                    ))}
+                  </select>
+                  <small className="mt-1.5 block font-normal text-slate-400">
+                    按住 Ctrl 或 Command 可多选。
+                  </small>
+                </label>
+              </div>
+              {(editing.planIDs.length > 0 || editing.imageIDs.length > 0) && (
+                <div className="flex flex-wrap gap-2">
+                  {editing.planIDs.length > 0 && (
+                    <Button
+                      type="button"
+                      tone="ghost"
+                      className="min-h-0 px-1 py-0 text-[11px]"
+                      onClick={() => setEditing({ ...editing, planIDs: [] })}
+                    >
+                      清除套餐限制
+                    </Button>
+                  )}
+                  {editing.imageIDs.length > 0 && (
+                    <Button
+                      type="button"
+                      tone="ghost"
+                      className="min-h-0 px-1 py-0 text-[11px]"
+                      onClick={() => setEditing({ ...editing, imageIDs: [] })}
+                    >
+                      清除镜像限制
+                    </Button>
+                  )}
+                </div>
+              )}
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className={dialogLabelClass}>限定周期（留空不限）</span>
+                  {editing.monthValues.length > 0 && (
+                    <Button
+                      type="button"
+                      tone="ghost"
+                      className="min-h-0 px-1 py-0 text-[11px]"
+                      onClick={() =>
+                        setEditing({ ...editing, monthValues: [] })
+                      }
+                    >
+                      清空选择
+                    </Button>
+                  )}
+                </div>
+                <div className="mt-2 grid grid-cols-4 gap-2 sm:grid-cols-6">
+                  {Array.from({ length: 12 }, (_, index) =>
+                    String(index + 1)
+                  ).map(month => {
+                    const selected = editing.monthValues.includes(month)
+                    return (
+                      <button
+                        key={month}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() =>
+                          setEditing({
+                            ...editing,
+                            monthValues: selected
+                              ? editing.monthValues.filter(
+                                  value => value !== month
+                                )
+                              : [...editing.monthValues, month]
+                          })
+                        }
+                        className={`rounded-md border px-2 py-2 text-xs font-bold transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200'}`}
+                      >
+                        {month} 个月
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </section>
             {error && <Alert tone="error">{error}</Alert>}
             <DialogFooter>
-            <Button type="button" tone="secondary" onClick={() => setEditing(null)}>
-              取消
-            </Button>
-            <Button type="submit" loading={isLoading} disabled={!editing.name.trim()}>
-              保存批次
-            </Button>
+              <Button
+                type="button"
+                tone="secondary"
+                onClick={() => setEditing(null)}
+              >
+                取消
+              </Button>
+              <Button
+                type="submit"
+                loading={isLoading}
+                disabled={!editing.name.trim()}
+              >
+                保存
+              </Button>
             </DialogFooter>
           </form>
         </Dialog>

@@ -91,7 +91,7 @@ export function AdminImagesPage() {
                     .join('、') || '暂无'}
                 </td>
                 <td>{image.enabled ? '可售' : '已下架'}</td>
-                <td  className="flex gap-2">
+                <td className="flex gap-2">
                   <button
                     className="text-button"
                     onClick={() => setTargetID(image.id)}
@@ -164,13 +164,14 @@ export function AdminImagesPage() {
             </label>
             {versionError && <Alert tone="error">{versionError}</Alert>}
             <DialogFooter>
-              <Button type="button" tone="secondary" onClick={() => setRenaming(null)}>
+              <Button
+                type="button"
+                tone="secondary"
+                onClick={() => setRenaming(null)}
+              >
                 取消
               </Button>
-              <Button
-                type="submit"
-                disabled={!softwareName.trim()}
-              >
+              <Button type="submit" disabled={!softwareName.trim()}>
                 保存名称
               </Button>
             </DialogFooter>

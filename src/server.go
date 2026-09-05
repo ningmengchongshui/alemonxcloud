@@ -55,8 +55,8 @@ type instance struct {
 	CreatedAt     string     `json:"createdAt"`
 	// ContainerName is also the basename of this instance's persisted data
 	// directory on its assigned node (for example xcloud-a1b2c3d4).
-	ContainerName string     `json:"containerName,omitempty"`
-	OwnerID       string     `json:"-"`
+	ContainerName string `json:"containerName,omitempty"`
+	OwnerID       string `json:"-"`
 }
 type oidcUser struct {
 	ID          string   `json:"id"`

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useDispatch } from 'react-redux'
 import { ActionDialog } from '@/components/ActionDialog'
+import { BalanceSettlement } from '@/components/BalanceSettlement'
 import { PriceQuoteSelector } from '@/components/PriceQuoteSelector'
 import {
   Alert,
@@ -13,6 +14,7 @@ import {
 } from '@/components/ui'
 import {
   useInstanceActionMutation,
+  useGetWalletQuery,
   useQuoteRenewalMutation,
   useRenewOrderMutation
 } from '@/services/cloudApi'
@@ -120,11 +122,16 @@ export function InstancesPage({
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
   const [quoteRenewal] = useQuoteRenewalMutation()
+  const { data: wallet } = useGetWalletQuery()
   const dispatch = useDispatch()
   const sorted = [...instances].sort(
     (left, right) =>
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
   )
+  const renewPayableFen = renewQuote?.amountFen
+  const canRenew =
+    Boolean(wallet && renewPayableFen !== undefined) &&
+    (wallet?.balanceFen ?? 0) >= (renewPayableFen ?? 0)
   const renewableOrderByInstance = new Map<string, Order>()
   for (const order of orders) {
     if (!order.instanceId || !['active', 'expired'].includes(order.status))
@@ -168,11 +175,11 @@ export function InstancesPage({
   function openRenewal(order: Order) {
     setMonths('1')
     setRenewSelection('')
-    setRenewFullPrice(true)
+    setRenewFullPrice(false)
     setRenewQuote(null)
     setRenewalError('')
     setRenewing(order)
-    void quoteRenewal({ id: order.id, months: 1, payFullPrice: true })
+    void quoteRenewal({ id: order.id, months: 1, payFullPrice: false })
       .unwrap()
       .then(value => {
         setRenewQuote(value)
@@ -343,28 +350,12 @@ export function InstancesPage({
                     >
                       {item.ip ? '打开服务 ↗' : '服务准备中'}
                     </Button>
-                    {renewalOrder &&
-                      lifecycle !== 'destroyed' &&
-                      lifecycle !== 'purged' &&
-                      item.destroyReason !== 'refund' && (
-                        <Button
-                          tone={
-                            renewalOrder.status === 'expired'
-                              ? 'primary'
-                              : 'secondary'
-                          }
-                          disabled={operating}
-                          onClick={() => openRenewal(renewalOrder)}
-                        >
-                          续费
-                        </Button>
-                      )}
                     {lifecycle !== 'destroyed' && lifecycle !== 'purged' && (
                       <Button
                         tone="secondary"
                         onClick={() => onOpenLogs(item.id)}
                       >
-                        查看日志
+                        日志
                       </Button>
                     )}
                     {runtime === 'stopped' && canOperate && (
@@ -380,15 +371,6 @@ export function InstancesPage({
                     )}
                     {runtime === 'running' && canOperate && (
                       <>
-                        <Button
-                          tone="secondary"
-                          disabled={operating}
-                          onClick={() =>
-                            setPending({ id: item.id, action: 'update' })
-                          }
-                        >
-                          更新
-                        </Button>
                         <Button
                           tone="secondary"
                           disabled={!canOperate || operating}
@@ -407,8 +389,33 @@ export function InstancesPage({
                         >
                           关机
                         </Button>
+                        <Button
+                          tone="secondary"
+                          disabled={operating}
+                          onClick={() =>
+                            setPending({ id: item.id, action: 'update' })
+                          }
+                        >
+                          更新
+                        </Button>
                       </>
                     )}
+                    {renewalOrder &&
+                      lifecycle !== 'destroyed' &&
+                      lifecycle !== 'purged' &&
+                      item.destroyReason !== 'refund' && (
+                        <Button
+                          tone={
+                            renewalOrder.status === 'expired'
+                              ? 'primary'
+                              : 'secondary'
+                          }
+                          disabled={operating}
+                          onClick={() => openRenewal(renewalOrder)}
+                        >
+                          续费
+                        </Button>
+                      )}
                     {(lifecycle === 'running' || lifecycle === 'stopped') && (
                       <Button
                         tone="danger"
@@ -504,6 +511,7 @@ export function InstancesPage({
               max="24"
               value={months}
               onChange={event => setMonths(event.target.value)}
+              onBlur={() => refreshRenewQuote(renewing)}
             />
           </label>
           <div className="mt-4">
@@ -514,8 +522,18 @@ export function InstancesPage({
               onSelect={(selected, fullPrice) => {
                 setRenewFullPrice(fullPrice)
                 setRenewSelection(fullPrice ? '' : selected)
-                refreshRenewQuote(renewing, fullPrice ? '' : selected, fullPrice)
+                refreshRenewQuote(
+                  renewing,
+                  fullPrice ? '' : selected,
+                  fullPrice
+                )
               }}
+            />
+          </div>
+          <div className="mt-4">
+            <BalanceSettlement
+              balanceFen={wallet?.balanceFen}
+              payableFen={renewPayableFen}
             />
           </div>
           {renewalError && <Alert tone="error">{renewalError}</Alert>}
@@ -525,6 +543,8 @@ export function InstancesPage({
             </Button>
             <Button
               loading={renewalLoading}
+              tone={canRenew ? 'primary' : 'secondary'}
+              disabled={!canRenew}
               onClick={() => {
                 const value = Number(months)
                 if (!Number.isInteger(value) || value < 1 || value > 24) {
@@ -562,7 +582,9 @@ export function InstancesPage({
                   })
               }}
             >
-              确认续费
+              {wallet && renewPayableFen !== undefined && !canRenew
+                ? '余额不足，暂不能续费'
+                : '确认续费'}
             </Button>
           </div>
         </Dialog>

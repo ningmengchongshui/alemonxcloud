@@ -846,39 +846,4 @@
   .admin-state {
     @apply px-2 py-1;
   }
-
-  .node-list {
-    @apply grid gap-2.5;
-  }
-
-  .node-row {
-    @apply grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-4 rounded-lg border border-slate-200 p-4 dark:border-slate-700 max-[850px]:grid-cols-1;
-  }
-
-  .node-row b {
-    @apply text-[11px] text-slate-700 dark:text-white;
-  }
-
-  .node-row p {
-    @apply mt-1 truncate text-[9px] text-slate-400;
-  }
-
-  .node-intro {
-    @apply mb-4 text-[11px] text-slate-500 dark:text-slate-300;
-  }
-  .node-details {
-    @apply flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400;
-  }
-  .node-actions {
-    @apply flex items-center gap-3 max-[850px]:justify-between;
-  }
-  .node-hardware {
-    @apply mb-3 rounded-lg bg-slate-100 px-3 py-2 text-[11px] dark:bg-slate-800;
-  }
-  .node-hardware span {
-    @apply mr-2 text-slate-400;
-  }
-  .node-hardware b {
-    @apply text-slate-700 dark:text-slate-100;
-  }
 }

@@ -23,9 +23,32 @@ const scopeText = (scope: Promotion['scope']) =>
   scope === 'both' ? '新购与续费' : scope === 'purchase' ? '仅新购' : '仅续费'
 const ruleList = (values: string[], fallback: string) =>
   values.length ? values.join('、') : fallback
+const couponConditions = (item: {
+  batch?: {
+    scope: 'purchase' | 'renewal' | 'both'
+    minAmountFen: number
+    planIDs: string[]
+    imageIDs: string[]
+    monthValues: string[]
+  }
+}) => {
+  const batch = item.batch
+  if (!batch) return '规则以订单快照为准'
+  const values = [scopeText(batch.scope)]
+  if (batch.minAmountFen > 0)
+    values.push(`满 ${money(batch.minAmountFen)} 可用`)
+  if (batch.planIDs.length) values.push(`限定套餐：${batch.planIDs.join('、')}`)
+  if (batch.imageIDs.length)
+    values.push(`限定镜像：${batch.imageIDs.join('、')}`)
+  if (batch.monthValues.length)
+    values.push(`限定周期：${batch.monthValues.join('、')} 个月`)
+  return values.join(' · ')
+}
 
 export function OffersPage() {
-  const [tab, setTab] = useState<'activities' | 'public' | 'wallet'>('activities')
+  const [tab, setTab] = useState<'activities' | 'public' | 'wallet'>(
+    'activities'
+  )
   const [activePromotion, setActivePromotion] = useState<Promotion | null>(null)
   const batches = useGetPublicCouponBatchesQuery()
   const wallet = useGetMyCouponsQuery()
@@ -39,18 +62,64 @@ export function OffersPage() {
         title="优惠中心"
         description="查看平台活动、领取优惠券，并在结算时主动选择要使用的一张券。"
       />
-      <div className="mb-5"><FilterTabs value={tab} onChange={setTab} label="优惠中心分类" items={[{ value: 'activities', label: '活动' }, { value: 'public', label: '可领取优惠券' }, { value: 'wallet', label: '我的优惠券' }]} /></div>
+      <div className="mb-5">
+        <FilterTabs
+          value={tab}
+          onChange={setTab}
+          label="优惠中心分类"
+          items={[
+            { value: 'activities', label: '活动' },
+            { value: 'public', label: '可领取优惠券' },
+            { value: 'wallet', label: '我的优惠券' }
+          ]}
+        />
+      </div>
       {error && <Alert tone="error">{error}</Alert>}
       {tab === 'activities' ? (
         (promotions.data ?? []).length === 0 ? (
-          <EmptyState title="暂无进行中的活动" description="后续活动将在这里公布具体规则与适用项目。" />
+          <EmptyState
+            title="暂无进行中的活动"
+            description="后续活动将在这里公布具体规则与适用项目。"
+          />
         ) : (
           <section className="grid gap-4 md:grid-cols-2">
             {(promotions.data ?? []).map(item => (
-              <article key={item.id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div className="flex items-start justify-between gap-3"><div><StatusBadge tone="success">进行中</StatusBadge><h2 className="mb-0 mt-3 text-lg font-bold">{item.name}</h2></div><span className="shrink-0 text-sm font-bold text-emerald-700 dark:text-emerald-200">{item.discountType === 'fixed' ? <>立减 <XCoinAmount value={money(item.discountValue)} /></> : `${item.discountValue / 100} 折`}</span></div>
-                <p className="mb-0 mt-3 text-xs leading-5 text-slate-500 dark:text-slate-300">{scopeText(item.scope)} · {item.minAmountFen ? <>满 <XCoinAmount value={money(item.minAmountFen)} /> 可用</> : '无最低消费门槛'}</p>
-                <Button tone="secondary" className="mt-4" onClick={() => setActivePromotion(item)}>查看活动规则</Button>
+              <article
+                key={item.id}
+                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <StatusBadge tone="success">进行中</StatusBadge>
+                    <h2 className="mb-0 mt-3 text-lg font-bold">{item.name}</h2>
+                  </div>
+                  <span className="shrink-0 text-sm font-bold text-emerald-700 dark:text-emerald-200">
+                    {item.discountType === 'fixed' ? (
+                      <>
+                        立减 <XCoinAmount value={money(item.discountValue)} />
+                      </>
+                    ) : (
+                      `${item.discountValue / 100} 折`
+                    )}
+                  </span>
+                </div>
+                <p className="mb-0 mt-3 text-xs leading-5 text-slate-500 dark:text-slate-300">
+                  {scopeText(item.scope)} ·{' '}
+                  {item.minAmountFen ? (
+                    <>
+                      满 <XCoinAmount value={money(item.minAmountFen)} /> 可用
+                    </>
+                  ) : (
+                    '无最低消费门槛'
+                  )}
+                </p>
+                <Button
+                  tone="secondary"
+                  className="mt-4"
+                  onClick={() => setActivePromotion(item)}
+                >
+                  查看活动规则
+                </Button>
               </article>
             ))}
           </section>
@@ -160,15 +229,82 @@ export function OffersPage() {
                       ? '公开领取'
                       : '历史迁移'}
                 </p>
+                <p className="mb-0 mt-2 text-[11px] leading-5 text-slate-400 dark:text-slate-300">
+                  使用条件：{couponConditions(item)}
+                </p>
               </article>
             )
           })}
         </section>
       )}
-      {activePromotion && <Dialog eyebrow="平台活动" title={activePromotion.name} description="活动优惠不会自动套用；符合条件时，请在结算页主动选择可用优惠券。" onClose={() => setActivePromotion(null)}>
-        <dl className="grid gap-3 text-xs"><div className="flex justify-between gap-4"><dt className="text-slate-500">优惠内容</dt><dd className="m-0 text-right font-bold">{activePromotion.discountType === 'fixed' ? <>立减 <XCoinAmount value={money(activePromotion.discountValue)} /></> : `${activePromotion.discountValue / 100} 折`}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">适用订单</dt><dd className="m-0 text-right font-bold">{scopeText(activePromotion.scope)}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">涉及套餐</dt><dd className="m-0 text-right font-bold">{ruleList(activePromotion.planIDs, '全部套餐')}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">涉及镜像</dt><dd className="m-0 text-right font-bold">{ruleList(activePromotion.imageIDs, '全部镜像')}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">适用周期</dt><dd className="m-0 text-right font-bold">{ruleList(activePromotion.monthValues.map(value => `${value} 个月`), '全部周期')}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">活动时间</dt><dd className="m-0 text-right font-bold">{activePromotion.startsAt ? new Date(activePromotion.startsAt).toLocaleString('zh-CN') : '即日起'} 至 {activePromotion.endsAt ? new Date(activePromotion.endsAt).toLocaleString('zh-CN') : '长期有效'}</dd></div></dl>
-        <DialogFooter><Button tone="secondary" onClick={() => setActivePromotion(null)}>关闭</Button></DialogFooter>
-      </Dialog>}
+      {activePromotion && (
+        <Dialog
+          eyebrow="平台活动"
+          title={activePromotion.name}
+          description="活动优惠不会自动套用；符合条件时，请在结算页主动选择可用优惠券。"
+          onClose={() => setActivePromotion(null)}
+        >
+          <dl className="grid gap-3 text-xs">
+            <div className="flex justify-between gap-4">
+              <dt className="text-slate-500">优惠内容</dt>
+              <dd className="m-0 text-right font-bold">
+                {activePromotion.discountType === 'fixed' ? (
+                  <>
+                    立减{' '}
+                    <XCoinAmount value={money(activePromotion.discountValue)} />
+                  </>
+                ) : (
+                  `${activePromotion.discountValue / 100} 折`
+                )}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-slate-500">适用订单</dt>
+              <dd className="m-0 text-right font-bold">
+                {scopeText(activePromotion.scope)}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-slate-500">涉及套餐</dt>
+              <dd className="m-0 text-right font-bold">
+                {ruleList(activePromotion.planIDs, '全部套餐')}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-slate-500">涉及镜像</dt>
+              <dd className="m-0 text-right font-bold">
+                {ruleList(activePromotion.imageIDs, '全部镜像')}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-slate-500">适用周期</dt>
+              <dd className="m-0 text-right font-bold">
+                {ruleList(
+                  activePromotion.monthValues.map(value => `${value} 个月`),
+                  '全部周期'
+                )}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-slate-500">活动时间</dt>
+              <dd className="m-0 text-right font-bold">
+                {activePromotion.startsAt
+                  ? new Date(activePromotion.startsAt).toLocaleString('zh-CN')
+                  : '即日起'}{' '}
+                至{' '}
+                {activePromotion.endsAt
+                  ? new Date(activePromotion.endsAt).toLocaleString('zh-CN')
+                  : '长期有效'}
+              </dd>
+            </div>
+          </dl>
+          <DialogFooter>
+            <Button tone="secondary" onClick={() => setActivePromotion(null)}>
+              关闭
+            </Button>
+          </DialogFooter>
+        </Dialog>
+      )}
     </section>
   )
 }

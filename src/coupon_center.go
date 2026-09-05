@@ -259,11 +259,18 @@ func quoteForModern(ctx context.Context, ownerID, scope, planID, imageID string,
 			c *coupon
 		}{v.p, &cp}
 	}
-	// Settlement must be an explicit choice: without a selected coupon or
-	// activity, keep the list price. This prevents the server from silently
-	// applying a "best" discount when a client only asks for a quote.
 	q := priceQuote{ListAmountFen: list, AmountFen: list, Candidates: candidates, PayFullPrice: payFullPrice}
-	if selectedID != "" && !payFullPrice {
+	if !payFullPrice && selectedID == "" {
+		// Only wallet coupons participate in the automatic choice. Campaigns
+		// remain informational in the offers center and are never silently
+		// applied to an order.
+		for _, candidate := range items {
+			if candidate.DiscountAmountFen > q.DiscountAmountFen {
+				q.SelectedID = candidate.ID
+				q.DiscountAmountFen = candidate.DiscountAmountFen
+			}
+		}
+	} else if selectedID != "" && !payFullPrice {
 		v, ok := selected[selectedID]
 		if !ok {
 			return priceQuote{}, nil, nil, errors.New("所选优惠不可用")

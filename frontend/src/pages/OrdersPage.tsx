@@ -17,10 +17,7 @@ import {
 import { XCoinAmount } from '@/components/XCoinMark'
 import { trackConsoleEvent } from '@/services/telemetry'
 
-const orderStates: Record<
-  string,
-  { label: string; tone: string }
-> = {
+const orderStates: Record<string, { label: string; tone: string }> = {
   deploying: {
     label: '部署中',
     tone: 'progress'
@@ -203,10 +200,14 @@ export function OrdersPage({
                         </span>
                       </td>
                       <td className="px-4 py-3.5">
-                        <StatusBadge tone={badgeTone}>{state.label}</StatusBadge>
+                        <StatusBadge tone={badgeTone}>
+                          {state.label}
+                        </StatusBadge>
                       </td>
                       <td className="px-4 py-3.5 font-bold text-slate-700 dark:text-slate-100">
-                        <XCoinAmount value={(order.amountFen / 100).toFixed(2)} />
+                        <XCoinAmount
+                          value={(order.amountFen / 100).toFixed(2)}
+                        />
                         {order.refundAmountFen ? (
                           <span className="mt-1 block text-[10px] font-normal text-slate-400">
                             已退回 {(order.refundAmountFen / 100).toFixed(2)}
@@ -214,8 +215,12 @@ export function OrdersPage({
                         ) : null}
                       </td>
                       <td className="px-4 py-3.5 text-[11px] leading-5 text-slate-500 dark:text-slate-300">
-                        <span className="block">起：{date(order.serviceStartsAt)}</span>
-                        <span className="block">止：{date(order.expiresAt)}</span>
+                        <span className="block">
+                          起：{date(order.serviceStartsAt)}
+                        </span>
+                        <span className="block">
+                          止：{date(order.expiresAt)}
+                        </span>
                       </td>
                       <td className="px-5 py-3.5 text-right">
                         {order.status === 'active' && order.serviceStartsAt ? (

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useDispatch } from 'react-redux'
+import { BalanceSettlement } from '@/components/BalanceSettlement'
 import { PriceQuoteSelector } from '@/components/PriceQuoteSelector'
-import { XCoinAmount } from '@/components/XCoinMark'
 import {
   useGetWalletQuery,
   usePurchaseMutation,
@@ -88,7 +88,11 @@ export function CreateServicePage({
   const plans = catalog?.plans ?? []
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
-  const total = (selectedPlan?.monthlyPriceFen ?? 0) * months
+  const payableFen = quote?.amountFen
+  const canPurchase =
+    Boolean(
+      selectedImage && selectedPlan && wallet && payableFen !== undefined
+    ) && (wallet?.balanceFen ?? 0) >= (payableFen ?? 0)
   const preview = useCallback(
     (selected: string, fullPrice: boolean) => {
       if (!selectedImage || !selectedPlan) return
@@ -119,8 +123,8 @@ export function CreateServicePage({
   useEffect(() => {
     setQuote(null)
     setSelectionID('')
-    setPayFullPrice(true)
-    if (selectedImage && selectedPlan) preview('', true)
+    setPayFullPrice(false)
+    if (selectedImage && selectedPlan) preview('', false)
   }, [selectedImage, selectedPlan, months, preview])
 
   function submit() {
@@ -305,7 +309,9 @@ export function CreateServicePage({
                     setPeriodMode(nextMode)
                     setMonths(current =>
                       nextMode === 'year'
-                        ? current >= 12 ? Math.min(60, Math.ceil(current / 12) * 12) : 12
+                        ? current >= 12
+                          ? Math.min(60, Math.ceil(current / 12) * 12)
+                          : 12
                         : Math.min(current, 12)
                     )
                   }}
@@ -326,7 +332,9 @@ export function CreateServicePage({
                   aria-pressed={months === value}
                   onClick={() => setMonths(value)}
                 >
-                  {periodMode === 'month' ? `${value} 个月` : `${value / 12} 年`}
+                  {periodMode === 'month'
+                    ? `${value} 个月`
+                    : `${value / 12} 年`}
                 </button>
               ))}
             </div>
@@ -362,18 +370,6 @@ export function CreateServicePage({
               </dd>
             </div>
           </dl>
-          <div className="summary-total">
-            <span>应付</span>
-            <strong className="inline-flex items-center gap-1">
-              {selectedPlan
-                ? <XCoinAmount value={((quote?.amountFen ?? total) / 100).toFixed(2)} />
-                : '—'}
-            </strong>
-          </div>
-          <div className="my-3 text-xs text-slate-500 dark:text-slate-300">
-            钱包余额：{' '}
-            {wallet ? <XCoinAmount value={(wallet.balanceFen / 100).toFixed(2)} /> : '同步中'}
-          </div>
           <PriceQuoteSelector
             quote={quote}
             selectionID={selectionID}
@@ -384,14 +380,23 @@ export function CreateServicePage({
               preview(fullPrice ? '' : selected, fullPrice)
             }}
           />
+          <div className="my-4">
+            <BalanceSettlement
+              balanceFen={wallet?.balanceFen}
+              payableFen={payableFen}
+            />
+          </div>
           {error && <Alert tone="error">{error}</Alert>}
           <Button
             className="w-full"
             loading={saving}
-            disabled={!selectedImage || !selectedPlan}
+            tone={canPurchase ? 'primary' : 'secondary'}
+            disabled={!canPurchase}
             onClick={submit}
           >
-            购买
+            {wallet && payableFen !== undefined && !canPurchase
+              ? '余额不足，暂不能购买'
+              : '确认购买'}
           </Button>
         </aside>
       </div>

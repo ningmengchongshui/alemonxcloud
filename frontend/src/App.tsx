@@ -134,18 +134,28 @@ export default function App() {
   const selectedTicketID = ticketID(path)
   const isUserArea =
     userPaths.has(path) || Boolean(logInstanceID) || Boolean(selectedTicketID)
-  const { data: instances = [], isLoading: instancesLoading } =
-    useGetInstancesQuery(undefined, { skip: !session || !isUserArea })
+  const {
+    data: instances = [],
+    isLoading: instancesLoading,
+    refetch: refetchInstances
+  } = useGetInstancesQuery(undefined, {
+    skip: !session || !isUserArea,
+    pollingInterval: session && isUserArea ? 15000 : 0
+  })
   const {
     data: catalog,
     isLoading: catalogLoading,
     isError: catalogError,
     refetch: refetchCatalog
   } = useGetCatalogQuery(undefined, { skip: !session || !isUserArea })
-  const { data: orders = [], isLoading: ordersLoading } = useGetOrdersQuery(
-    undefined,
-    { skip: !session || !isUserArea }
-  )
+  const {
+    data: orders = [],
+    isLoading: ordersLoading,
+    refetch: refetchOrders
+  } = useGetOrdersQuery(undefined, {
+    skip: !session || !isUserArea,
+    pollingInterval: session && isUserArea ? 15000 : 0
+  })
   const [authorize] = useAuthorizeMutation()
   const [callback] = useCallbackMutation()
   const [devLogin] = useDevLoginMutation()
@@ -177,6 +187,23 @@ export default function App() {
         setError(message(value, '统一认证失败'))
       })
   }, [callback])
+
+  useEffect(() => {
+    if (!session || !isUserArea) return
+    // These queries live above the page switch and otherwise remain subscribed
+    // while a user moves between /me routes. Revalidate on every route entry
+    // instead of showing a previous route's cached snapshot.
+    void refetchInstances()
+    void refetchCatalog()
+    void refetchOrders()
+  }, [
+    isUserArea,
+    path,
+    refetchCatalog,
+    refetchInstances,
+    refetchOrders,
+    session
+  ])
 
   async function login() {
     setError('')

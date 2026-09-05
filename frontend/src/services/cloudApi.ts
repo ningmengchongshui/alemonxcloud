@@ -40,6 +40,11 @@ interface AuthorizeResponse {
 export const cloudApi = createApi({
   reducerPath: 'cloudApi',
   baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  // Console data is operational data rather than static content. A page must
+  // revalidate when it is opened again or when the user returns to the tab.
+  refetchOnMountOrArgChange: true,
+  refetchOnFocus: true,
+  refetchOnReconnect: true,
   tagTypes: [
     'Session',
     'Instances',
@@ -86,7 +91,7 @@ export const cloudApi = createApi({
         url: `/instances/${id}/${action}`,
         method: 'POST'
       }),
-      invalidatesTags: ['Instances']
+      invalidatesTags: ['Instances', 'Orders']
     }),
     getInstanceLogs: builder.query<{ lines: string[] }, string>({
       query: id => `/instances/${id}/logs`

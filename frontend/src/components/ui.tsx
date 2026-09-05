@@ -133,12 +133,6 @@ export function EmptyState({
 }) {
   return (
     <div className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center dark:border-slate-600 dark:bg-slate-800">
-      <span
-        className="mb-4 grid size-10 place-items-center rounded-xl bg-blue-50 text-xl text-blue-600 dark:bg-blue-950 dark:text-blue-200"
-        aria-hidden="true"
-      >
-        ＋
-      </span>
       <h2 className="m-0 text-lg font-bold text-slate-800 dark:text-white">
         {title}
       </h2>
@@ -353,6 +347,7 @@ export function Dialog({
         ref={dialogRef}
         className={classNames(
           'w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-800',
+          'flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden',
           className
         )}
         role="dialog"
@@ -387,7 +382,9 @@ export function Dialog({
             ×
           </button>
         </div>
-        {children}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+          {children}
+        </div>
       </section>
     </div>
   )
@@ -401,7 +398,7 @@ export const dialogFieldClass =
 
 export function DialogFooter({ children }: PropsWithChildren) {
   return (
-    <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-700">
+    <div className="sticky bottom-0 z-10 mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-100 bg-white pt-4 dark:border-slate-700 dark:bg-slate-800">
       {children}
     </div>
   )

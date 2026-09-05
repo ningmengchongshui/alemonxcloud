@@ -138,7 +138,7 @@ export function AdminTicketsPage() {
                   </td>
                   <td>{stateLabel[ticket.status]}</td>
                   <td>{new Date(ticket.updatedAt).toLocaleString('zh-CN')}</td>
-                  <td  className="flex gap-2">
+                  <td className="flex gap-2">
                     <button
                       className="text-button"
                       onClick={() => setSelectedID(ticket.id)}

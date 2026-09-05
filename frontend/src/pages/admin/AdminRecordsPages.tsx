@@ -113,7 +113,7 @@ export function AdminTasksPage() {
                 <td>{task.status}</td>
                 <td>{task.attempts}</td>
                 <td>{task.lastError || '—'}</td>
-                <td  className="flex gap-2">
+                <td className="flex gap-2">
                   {task.status === 'failed' && (
                     <button
                       className="text-button"
@@ -205,7 +205,7 @@ export function AdminUsersPage({
                 <td>{user.email || '—'}</td>
                 <td>{(user.balanceFen / 100).toFixed(2)} 代币</td>
                 <td>{new Date(user.lastLoginAt).toLocaleString('zh-CN')}</td>
-                <td  className="flex gap-2">
+                <td className="flex gap-2">
                   <button
                     className="text-button"
                     onClick={() =>
@@ -282,12 +282,17 @@ export function AdminUsersPage({
             }}
           >
             <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs dark:bg-slate-900">
-              <span className="text-slate-500 dark:text-slate-300">当前余额</span>
+              <span className="text-slate-500 dark:text-slate-300">
+                当前余额
+              </span>
               <b className="ml-2 text-slate-800 dark:text-white">
                 {(adjusting.balanceFen / 100).toFixed(2)} XCoin
               </b>
             </div>
-            <label className={dialogLabelClass} htmlFor="wallet-adjust-direction">
+            <label
+              className={dialogLabelClass}
+              htmlFor="wallet-adjust-direction"
+            >
               变更方式
               <select
                 id="wallet-adjust-direction"
