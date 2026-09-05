@@ -21,7 +21,9 @@ const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`
 const subscriptionMonths = [1, 3, 6, 12]
 const discountLabel = (plan: Plan | undefined, months: number) => {
   const bps = plan?.tierDiscounts?.[months]
-  return months > 1 && bps !== undefined && bps < 10000 ? `${bps / 1000} 折` : ''
+  return months > 1 && bps !== undefined && bps < 10000
+    ? `${bps / 1000} 折`
+    : ''
 }
 
 function PlanChoice({
@@ -294,7 +296,12 @@ export function CreateServicePage({
                   aria-pressed={months === value}
                   onClick={() => setMonths(value)}
                 >
-                  <span>{value} 个月</span>{discountLabel(selectedPlan, value) && <small className="ml-1 text-red-600">{discountLabel(selectedPlan, value)}</small>}
+                  <span>{value} 个月</span>
+                  {discountLabel(selectedPlan, value) && (
+                    <small className="ml-1 text-red-600">
+                      {discountLabel(selectedPlan, value)}
+                    </small>
+                  )}
                 </button>
               ))}
             </div>
@@ -325,9 +332,7 @@ export function CreateServicePage({
             </div>
             <div>
               <dt>周期</dt>
-              <dd>
-                {months} 个月
-              </dd>
+              <dd>{months} 个月</dd>
             </div>
           </dl>
           <div className="mt-5 rounded-xl border border-slate-200 p-4 text-sm">

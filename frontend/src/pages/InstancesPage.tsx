@@ -25,7 +25,9 @@ import type { Instance, Order, Plan, PriceQuote } from '@/types/cloud'
 const subscriptionMonths = [1, 3, 6, 12]
 const renewDiscountLabel = (plan: Plan | undefined, months: number) => {
   const bps = plan?.tierDiscounts?.[months]
-  return months > 1 && bps !== undefined && bps < 10000 ? `${bps / 1000} 折` : ''
+  return months > 1 && bps !== undefined && bps < 10000
+    ? `${bps / 1000} 折`
+    : ''
 }
 
 type InstanceAction =
@@ -519,12 +521,34 @@ export function InstancesPage({
             <legend>续费周期</legend>
             <div className="flex flex-wrap gap-2">
               {subscriptionMonths.map(value => (
-                <Button key={value} tone={Number(months) === value ? 'primary' : 'secondary'} onClick={() => { setMonths(String(value)); refreshRenewQuote(renewing, renewPromoCode, value) }}>
-                  <span>{value} 个月</span>{renewDiscountLabel(catalog?.plans.find(plan => plan.id === renewing.planId), value) && <small className="ml-1 text-red-600">{renewDiscountLabel(catalog?.plans.find(plan => plan.id === renewing.planId), value)}</small>}
+                <Button
+                  key={value}
+                  tone={Number(months) === value ? 'primary' : 'secondary'}
+                  onClick={() => {
+                    setMonths(String(value))
+                    refreshRenewQuote(renewing, renewPromoCode, value)
+                  }}
+                >
+                  <span>{value} 个月</span>
+                  {renewDiscountLabel(
+                    catalog?.plans.find(plan => plan.id === renewing.planId),
+                    value
+                  ) && (
+                    <small className="ml-1 text-red-600">
+                      {renewDiscountLabel(
+                        catalog?.plans.find(
+                          plan => plan.id === renewing.planId
+                        ),
+                        value
+                      )}
+                    </small>
+                  )}
                 </Button>
               ))}
             </div>
-            <small className="text-slate-500">3、6、12 个月会自动使用对应的阶梯价。</small>
+            <small className="text-slate-500">
+              3、6、12 个月会自动使用对应的阶梯价。
+            </small>
           </fieldset>
           <div className="mt-4">
             <div className="rounded-xl border border-slate-200 p-4 text-sm">

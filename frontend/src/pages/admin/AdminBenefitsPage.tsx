@@ -51,6 +51,21 @@ const split = (value: string) =>
     .split(/[\s,]+/)
     .map(item => item.trim())
     .filter(Boolean)
+const subscriptionMonths = [1, 3, 6, 12]
+const toRFC3339 = (value?: string) => {
+  if (!value) return undefined
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString()
+}
+const toLocalInput = (value?: string) => {
+  if (!value) return ''
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  const offset = parsed.getTimezoneOffset() * 60_000
+  return new Date(parsed.getTime() - offset).toISOString().slice(0, 16)
+}
+const validNonNegativeInteger = (value: number) =>
+  Number.isInteger(value) && Number.isFinite(value) && value >= 0
 const statusLabel: Record<BenefitProgram['status'], string> = {
   draft: '草稿',
   scheduled: '待生效',
@@ -108,8 +123,91 @@ export function AdminBenefitsPage() {
       setMessage('请填写权益方案名称。')
       return
     }
+    const numericFields = [
+      editing.minAmountFen,
+      editing.perUserLimit,
+      editing.totalLimit,
+      editing.cashBudgetFen,
+      editing.grantDaysLimit,
+      editing.priority,
+      editing.codeTotalLimit ?? 0,
+      editing.codePerUserLimit ?? 0
+    ]
+    if (!numericFields.every(validNonNegativeInteger)) {
+      setMessage('次数、预算、优先级等只能填写非负整数。')
+      return
+    }
+    if (!Number.isInteger(editing.benefitValue) || editing.benefitValue <= 0) {
+      setMessage('权益值必须是大于 0 的整数。')
+      return
+    }
+    if (
+      editing.benefitType === 'percent_discount' &&
+      editing.benefitValue > 10000
+    ) {
+      setMessage('折扣权益值不能大于 10000。')
+      return
+    }
+    if (
+      editing.monthValues.some(
+        month => !subscriptionMonths.includes(month)
+      )
+    ) {
+      setMessage('限定月数只能选择 1、3、6 或 12 个月。')
+      return
+    }
+    if (
+      editing.triggerType === 'promo_code' &&
+      !editing.id &&
+      !editing.code?.trim()
+    ) {
+      setMessage('请填写推广码。')
+      return
+    }
+    const startsAt = toRFC3339(editing.startsAt)
+    const endsAt = toRFC3339(editing.endsAt)
+    if ((editing.startsAt && !startsAt) || (editing.endsAt && !endsAt)) {
+      setMessage('开始或结束时间格式不正确。')
+      return
+    }
+    if (startsAt && endsAt && new Date(endsAt) <= new Date(startsAt)) {
+      setMessage('结束时间必须晚于开始时间。')
+      return
+    }
+    const payload: BenefitProgram = {
+      id: editing.id,
+      name: editing.name.trim(),
+      goal: editing.goal,
+      status: editing.status,
+      triggerType: editing.triggerType,
+      orderScope: editing.orderScope,
+      benefitType: editing.benefitType,
+      benefitValue: editing.benefitValue,
+      minAmountFen: editing.minAmountFen,
+      planIds: editing.planIds,
+      monthValues: editing.monthValues,
+      audienceType: editing.audienceType,
+      startsAt,
+      endsAt,
+      perUserLimit: editing.perUserLimit,
+      totalLimit: editing.totalLimit,
+      usedCount: editing.usedCount,
+      cashBudgetFen: editing.cashBudgetFen,
+      cashSpentFen: editing.cashSpentFen,
+      grantDaysLimit: editing.grantDaysLimit,
+      grantDaysUsed: editing.grantDaysUsed,
+      priority: editing.priority,
+      channelLabel: editing.channelLabel?.trim() || undefined,
+      code:
+        editing.triggerType === 'promo_code'
+          ? editing.code?.trim() || undefined
+          : undefined,
+      codeMask: editing.codeMask,
+      codeTotalLimit: editing.codeTotalLimit ?? 0,
+      codePerUserLimit: editing.codePerUserLimit ?? 0
+    }
     setMessage('')
-    void save(editing)
+    void save(payload)
       .unwrap()
       .then(() => {
         closeEditor()
@@ -458,8 +556,7 @@ export function AdminBenefitsPage() {
                     </span>
                   </legend>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {Array.from({ length: 12 }, (_, index) => index + 1).map(
-                      month => (
+                    {subscriptionMonths.map(month => (
                         <button
                           key={month}
                           type="button"
@@ -468,8 +565,7 @@ export function AdminBenefitsPage() {
                         >
                           {month} 月
                         </button>
-                      )
-                    )}
+                    ))}
                   </div>
                 </fieldset>
               </>
@@ -482,7 +578,7 @@ export function AdminBenefitsPage() {
                     <input
                       className={dialogFieldClass}
                       type="datetime-local"
-                      value={editing.startsAt ?? ''}
+                      value={toLocalInput(editing.startsAt)}
                       onChange={event =>
                         updateEditing({
                           startsAt: event.target.value || undefined
@@ -495,7 +591,7 @@ export function AdminBenefitsPage() {
                     <input
                       className={dialogFieldClass}
                       type="datetime-local"
-                      value={editing.endsAt ?? ''}
+                      value={toLocalInput(editing.endsAt)}
                       onChange={event =>
                         updateEditing({
                           endsAt: event.target.value || undefined
