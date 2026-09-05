@@ -184,7 +184,7 @@ func renewOrderHandler(c *gin.Context) {
 		return
 	}
 	var planID, imageID, instanceID string
-	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT plan_id,image_id,instance_id FROM xcloud_orders WHERE id=? AND owner_id=? AND status IN (?,?)`, c.Param("id"), user.ID, orderActive, orderExpired).Scan(&planID, &imageID, &instanceID)
+	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT plan_id,image_id,instance_id FROM xcloud_orders WHERE id=? AND owner_id=? AND status IN (?,?,?)`, c.Param("id"), user.ID, orderActive, orderExpired, orderRefund).Scan(&planID, &imageID, &instanceID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "订单不可续费"})
 		return
@@ -225,6 +225,42 @@ func renewWithWalletHandler(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusAccepted, gin.H{"order": item, "task": task})
+}
+
+func refundQuoteHandler(c *gin.Context) {
+	user := c.MustGet("user").(oidcUser)
+	quote, err := refundQuoteForOrder(c.Request.Context(), user.ID, c.Param("id"))
+	if err != nil {
+		businessError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, quote)
+}
+
+func refundOrderHandler(c *gin.Context) {
+	user := c.MustGet("user").(oidcUser)
+	quote, entry, err := refundOrder(c.Request.Context(), user.ID, c.Param("id"))
+	if err != nil {
+		businessError(c, err)
+		return
+	}
+	wallet, err := walletForUser(c.Request.Context(), user.ID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	items, err := listOrders(c.Request.Context(), user.ID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	for _, item := range items {
+		if item.ID == c.Param("id") {
+			c.JSON(http.StatusOK, gin.H{"order": item, "quote": quote, "entry": entry, "wallet": wallet})
+			return
+		}
+	}
+	internalError(c, errors.New("退款订单读取失败"))
 }
 
 func adminCatalog(c *gin.Context) {
@@ -466,7 +502,7 @@ func queueInstanceAction(c *gin.Context) {
 		return
 	}
 	action := c.Param("action")
-	if action != "start" && action != "stop" && action != "delete" {
+	if action != "start" && action != "stop" && action != "restart" && action != "delete" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的实例操作"})
 		return
 	}

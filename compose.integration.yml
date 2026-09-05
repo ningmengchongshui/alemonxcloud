@@ -1,0 +1,55 @@
+# Isolated verification stack. It is never included by production compose.
+# The explicit project name prevents test cleanup from matching production or
+# a developer's unrelated Compose project in this directory.
+name: xcloud-integration
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: xcloud_integration
+      MYSQL_USER: xcloud
+      MYSQL_PASSWORD: xcloud-test-only
+      MYSQL_ROOT_PASSWORD: root-test-only
+    ports:
+      - "13306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot-test-only"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks: [xcloud_integration]
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "16379:6379"
+    networks: [xcloud_integration]
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "15672:15672"
+      - "15673:15672"
+      - "15682:5672"
+    networks: [xcloud_integration]
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile.integration
+    environment:
+      GIN_MODE: release
+      AGENT_ADDR: 0.0.0.0:13092
+      XCLOUD_AGENT_TOKEN: integration-agent-token
+      XCLOUD_INSTANCE_DATA_ROOT: /var/lib/xcloud/instances
+    ports:
+      - "13093:13092"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - xcloud_integration_instances:/var/lib/xcloud/instances
+    networks: [xcloud_integration]
+
+networks:
+  xcloud_integration:
+    name: xcloud_integration
+
+volumes:
+  xcloud_integration_instances:

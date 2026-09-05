@@ -2,6 +2,7 @@
 set -e
 
 find . -name '.DS_Store' -type f -delete
+yarn --cwd frontend format
 yarn --cwd frontend build
 server_binary=$(mktemp)
 agent_binary=$(mktemp)

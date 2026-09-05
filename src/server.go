@@ -84,17 +84,11 @@ func Run() {
 	if err := initInstanceStore(); err != nil && mode == gin.ReleaseMode {
 		log.Fatalf("initialize MySQL: %v", err)
 	}
-	if err := initializeControlPlane(context.Background()); err != nil {
+	if err := initializeSchemaMigrations(context.Background()); err != nil {
 		if mode == gin.ReleaseMode {
-			log.Fatalf("initialize control plane: %v", err)
+			log.Fatalf("initialize schema migrations: %v", err)
 		}
-		log.Printf("control plane unavailable: %v", err)
-	}
-	if err := initializeUpgradeSchema(context.Background()); err != nil {
-		if mode == gin.ReleaseMode {
-			log.Fatalf("initialize platform upgrade: %v", err)
-		}
-		log.Printf("platform upgrade schema unavailable: %v", err)
+		log.Printf("schema migrations unavailable: %v", err)
 	}
 	if err := initTaskQueue(); err != nil {
 		if mode == gin.ReleaseMode {
@@ -125,20 +119,33 @@ func Run() {
 	router.GET("/api/wallet/entries", requireSession, walletEntriesHandler)
 	router.POST("/api/purchases", requireSession, purchaseHandler)
 	router.GET("/api/notifications", requireSession, notificationsHandler)
+	router.POST("/api/telemetry/console-events", requireSession, consoleTelemetryHandler)
 	router.POST("/api/notifications/read-all", requireSession, readAllNotificationsHandler)
 	router.POST("/api/notifications/:id/read", requireSession, readNotificationHandler)
 	router.GET("/api/instances/:id/tasks", requireSession, instanceTasksHandler)
 	router.GET("/api/orders", requireSession, myOrders)
+	router.GET("/api/tickets", requireSession, myTicketsHandler)
+	router.POST("/api/tickets", requireSession, createTicketHandler)
+	router.GET("/api/tickets/:id", requireSession, ticketDetailHandler)
+	router.POST("/api/tickets/:id/messages", requireSession, ticketReplyHandler)
+	router.POST("/api/tickets/:id/reopen", requireSession, reopenTicketHandler)
 	router.POST("/api/orders", requireSession, manualPaymentDisabled)
 	router.POST("/api/orders/:id/cancel", requireSession, manualPaymentDisabled)
 	router.POST("/api/orders/:id/payment", requireSession, manualPaymentDisabled)
 	router.POST("/api/orders/:id/renew", requireSession, renewWithWalletHandler)
+	router.GET("/api/orders/:id/refund-quote", requireSession, refundQuoteHandler)
+	router.POST("/api/orders/:id/refund", requireSession, refundOrderHandler)
 	router.GET("/api/admin/catalog", requireAdmin, adminCatalog)
 	router.POST("/api/admin/images", requireAdmin, adminSaveImage)
 	router.PUT("/api/admin/images/:id", requireAdmin, adminSaveImage)
 	router.POST("/api/admin/plans", requireAdmin, adminSavePlan)
 	router.PUT("/api/admin/plans/:id", requireAdmin, adminSavePlan)
 	router.GET("/api/admin/orders", requireAdmin, adminOrders)
+	router.GET("/api/admin/tickets", requireAdmin, adminTicketsHandler)
+	router.GET("/api/admin/tickets/:id", requireAdmin, adminTicketDetailHandler)
+	router.POST("/api/admin/tickets/:id/messages", requireAdmin, adminTicketReplyHandler)
+	router.POST("/api/admin/tickets/:id/status", requireAdmin, adminTicketStatusHandler)
+	router.POST("/api/admin/tickets/:id/priority", requireAdmin, adminTicketPriorityHandler)
 	router.POST("/api/admin/orders/:id/confirm", requireAdmin, manualPaymentDisabled)
 	router.POST("/api/admin/orders/:id/reject", requireAdmin, manualPaymentDisabled)
 	router.GET("/api/admin/nodes", requireAdmin, adminNodes)
@@ -637,7 +644,13 @@ func storeSession(sid string, value session) error {
 		if err != nil {
 			return err
 		}
-		return sessionRedis.Set(context.Background(), sessionPrefix+sid, data, time.Until(value.ExpiresAt)).Err()
+		if err := sessionRedis.Set(context.Background(), sessionPrefix+sid, data, time.Until(value.ExpiresAt)).Err(); err == nil {
+			return nil
+		} else if env("GIN_MODE", gin.DebugMode) == gin.ReleaseMode {
+			return err
+		} else {
+			log.Printf("session store Redis write failed; using in-memory development fallback: %v", err)
+		}
 	}
 	sessionsMu.Lock()
 	sessions[sid] = value
@@ -647,14 +660,15 @@ func storeSession(sid string, value session) error {
 func loadSession(sid string) (session, bool) {
 	if sessionRedis != nil {
 		data, err := sessionRedis.Get(context.Background(), sessionPrefix+sid).Bytes()
-		if err != nil {
+		if err == nil {
+			var value session
+			if json.Unmarshal(data, &value) == nil {
+				return value, true
+			}
+		}
+		if env("GIN_MODE", gin.DebugMode) == gin.ReleaseMode {
 			return session{}, false
 		}
-		var value session
-		if json.Unmarshal(data, &value) != nil {
-			return session{}, false
-		}
-		return value, true
 	}
 	sessionsMu.RLock()
 	value, ok := sessions[sid]
@@ -664,7 +678,6 @@ func loadSession(sid string) (session, bool) {
 func deleteSession(sid string) {
 	if sessionRedis != nil {
 		_ = sessionRedis.Del(context.Background(), sessionPrefix+sid).Err()
-		return
 	}
 	sessionsMu.Lock()
 	delete(sessions, sid)

@@ -21,6 +21,10 @@ func initInstanceStore() error {
 		log.Printf("instance store: in-memory (development only)")
 		return nil
 	}
+	return initInstanceStoreWithDSN(dsn)
+}
+
+func initInstanceStoreWithDSN(dsn string) error {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return fmt.Errorf("open MySQL: %w", err)
@@ -36,31 +40,6 @@ func initInstanceStore() error {
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("ping MySQL: %w", err)
-	}
-	const schema = `CREATE TABLE IF NOT EXISTS xcloud_instances (
-		id VARCHAR(64) PRIMARY KEY, owner_id VARCHAR(191) NOT NULL, name VARCHAR(64) NOT NULL,
-		image VARCHAR(255) NOT NULL, version VARCHAR(64) NOT NULL, spec VARCHAR(64) NOT NULL,
-		status VARCHAR(32) NOT NULL, access_address VARCHAR(255) NOT NULL, container_name VARCHAR(64) NOT NULL,
-		created_at DATETIME NOT NULL, INDEX idx_xcloud_instances_owner (owner_id, created_at)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
-	if _, err := db.ExecContext(ctx, schema); err != nil {
-		_ = db.Close()
-		return fmt.Errorf("create instance schema: %w", err)
-	}
-	for _, statement := range []string{
-		`CREATE TABLE IF NOT EXISTS xcloud_settings (setting_key VARCHAR(64) PRIMARY KEY, setting_value JSON NOT NULL, updated_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_nodes (id VARCHAR(64) PRIMARY KEY, name VARCHAR(64) NOT NULL, agent_url VARCHAR(255) NOT NULL, cpu_total DECIMAL(8,2) NOT NULL DEFAULT 16, memory_total_mb INT NOT NULL DEFAULT 262144, enabled BOOLEAN NOT NULL DEFAULT TRUE, last_heartbeat_at DATETIME NULL, created_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_images (id VARCHAR(64) PRIMARY KEY, name VARCHAR(64) NOT NULL, image_ref VARCHAR(255) NOT NULL, image_digest VARCHAR(255) NULL, version VARCHAR(64) NOT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at DATETIME NOT NULL, UNIQUE KEY uq_xcloud_image_digest (image_digest), UNIQUE KEY uq_xcloud_image_ref (image_ref)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_plans (id VARCHAR(64) PRIMARY KEY, name VARCHAR(64) NOT NULL, cpu DECIMAL(8,2) NOT NULL, memory_mb INT NOT NULL, monthly_price_fen INT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, sort_order INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_orders (id VARCHAR(64) PRIMARY KEY, owner_id VARCHAR(191) NOT NULL, plan_id VARCHAR(64) NOT NULL, image_id VARCHAR(64) NOT NULL, instance_id VARCHAR(64) NULL, amount_fen INT NOT NULL, status VARCHAR(32) NOT NULL, payment_note VARCHAR(255) NULL, expires_at DATETIME NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, INDEX idx_xcloud_orders_owner (owner_id, created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_payments (id VARCHAR(64) PRIMARY KEY, order_id VARCHAR(64) NOT NULL, payer_id VARCHAR(191) NOT NULL, amount_fen INT NOT NULL, reference_no VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, submitted_at DATETIME NOT NULL, reviewed_at DATETIME NULL, reviewer_id VARCHAR(191) NULL, UNIQUE KEY uq_xcloud_payment_reference (reference_no), INDEX idx_xcloud_payments_order (order_id, submitted_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_tasks (id VARCHAR(64) PRIMARY KEY, instance_id VARCHAR(64) NOT NULL, action VARCHAR(32) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, attempts INT NOT NULL DEFAULT 0, last_error TEXT NULL, run_after DATETIME NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE KEY uq_xcloud_task_idempotency (idempotency_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_audit_logs (id BIGINT AUTO_INCREMENT PRIMARY KEY, actor_id VARCHAR(191) NOT NULL, action VARCHAR(64) NOT NULL, target_type VARCHAR(64) NOT NULL, target_id VARCHAR(64) NOT NULL, detail JSON NULL, created_at DATETIME NOT NULL, INDEX idx_xcloud_audit_actor (actor_id, created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-	} {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			_ = db.Close()
-			return fmt.Errorf("create control schema: %w", err)
-		}
 	}
 	instanceDB = db
 	log.Printf("instance store: MySQL")

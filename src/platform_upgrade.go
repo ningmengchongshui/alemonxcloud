@@ -33,6 +33,7 @@ type walletEntry struct {
 	Type            string    `json:"type"`
 	Note            string    `json:"note"`
 	ActorID         string    `json:"actorId"`
+	OrderID         string    `json:"orderId,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
 }
 type notification struct {
@@ -53,37 +54,8 @@ type taskEvent struct {
 }
 
 func initializeUpgradeSchema(ctx context.Context) error {
-	if instanceDB == nil {
-		return nil
-	}
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS xcloud_users (id VARCHAR(191) PRIMARY KEY, username VARCHAR(191) NOT NULL, email VARCHAR(255) NOT NULL, last_login_at DATETIME NOT NULL, created_at DATETIME NOT NULL, INDEX idx_xcloud_users_username (username)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_wallets (user_id VARCHAR(191) PRIMARY KEY, balance_fen BIGINT NOT NULL DEFAULT 0, updated_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_wallet_entries (id VARCHAR(64) PRIMARY KEY, user_id VARCHAR(191) NOT NULL, amount_fen BIGINT NOT NULL, balance_after_fen BIGINT NOT NULL, entry_type VARCHAR(32) NOT NULL, note VARCHAR(255) NOT NULL, actor_id VARCHAR(191) NOT NULL, created_at DATETIME NOT NULL, INDEX idx_xcloud_wallet_entries_user (user_id, created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_notifications (id VARCHAR(64) PRIMARY KEY, user_id VARCHAR(191) NOT NULL, notification_type VARCHAR(48) NOT NULL, title VARCHAR(128) NOT NULL, body VARCHAR(512) NOT NULL, data JSON NULL, read_at DATETIME NULL, created_at DATETIME NOT NULL, INDEX idx_xcloud_notifications_user (user_id, read_at, created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS xcloud_task_events (id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(64) NOT NULL, event_type VARCHAR(32) NOT NULL, detail VARCHAR(1024) NOT NULL DEFAULT '', created_at DATETIME NOT NULL, INDEX idx_xcloud_task_events_task (task_id, created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`ALTER TABLE xcloud_nodes ADD COLUMN agent_token_ciphertext TEXT NULL`,
-		`ALTER TABLE xcloud_nodes ADD COLUMN docker_version VARCHAR(64) NULL`,
-		`ALTER TABLE xcloud_nodes ADD COLUMN disk_available_bytes BIGINT NULL`,
-		`ALTER TABLE xcloud_nodes ADD COLUMN managed_container_count INT NULL`,
-		`ALTER TABLE xcloud_orders ADD COLUMN payment_source VARCHAR(32) NULL`,
-		`ALTER TABLE xcloud_orders ADD COLUMN wallet_entry_id VARCHAR(64) NULL`,
-		`ALTER TABLE xcloud_orders ADD COLUMN scheduled_node_id VARCHAR(64) NULL`,
-		`ALTER TABLE xcloud_orders ADD COLUMN selected_image_version VARCHAR(64) NULL`,
-		`ALTER TABLE xcloud_images MODIFY COLUMN image_digest VARCHAR(255) NULL`,
-	}
-	for _, statement := range statements {
-		if _, err := instanceDB.ExecContext(ctx, statement); err != nil && !isDuplicateMigration(err) {
-			return err
-		}
-	}
-	if err := normalizeImageSources(ctx); err != nil {
-		return err
-	}
-	if _, err := instanceDB.ExecContext(ctx, `ALTER TABLE xcloud_images ADD UNIQUE KEY uq_xcloud_image_ref (image_ref)`); err != nil && !isDuplicateMigration(err) {
-		return fmt.Errorf("为镜像地址创建唯一约束: %w", err)
-	}
-	return removeBootstrapData(ctx)
+	_ = ctx
+	return nil
 }
 
 // Older deployments could contain the same repository more than once because
@@ -244,7 +216,7 @@ func walletForUser(ctx context.Context, id string) (cloudUser, error) {
 	return item, err
 }
 func walletEntries(ctx context.Context, id string, limit int) ([]walletEntry, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,created_at FROM xcloud_wallet_entries WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, id, limit)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,COALESCE(order_id,''),created_at FROM xcloud_wallet_entries WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, id, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +224,7 @@ func walletEntries(ctx context.Context, id string, limit int) ([]walletEntry, er
 	out := []walletEntry{}
 	for rows.Next() {
 		var item walletEntry
-		if err := rows.Scan(&item.ID, &item.UserID, &item.AmountFen, &item.BalanceAfterFen, &item.Type, &item.Note, &item.ActorID, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.UserID, &item.AmountFen, &item.BalanceAfterFen, &item.Type, &item.Note, &item.ActorID, &item.OrderID, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -291,7 +263,7 @@ func adjustWallet(ctx context.Context, userID string, amount int, note, actor st
 	if err = tx.Commit(); err != nil {
 		return walletEntry{}, err
 	}
-	_ = createNotification(ctx, userID, "wallet", "代币余额已调整", fmt.Sprintf("本次变动 %+.2f 代币。", float64(amount)/100), map[string]any{"entryId": entry.ID})
+	_ = createNotification(ctx, userID, "wallet", "XCoin 余额已调整", fmt.Sprintf("本次变动 %+.2f XCoin。", float64(amount)/100), map[string]any{"entryId": entry.ID})
 	return entry, nil
 }
 
@@ -481,7 +453,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	}
 	amount := p.MonthlyFen * months
 	if balance < amount {
-		return order{}, controlTask{}, errors.New("代币余额不足")
+		return order{}, controlTask{}, errors.New("XCoin 余额不足")
 	}
 	n, err := selectNodeForPlan(ctx, tx, p)
 	if err != nil {
@@ -489,18 +461,19 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	}
 	now := time.Now()
 	instanceID := newID("ins")
+	orderID := newID("ord")
 	route := routeKey(ownerID + "\x00" + instanceID)
 	container := fmt.Sprintf("xcloud-%s", strings.TrimPrefix(routeKey(instanceID), "r"))
 	expires := now.AddDate(0, months, 0)
-	entry := walletEntry{ID: newID("wal"), UserID: ownerID, AmountFen: -amount, BalanceAfterFen: balance - amount, Type: "purchase", Note: "购买 " + p.Name, ActorID: ownerID, CreatedAt: now}
+	entry := walletEntry{ID: newID("wal"), UserID: ownerID, AmountFen: -amount, BalanceAfterFen: balance - amount, Type: "purchase", Note: "购买 " + p.Name, ActorID: ownerID, OrderID: orderID, CreatedAt: now}
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=?,updated_at=? WHERE user_id=?`, entry.BalanceAfterFen, now, ownerID); err != nil {
 		return order{}, controlTask{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?)`, entry.ID, entry.UserID, entry.AmountFen, entry.BalanceAfterFen, entry.Type, entry.Note, entry.ActorID, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,order_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)`, entry.ID, entry.UserID, entry.AmountFen, entry.BalanceAfterFen, entry.Type, entry.Note, entry.ActorID, entry.OrderID, now); err != nil {
 		return order{}, controlTask{}, err
 	}
-	o := order{ID: newID("ord"), OwnerID: ownerID, PlanID: p.ID, ImageID: img.ID, InstanceID: instanceID, AmountFen: amount, Status: orderDeploy, ExpiresAt: &expires, CreatedAt: &now, UpdatedAt: &now, PlanName: p.Name, ImageName: img.Name, ImageVersion: imageVersion}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, orderDeploy, "wallet", entry.ID, n.ID, imageVersion, expires, now, now); err != nil {
+	o := order{ID: orderID, OwnerID: ownerID, PlanID: p.ID, ImageID: img.ID, InstanceID: instanceID, AmountFen: amount, Status: orderDeploy, ServiceStartsAt: &now, ExpiresAt: &expires, CreatedAt: &now, UpdatedAt: &now, PlanName: p.Name, ImageName: img.Name, ImageVersion: imageVersion}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, orderDeploy, "wallet", entry.ID, n.ID, imageVersion, now, expires, now, now); err != nil {
 		return order{}, controlTask{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, img.Name, img.ImageRef, imageVersion, fmt.Sprintf("%g 核 / %d GB", p.CPU, p.MemoryMB/1024), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, n.ID, o.ID, route, expires); err != nil {
@@ -517,7 +490,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 		return order{}, controlTask{}, err
 	}
 	appendTaskEvent(ctx, t.ID, "queued", "钱包扣款后等待部署")
-	_ = createNotification(ctx, ownerID, "purchase", "购买已提交", fmt.Sprintf("已扣除 %.2f 代币，正在部署。", float64(amount)/100), map[string]any{"orderId": o.ID, "instanceId": instanceID, "taskId": t.ID})
+	_ = createNotification(ctx, ownerID, "purchase", "购买已提交", fmt.Sprintf("已扣除 %.2f XCoin，正在部署。", float64(amount)/100), map[string]any{"orderId": o.ID, "instanceId": instanceID, "taskId": t.ID})
 	return o, t, nil
 }
 
@@ -538,7 +511,7 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	var img catalogImage
 	var instanceStatus string
 	var currentExpiry sql.NullTime
-	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at,ins.status,ins.expires_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id JOIN xcloud_instances ins ON ins.id=o.instance_id WHERE o.id=? AND o.owner_id=? AND o.status IN (?,?) FOR UPDATE`, sourceOrderID, ownerID, orderActive, orderExpired).Scan(&source.ID, &source.OwnerID, &source.PlanID, &source.ImageID, &source.InstanceID, &source.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt, &instanceStatus, &currentExpiry)
+	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at,ins.status,ins.expires_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id JOIN xcloud_instances ins ON ins.id=o.instance_id WHERE o.id=? AND o.owner_id=? AND o.status IN (?,?,?) FOR UPDATE`, sourceOrderID, ownerID, orderActive, orderExpired, orderRefund).Scan(&source.ID, &source.OwnerID, &source.PlanID, &source.ImageID, &source.InstanceID, &source.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt, &instanceStatus, &currentExpiry)
 	if err != nil {
 		return order{}, nil, errors.New("订单不可续费")
 	}
@@ -554,27 +527,28 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	}
 	amount := p.MonthlyFen * months
 	if balance < amount {
-		return order{}, nil, errors.New("代币余额不足")
+		return order{}, nil, errors.New("XCoin 余额不足")
 	}
 	now := time.Now()
+	orderID := newID("ord")
 	base := now
 	if currentExpiry.Valid && currentExpiry.Time.After(now) {
 		base = currentExpiry.Time
 	}
 	expires := base.AddDate(0, months, 0)
-	entry := walletEntry{ID: newID("wal"), UserID: ownerID, AmountFen: -amount, BalanceAfterFen: balance - amount, Type: "renewal", Note: "续费 " + p.Name, ActorID: ownerID, CreatedAt: now}
+	entry := walletEntry{ID: newID("wal"), UserID: ownerID, AmountFen: -amount, BalanceAfterFen: balance - amount, Type: "renewal", Note: "续费 " + p.Name, ActorID: ownerID, OrderID: orderID, CreatedAt: now}
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=?,updated_at=? WHERE user_id=?`, entry.BalanceAfterFen, now, ownerID); err != nil {
 		return order{}, nil, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?)`, entry.ID, entry.UserID, entry.AmountFen, entry.BalanceAfterFen, entry.Type, entry.Note, entry.ActorID, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,order_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)`, entry.ID, entry.UserID, entry.AmountFen, entry.BalanceAfterFen, entry.Type, entry.Note, entry.ActorID, entry.OrderID, now); err != nil {
 		return order{}, nil, err
 	}
 	status := orderActive
 	if instanceStatus == "expired" {
 		status = orderDeploy
 	}
-	item := order{ID: newID("ord"), OwnerID: ownerID, PlanID: p.ID, ImageID: img.ID, InstanceID: source.InstanceID, AmountFen: amount, Status: status, ExpiresAt: &expires, CreatedAt: &now, UpdatedAt: &now, PlanName: p.Name, ImageName: img.Name, ImageVersion: img.Version}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_note,payment_source,wallet_entry_id,selected_image_version,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, item.ID, ownerID, p.ID, img.ID, source.InstanceID, amount, status, "续费订单："+sourceOrderID, "wallet", entry.ID, img.Version, expires, now, now); err != nil {
+	item := order{ID: orderID, OwnerID: ownerID, PlanID: p.ID, ImageID: img.ID, InstanceID: source.InstanceID, AmountFen: amount, Status: status, ServiceStartsAt: &base, ExpiresAt: &expires, CreatedAt: &now, UpdatedAt: &now, PlanName: p.Name, ImageName: img.Name, ImageVersion: img.Version}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_note,payment_source,wallet_entry_id,selected_image_version,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, item.ID, ownerID, p.ID, img.ID, source.InstanceID, amount, status, "续费订单："+sourceOrderID, "wallet", entry.ID, img.Version, base, expires, now, now); err != nil {
 		return order{}, nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET expires_at=?,purge_at=NULL,status=CASE WHEN status='expired' THEN 'deploying' ELSE status END WHERE id=?`, expires, source.InstanceID); err != nil {
@@ -601,7 +575,7 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if task != nil {
 		appendTaskEvent(ctx, task.ID, "queued", "钱包扣款后等待续费恢复")
 	}
-	_ = createNotification(ctx, ownerID, "renewal", "续费成功", fmt.Sprintf("已扣除 %.2f 代币，服务有效期已延长。", float64(amount)/100), map[string]any{"orderId": item.ID, "instanceId": source.InstanceID})
+	_ = createNotification(ctx, ownerID, "renewal", "续费成功", fmt.Sprintf("已扣除 %.2f XCoin，服务有效期已延长。", float64(amount)/100), map[string]any{"orderId": item.ID, "instanceId": source.InstanceID})
 	return item, task, nil
 }
 func validImageTag(value string) bool {

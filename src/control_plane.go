@@ -19,6 +19,7 @@ const (
 	orderExpired = "expired"
 	orderCancel  = "cancelled"
 	orderReject  = "rejected"
+	orderRefund  = "refunded"
 
 	taskPending = "pending"
 	taskRunning = "running"
@@ -66,20 +67,24 @@ type node struct {
 }
 
 type order struct {
-	ID           string     `json:"id"`
-	OwnerID      string     `json:"ownerId"`
-	PlanID       string     `json:"planId"`
-	ImageID      string     `json:"imageId"`
-	InstanceID   string     `json:"instanceId"`
-	Status       string     `json:"status"`
-	PaymentNote  string     `json:"paymentNote"`
-	AmountFen    int        `json:"amountFen"`
-	ExpiresAt    *time.Time `json:"expiresAt"`
-	CreatedAt    *time.Time `json:"createdAt"`
-	UpdatedAt    *time.Time `json:"updatedAt"`
-	PlanName     string     `json:"planName"`
-	ImageName    string     `json:"imageName"`
-	ImageVersion string     `json:"imageVersion"`
+	ID                  string     `json:"id"`
+	OwnerID             string     `json:"ownerId"`
+	PlanID              string     `json:"planId"`
+	ImageID             string     `json:"imageId"`
+	InstanceID          string     `json:"instanceId"`
+	Status              string     `json:"status"`
+	PaymentNote         string     `json:"paymentNote"`
+	AmountFen           int        `json:"amountFen"`
+	ServiceStartsAt     *time.Time `json:"serviceStartsAt,omitempty"`
+	ExpiresAt           *time.Time `json:"expiresAt"`
+	RefundedAt          *time.Time `json:"refundedAt,omitempty"`
+	RefundAmountFen     int        `json:"refundAmountFen,omitempty"`
+	RefundWalletEntryID string     `json:"refundWalletEntryId,omitempty"`
+	CreatedAt           *time.Time `json:"createdAt"`
+	UpdatedAt           *time.Time `json:"updatedAt"`
+	PlanName            string     `json:"planName"`
+	ImageName           string     `json:"imageName"`
+	ImageVersion        string     `json:"imageVersion"`
 }
 
 type controlTask struct {
@@ -104,31 +109,7 @@ type auditLog struct {
 }
 
 func initializeControlPlane(ctx context.Context) error {
-	if instanceDB == nil {
-		return nil
-	}
-	for _, statement := range []string{
-		`ALTER TABLE xcloud_instances ADD COLUMN cpu DECIMAL(8,2) NOT NULL DEFAULT 0`,
-		`ALTER TABLE xcloud_instances ADD COLUMN memory_mb INT NOT NULL DEFAULT 0`,
-		`ALTER TABLE xcloud_instances ADD COLUMN node_id VARCHAR(64) NULL`,
-		`ALTER TABLE xcloud_instances ADD COLUMN order_id VARCHAR(64) NULL`,
-		`ALTER TABLE xcloud_instances ADD COLUMN route_key VARCHAR(32) NULL`,
-		`ALTER TABLE xcloud_instances ADD COLUMN expires_at DATETIME NULL`,
-		`ALTER TABLE xcloud_instances ADD COLUMN purge_at DATETIME NULL`,
-		`ALTER TABLE xcloud_instances ADD UNIQUE KEY uq_xcloud_route_key (route_key)`,
-		`ALTER TABLE xcloud_tasks ADD COLUMN payload JSON NULL`,
-		`ALTER TABLE xcloud_tasks ADD COLUMN finished_at DATETIME NULL`,
-		`ALTER TABLE xcloud_nodes ADD COLUMN updated_at DATETIME NULL`,
-		`ALTER TABLE xcloud_nodes ADD COLUMN cpu_detected DECIMAL(8,2) NOT NULL DEFAULT 0`,
-		`ALTER TABLE xcloud_nodes ADD COLUMN memory_detected_mb INT NOT NULL DEFAULT 0`,
-		`UPDATE xcloud_nodes SET cpu_detected=cpu_total,memory_detected_mb=memory_total_mb WHERE cpu_detected=0 OR memory_detected_mb=0`,
-		`ALTER TABLE xcloud_orders ADD COLUMN renewal_instance_id VARCHAR(64) NULL`,
-		`ALTER TABLE xcloud_orders ADD COLUMN renewal_instance_id VARCHAR(64) NULL`,
-	} {
-		if _, err := instanceDB.ExecContext(ctx, statement); err != nil && !isDuplicateMigration(err) {
-			return fmt.Errorf("控制面迁移: %w", err)
-		}
-	}
+	_ = ctx
 	return nil
 }
 
@@ -274,10 +255,10 @@ func createOrder(ctx context.Context, ownerID, planID, imageID string, months in
 }
 
 func listOrders(ctx context.Context, ownerID string) ([]order, error) {
-	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,o.status,COALESCE(o.payment_note,''),o.expires_at,o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.owner_id=? ORDER BY o.created_at DESC`, ownerID)
+	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.owner_id=? ORDER BY o.created_at DESC`, ownerID)
 }
 func listAllOrders(ctx context.Context) ([]order, error) {
-	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,o.status,COALESCE(o.payment_note,''),o.expires_at,o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id ORDER BY o.created_at DESC`)
+	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id ORDER BY o.created_at DESC`)
 }
 func scanOrders(ctx context.Context, statement string, args ...any) ([]order, error) {
 	rows, err := instanceDB.QueryContext(ctx, statement, args...)
@@ -288,7 +269,7 @@ func scanOrders(ctx context.Context, statement string, args ...any) ([]order, er
 	items := []order{}
 	for rows.Next() {
 		var v order
-		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.Status, &v.PaymentNote, &v.ExpiresAt, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion); err != nil {
+		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.Status, &v.PaymentNote, &v.ServiceStartsAt, &v.ExpiresAt, &v.RefundedAt, &v.RefundAmountFen, &v.RefundWalletEntryID, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion); err != nil {
 			return nil, err
 		}
 		items = append(items, v)
@@ -376,7 +357,7 @@ func confirmOrder(ctx context.Context, id, actorID string) (controlTask, error) 
 		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET status='deploying',expires_at=?,purge_at=NULL WHERE id=?`, expires, renewal.String); err != nil {
 			return controlTask{}, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET instance_id=?,status=?,expires_at=?,updated_at=? WHERE id=?`, renewal.String, orderDeploy, expires, now, o.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET instance_id=?,status=?,service_starts_at=?,expires_at=?,updated_at=? WHERE id=?`, renewal.String, orderDeploy, base, expires, now, o.ID); err != nil {
 			return controlTask{}, err
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_payments SET status='confirmed',reviewed_at=?,reviewer_id=? WHERE order_id=? AND status='submitted'`, now, actorID, o.ID); err != nil {
@@ -413,7 +394,7 @@ func confirmOrder(ctx context.Context, id, actorID string) (controlTask, error) 
 	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, o.OwnerID, "AlemonX", img.ImageRef, img.Version, fmt.Sprintf("%g 核 / %d GB", p.CPU, p.MemoryMB/1024), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, n.ID, o.ID, route, expires); err != nil {
 		return controlTask{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET instance_id=?,status=?,expires_at=?,updated_at=? WHERE id=?`, instanceID, orderDeploy, expires, now, o.ID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET instance_id=?,status=?,service_starts_at=?,expires_at=?,updated_at=? WHERE id=?`, instanceID, orderDeploy, now, expires, now, o.ID); err != nil {
 		return controlTask{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_payments SET status='confirmed',reviewed_at=?,reviewer_id=? WHERE order_id=? AND status='submitted'`, now, actorID, o.ID); err != nil {
@@ -644,18 +625,35 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if err == nil {
 			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='stopped' WHERE id=?`, item.ID)
 		}
+	case "restart":
+		// The Agent deliberately exposes only the primitive lifecycle calls.  A
+		// restart remains an auditable persisted task while preserving that small
+		// Agent surface: stop must complete before start is attempted.
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
+		if err == nil {
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, nil)
+		}
+		if err == nil {
+			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='running' WHERE id=?`, item.ID)
+		}
 	case "expire-stop":
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='expired',purge_at=DATE_ADD(NOW(),INTERVAL 7 DAY) WHERE id=?`, item.ID)
+			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='expired',purge_at=DATE_ADD(NOW(), INTERVAL retention_days DAY) WHERE id=?`, item.ID)
 			if err == nil {
-				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=?`, orderExpired, item.ID)
+				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status IN (?,?)`, orderExpired, item.ID, orderActive, orderDeploy)
+				if err == nil {
+					notifyInstanceRetention(ctx, item.ID, "stopped", "实例已停止", "服务已到期并停止，数据将在保留期结束后清理。")
+				}
 			}
 		}
 	case "delete":
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='retention',purge_at=DATE_ADD(NOW(),INTERVAL 7 DAY) WHERE id=?`, item.ID)
+			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='retention',purge_at=DATE_ADD(NOW(), INTERVAL retention_days DAY) WHERE id=?`, item.ID)
+			if err == nil {
+				notifyInstanceRetention(ctx, item.ID, "deleted", "实例已停止", "实例已删除，数据将在保留期结束后清理。")
+			}
 		}
 	case "purge":
 		err = nodeRequest(ctx, n, httpMethodDelete, "/container/"+item.ContainerName+"?purge=true", nil, nil)
@@ -666,6 +664,23 @@ func executeTask(ctx context.Context, task controlTask) error {
 		return errors.New("未知任务动作")
 	}
 	return err
+}
+
+func notifyInstanceRetention(ctx context.Context, instanceID, eventType, title, intro string) {
+	var ownerID string
+	var purgeAt time.Time
+	var retentionDays int
+	if err := instanceDB.QueryRowContext(ctx, `SELECT owner_id,purge_at,retention_days FROM xcloud_instances WHERE id=?`, instanceID).Scan(&ownerID, &purgeAt, &retentionDays); err != nil {
+		return
+	}
+	result, err := instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_instance_notification_events (instance_id,event_type,created_at) VALUES (?,?,NOW())`, instanceID, eventType)
+	if err != nil {
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return
+	}
+	_ = createNotification(ctx, ownerID, "instance_retention", title, fmt.Sprintf("%s 数据保留 %d 天，预计于 %s 清理。", intro, retentionDays, purgeAt.Format("2006-01-02 15:04")), map[string]any{"instanceId": instanceID, "purgeAt": purgeAt, "retentionDays": retentionDays})
 }
 
 const httpMethodPost = "POST"
@@ -715,6 +730,37 @@ func scheduleLifecycle(ctx context.Context) {
 			if rows.Scan(&id) == nil {
 				if task, e := scheduleInstanceTask(ctx, id, "purge", "system"); e == nil {
 					_ = enqueuePersistedTask(ctx, task)
+				}
+			}
+		}
+		rows.Close()
+	}
+	notifyRetentionReminders(ctx)
+}
+
+func notifyRetentionReminders(ctx context.Context) {
+	for _, reminder := range []struct {
+		eventType string
+		window    string
+		message   string
+	}{
+		{"purge_7d", "purge_at > NOW() + INTERVAL 6 DAY AND purge_at <= NOW() + INTERVAL 7 DAY", "数据将在约 7 天后清理，请及时备份。"},
+		{"purge_1d", "purge_at > NOW() AND purge_at <= NOW() + INTERVAL 1 DAY", "数据将在约 1 天后清理，请及时备份。"},
+	} {
+		rows, err := instanceDB.QueryContext(ctx, `SELECT id,owner_id,purge_at FROM xcloud_instances WHERE status IN ('expired','retention') AND `+reminder.window)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var instanceID, ownerID string
+			var purgeAt time.Time
+			if rows.Scan(&instanceID, &ownerID, &purgeAt) != nil {
+				continue
+			}
+			result, err := instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_instance_notification_events (instance_id,event_type,created_at) VALUES (?,?,NOW())`, instanceID, reminder.eventType)
+			if err == nil {
+				if affected, _ := result.RowsAffected(); affected == 1 {
+					_ = createNotification(ctx, ownerID, "instance_retention", "实例数据清理提醒", fmt.Sprintf("%s 预计清理时间：%s。", reminder.message, purgeAt.Format("2006-01-02 15:04")), map[string]any{"instanceId": instanceID, "purgeAt": purgeAt})
 				}
 			}
 		}
@@ -783,12 +829,18 @@ func adminMetrics(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var failures, pending int
+	var failures, pending, openTickets, urgentTickets int
 	if err = instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE status=?`, taskFailed).Scan(&failures); err != nil {
 		return nil, err
 	}
 	if err = instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE status IN (?,?)`, taskPending, taskRunning).Scan(&pending); err != nil {
 		return nil, err
 	}
-	return map[string]any{"nodes": nodes, "taskFailures": failures, "taskBacklog": pending}, nil
+	if err = instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tickets WHERE status<>?`, ticketClosed).Scan(&openTickets); err != nil {
+		return nil, err
+	}
+	if err = instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tickets WHERE status<>? AND priority=?`, ticketClosed, "urgent").Scan(&urgentTickets); err != nil {
+		return nil, err
+	}
+	return map[string]any{"nodes": nodes, "taskFailures": failures, "taskBacklog": pending, "openTickets": openTickets, "urgentTickets": urgentTickets}, nil
 }
