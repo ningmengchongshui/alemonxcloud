@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -19,6 +22,41 @@ func TestInstanceComposeCarriesPlanLimitsAndRuntimeTuning(t *testing.T) {
 		if strings.Contains(compose, incompatible) {
 			t.Fatalf("official AlemonX runtime must not add %q:\n%s", incompatible, compose)
 		}
+	}
+}
+
+func TestPrepareInstanceDirsMigratesLegacyRootData(t *testing.T) {
+	root := t.TempDir()
+	instanceDir := filepath.Join(root, "xcloud-12345678")
+	workspaceDir := filepath.Join(instanceDir, "workspace")
+	homeDir := filepath.Join(instanceDir, "data")
+	if err := os.MkdirAll(workspaceDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instanceDir, instanceComposeFile), []byte("services: {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instanceDir, ".alemonxrc"), []byte("state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "project.txt"), []byte("workspace"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := prepareInstanceDirs(instanceDir, homeDir, workspaceDir); err != nil {
+		t.Fatalf("migrate legacy layout: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(homeDir, ".alemonxrc")); err != nil || string(content) != "state" {
+		t.Fatalf("legacy root data was not moved: content=%q err=%v", content, err)
+	}
+	if _, err := os.Stat(filepath.Join(instanceDir, instanceComposeFile)); err != nil {
+		t.Fatalf("compose file must remain at instance root: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(workspaceDir, "project.txt")); err != nil || string(content) != "workspace" {
+		t.Fatalf("workspace must remain separate: content=%q err=%v", content, err)
+	}
+	if _, err := os.Stat(filepath.Join(instanceDir, instanceMigrationMarker)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("migration marker should be removed, got %v", err)
 	}
 }
 

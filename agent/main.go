@@ -398,7 +398,7 @@ func createContainer(c *gin.Context) {
 		return
 	}
 	instanceDir, homeDir, workspaceDir := instancePaths(input.Name)
-	if err := prepareInstanceDirs(homeDir, workspaceDir); err != nil {
+	if err := prepareInstanceDirs(instanceDir, homeDir, workspaceDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法准备实例数据目录"})
 		return
 	}
@@ -698,11 +698,78 @@ func instancePaths(name string) (instanceDir, homeDir, workspaceDir string) {
 	return instanceDir, filepath.Join(instanceDir, "data"), filepath.Join(instanceDir, "workspace")
 }
 
-func prepareInstanceDirs(homeDir, workspaceDir string) error {
+const (
+	instanceComposeFile     = "docker-compose.yml"
+	instanceMigrationMarker = ".xcloud-layout-v2-migrating"
+)
+
+// prepareInstanceDirs upgrades the original layout, where the instance root
+// itself was mounted at /root, to the current data/ layout. The Compose file
+// and workspace are management paths and deliberately remain at the root.
+func prepareInstanceDirs(instanceDir, homeDir, workspaceDir string) error {
+	if err := os.MkdirAll(instanceDir, 0750); err != nil {
+		return err
+	}
+	if err := migrateLegacyInstanceData(instanceDir, homeDir, workspaceDir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(homeDir, 0750); err != nil {
 		return err
 	}
 	return os.MkdirAll(workspaceDir, 0750)
+}
+
+func migrateLegacyInstanceData(instanceDir, homeDir, workspaceDir string) error {
+	markerPath := filepath.Join(instanceDir, instanceMigrationMarker)
+	_, markerErr := os.Stat(markerPath)
+	migrationInProgress := markerErr == nil
+	if markerErr != nil && !errors.Is(markerErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect instance migration marker: %w", markerErr)
+	}
+
+	if !migrationInProgress {
+		if _, err := os.Stat(homeDir); err == nil {
+			return nil // Already using the data/ layout.
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect instance data directory: %w", err)
+		}
+		if _, err := os.Stat(filepath.Join(instanceDir, instanceComposeFile)); errors.Is(err, os.ErrNotExist) {
+			return nil // A new instance has no legacy Compose file yet.
+		} else if err != nil {
+			return fmt.Errorf("inspect legacy instance Compose file: %w", err)
+		}
+		if err := writeFileAtomically(markerPath, []byte("legacy instance data migration in progress\n"), 0600); err != nil {
+			return fmt.Errorf("mark instance data migration: %w", err)
+		}
+	}
+
+	if err := os.MkdirAll(homeDir, 0750); err != nil {
+		return fmt.Errorf("create instance data directory: %w", err)
+	}
+	entries, err := os.ReadDir(instanceDir)
+	if err != nil {
+		return fmt.Errorf("read legacy instance data directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == instanceComposeFile || entry.Name() == filepath.Base(workspaceDir) || entry.Name() == filepath.Base(homeDir) || entry.Name() == instanceMigrationMarker {
+			continue
+		}
+		source := filepath.Join(instanceDir, entry.Name())
+		destination := filepath.Join(homeDir, entry.Name())
+		if _, err := os.Lstat(destination); err == nil {
+			return fmt.Errorf("legacy data destination already exists: %s", destination)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect legacy data destination: %w", err)
+		}
+		if err := os.Rename(source, destination); err != nil {
+			return fmt.Errorf("migrate legacy instance data %s: %w", entry.Name(), err)
+		}
+	}
+	if err := os.Remove(markerPath); err != nil {
+		return fmt.Errorf("finish instance data migration: %w", err)
+	}
+	log.Printf("migrated legacy instance data layout: %s", instanceDir)
+	return nil
 }
 func composeProject(route string) string    { return "xcloud-" + route }
 func yamlString(value string) string        { encoded, _ := json.Marshal(value); return string(encoded) }
@@ -728,7 +795,7 @@ func restartContainer(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 	defer cancel()
 	instanceDir, homeDir, workspaceDir := instancePaths(input.Name)
-	if err := prepareInstanceDirs(homeDir, workspaceDir); err != nil {
+	if err := prepareInstanceDirs(instanceDir, homeDir, workspaceDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法准备实例数据目录"})
 		return
 	}

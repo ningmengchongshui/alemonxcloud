@@ -1092,8 +1092,15 @@ func executeTask(ctx context.Context, task controlTask) error {
 			}
 		}
 	case "start":
+		// Start is reconciled through Compose, rather than docker start, so an
+		// instance created with an earlier Agent layout is migrated to data/
+		// before its /root bind mount is brought online.
+		payload, payloadErr := instanceRuntimePayload(ctx, item.ID, item.ContainerName, route)
+		if payloadErr != nil {
+			return payloadErr
+		}
 		var lifecycleResult agentLifecycleResult
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, &lifecycleResult)
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/restart", payload, &lifecycleResult)
 		if err == nil {
 			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"

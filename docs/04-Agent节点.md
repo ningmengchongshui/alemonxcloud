@@ -44,7 +44,7 @@ curl -H "Authorization: Bearer <本节点令牌>" http://127.0.0.1:13092/contain
 | 能力 | 接口 | 用途 |
 | --- | --- | --- |
 | 节点资源 | `GET /container/status` | Docker 版本、CPU、内存、磁盘、托管容器数量、协议能力 |
-| 容器生命周期 | `POST /container/create`、`/:name/start`、`/:name/stop`、`/:name/restart`、`/:name/destroy`、`DELETE /:name?purge=true` | 创建、启停、按当前控制面配置重建重启、销毁运行资源，或在保留期后清理数据 |
+| 容器生命周期 | `POST /container/create`、`/:name/start`、`/:name/stop`、`/:name/restart`、`/:name/destroy`、`DELETE /:name?purge=true` | 创建、启停、按当前控制面配置重建重启（包括旧目录布局迁移）、销毁运行资源，或在保留期后清理数据 |
 | 容器查询 | `GET /container`、`/:name/status`、`/:name/inspect`、`/:name/logs` | 托管容器清单、运行/健康、有限元数据、最近 200 行日志 |
 | 镜像管理 | `POST /container/pull`、`GET /container/images`、`GET /container/images/inspect?image=` | 预拉取、查看节点本地镜像和验证摘要 |
 | 实例访问 | 非控制路径 + `X-Route-Key` | 仅按受控路由键反代到受管容器，不公开宿主机端口 |
