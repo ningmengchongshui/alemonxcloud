@@ -401,9 +401,11 @@ func scanOrders(ctx context.Context, statement string, args ...any) ([]order, er
 	items := []order{}
 	for rows.Next() {
 		var v order
-		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.ListAmountFen, &v.DiscountAmountFen, &v.PromotionSnapshot, &v.Status, &v.PaymentNote, &v.ServiceStartsAt, &v.ExpiresAt, &v.RefundedAt, &v.RefundAmountFen, &v.RefundWalletEntryID, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion); err != nil {
+		var snapshot []byte
+		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.ListAmountFen, &v.DiscountAmountFen, &snapshot, &v.Status, &v.PaymentNote, &v.ServiceStartsAt, &v.ExpiresAt, &v.RefundedAt, &v.RefundAmountFen, &v.RefundWalletEntryID, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion); err != nil {
 			return nil, err
 		}
+		v.PromotionSnapshot = snapshot
 		items = append(items, v)
 	}
 	return items, rows.Err()

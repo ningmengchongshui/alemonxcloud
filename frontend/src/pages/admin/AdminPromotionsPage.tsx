@@ -214,146 +214,253 @@ export function AdminPromotionsPage() {
         <Dialog
           title={editing.id ? '编辑活动' : '新建活动'}
           description="固定金额单位为分；折扣值为万分比（9500 表示 95 折）。"
-          onClose={() => { setEditing(null); setError('') }}
+          onClose={() => {
+            setEditing(null)
+            setError('')
+          }}
           className="max-w-2xl"
         >
-          <form className="space-y-4" onSubmit={event => { event.preventDefault(); void submit() }}>
+          <form
+            className="space-y-4"
+            onSubmit={event => {
+              event.preventDefault()
+              void submit()
+            }}
+          >
             <div className="grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
-            <label className={formLabelClass}>
-              名称
-              <input
-                data-autofocus
-                className={formFieldClass}
-                value={editing.name}
-                onChange={e => setEditing({ ...editing, name: e.target.value })}
-              />
-            </label>
-            <label className={formLabelClass}>
-              类型
-              <select
-                className={formFieldClass}
-                value={editing.kind}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    kind: e.target.value as Promotion['kind']
-                  })
-                }
-              >
-                <option value="campaign">活动优惠</option>
-                <option value="new_user">新人优惠</option>
-              </select>
-            </label>
-            <label className={formLabelClass}>
-              适用范围
-              <select
-                className={formFieldClass}
-                value={editing.scope}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    scope: e.target.value as Promotion['scope']
-                  })
-                }
-              >
-                <option value="both">新购与续费</option>
-                <option value="purchase">仅新购</option>
-                <option value="renewal">仅续费</option>
-              </select>
-            </label>
-            <label className={formLabelClass}>
-              规则
-              <select
-                className={formFieldClass}
-                value={editing.discountType}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    discountType: e.target.value as Promotion['discountType']
-                  })
-                }
-              >
-                <option value="fixed">固定减免</option>
-                <option value="percent">比例折扣</option>
-              </select>
-            </label>
+              <label className={formLabelClass}>
+                名称
+                <input
+                  data-autofocus
+                  className={formFieldClass}
+                  value={editing.name}
+                  onChange={e =>
+                    setEditing({ ...editing, name: e.target.value })
+                  }
+                />
+              </label>
+              <label className={formLabelClass}>
+                类型
+                <select
+                  className={formFieldClass}
+                  value={editing.kind}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      kind: e.target.value as Promotion['kind']
+                    })
+                  }
+                >
+                  <option value="campaign">活动优惠</option>
+                  <option value="new_user">新人优惠</option>
+                </select>
+              </label>
+              <label className={formLabelClass}>
+                适用范围
+                <select
+                  className={formFieldClass}
+                  value={editing.scope}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      scope: e.target.value as Promotion['scope']
+                    })
+                  }
+                >
+                  <option value="both">新购与续费</option>
+                  <option value="purchase">仅新购</option>
+                  <option value="renewal">仅续费</option>
+                </select>
+              </label>
+              <label className={formLabelClass}>
+                规则
+                <select
+                  className={formFieldClass}
+                  value={editing.discountType}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      discountType: e.target.value as Promotion['discountType']
+                    })
+                  }
+                >
+                  <option value="fixed">固定减免</option>
+                  <option value="percent">比例折扣</option>
+                </select>
+              </label>
             </div>
             <div className="grid grid-cols-3 gap-3 max-[560px]:grid-cols-1">
-            <label className={formLabelClass}>
-              优惠值
-              <input
-                className={formFieldClass}
-                type="number"
-                value={editing.discountValue}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    discountValue: Number(e.target.value)
-                  })
-                }
-              />
-            </label>
-            <label className={formLabelClass}>
-              最低消费（分，0 为不限）
-              <input
-                className={formFieldClass}
-                type="number"
-                value={editing.minAmountFen}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    minAmountFen: Number(e.target.value)
-                  })
-                }
-              />
-            </label>
-            <label className={formLabelClass}>
-              总核销上限（0 为不限）
-              <input
-                className={formFieldClass}
-                type="number"
-                value={editing.totalLimit}
-                onChange={e =>
-                  setEditing({ ...editing, totalLimit: Number(e.target.value) })
-                }
-              />
-            </label></div>
+              <label className={formLabelClass}>
+                优惠值
+                <input
+                  className={formFieldClass}
+                  type="number"
+                  value={editing.discountValue}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      discountValue: Number(e.target.value)
+                    })
+                  }
+                />
+              </label>
+              <label className={formLabelClass}>
+                最低消费（分，0 为不限）
+                <input
+                  className={formFieldClass}
+                  type="number"
+                  value={editing.minAmountFen}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      minAmountFen: Number(e.target.value)
+                    })
+                  }
+                />
+              </label>
+              <label className={formLabelClass}>
+                总核销上限（0 为不限）
+                <input
+                  className={formFieldClass}
+                  type="number"
+                  value={editing.totalLimit}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      totalLimit: Number(e.target.value)
+                    })
+                  }
+                />
+              </label>
+            </div>
             <div className="grid grid-cols-3 gap-3 max-[560px]:grid-cols-1">
-              <label className={formLabelClass}>最高减免（分，0 为不限）<input className={formFieldClass} type="number" value={editing.maxDiscountFen} onChange={e => setEditing({ ...editing, maxDiscountFen: Number(e.target.value) })} /></label>
-              <label className={formLabelClass}>每用户活动限额（0 为不限）<input className={formFieldClass} type="number" value={editing.perUserLimit} onChange={e => setEditing({ ...editing, perUserLimit: Number(e.target.value) })} /></label>
-              <label className={formLabelClass}>状态<select className={formFieldClass} value={editing.enabled ? 'enabled' : 'disabled'} onChange={e => setEditing({ ...editing, enabled: e.target.value === 'enabled' })}><option value="enabled">启用</option><option value="disabled">停用</option></select></label>
+              <label className={formLabelClass}>
+                最高减免（分，0 为不限）
+                <input
+                  className={formFieldClass}
+                  type="number"
+                  value={editing.maxDiscountFen}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      maxDiscountFen: Number(e.target.value)
+                    })
+                  }
+                />
+              </label>
+              <label className={formLabelClass}>
+                每用户活动限额（0 为不限）
+                <input
+                  className={formFieldClass}
+                  type="number"
+                  value={editing.perUserLimit}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      perUserLimit: Number(e.target.value)
+                    })
+                  }
+                />
+              </label>
+              <label className={formLabelClass}>
+                状态
+                <select
+                  className={formFieldClass}
+                  value={editing.enabled ? 'enabled' : 'disabled'}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      enabled: e.target.value === 'enabled'
+                    })
+                  }
+                >
+                  <option value="enabled">启用</option>
+                  <option value="disabled">停用</option>
+                </select>
+              </label>
             </div>
             <div className="grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
-              <label className={formLabelClass}>开始时间（留空立即生效）<input className={formFieldClass} type="datetime-local" value={editing.startsAt?.slice(0, 16) ?? ''} onChange={e => setEditing({ ...editing, startsAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} /></label>
-              <label className={formLabelClass}>结束时间（留空不限）<input className={formFieldClass} type="datetime-local" value={editing.endsAt?.slice(0, 16) ?? ''} onChange={e => setEditing({ ...editing, endsAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} /></label>
+              <label className={formLabelClass}>
+                开始时间（留空立即生效）
+                <input
+                  className={formFieldClass}
+                  type="datetime-local"
+                  value={editing.startsAt?.slice(0, 16) ?? ''}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      startsAt: e.target.value
+                        ? new Date(e.target.value).toISOString()
+                        : undefined
+                    })
+                  }
+                />
+              </label>
+              <label className={formLabelClass}>
+                结束时间（留空不限）
+                <input
+                  className={formFieldClass}
+                  type="datetime-local"
+                  value={editing.endsAt?.slice(0, 16) ?? ''}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      endsAt: e.target.value
+                        ? new Date(e.target.value).toISOString()
+                        : undefined
+                    })
+                  }
+                />
+              </label>
             </div>
             <div className="grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
-            <label className={formLabelClass}>
-              适用套餐（留空不限）
-              <select multiple
-                className={formFieldClass}
-                value={editing.planIDs}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    planIDs: Array.from(e.target.selectedOptions, option => option.value)
-                  })
-                }
-              >{(catalog.data?.plans ?? []).map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select>
-            </label>
-            <label className={formLabelClass}>
-              适用镜像（留空不限）
-              <select multiple
-                className={formFieldClass}
-                value={editing.imageIDs}
-                onChange={e =>
-                  setEditing({
-                    ...editing,
-                    imageIDs: Array.from(e.target.selectedOptions, option => option.value)
-                  })
-                }
-              >{(catalog.data?.images ?? []).map(image => <option key={image.id} value={image.id}>{image.name} · {image.version}</option>)}</select>
-            </label></div>
+              <label className={formLabelClass}>
+                适用套餐（留空不限）
+                <select
+                  multiple
+                  className={formFieldClass}
+                  value={editing.planIDs}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      planIDs: Array.from(
+                        e.target.selectedOptions,
+                        option => option.value
+                      )
+                    })
+                  }
+                >
+                  {(catalog.data?.plans ?? []).map(plan => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={formLabelClass}>
+                适用镜像（留空不限）
+                <select
+                  multiple
+                  className={formFieldClass}
+                  value={editing.imageIDs}
+                  onChange={e =>
+                    setEditing({
+                      ...editing,
+                      imageIDs: Array.from(
+                        e.target.selectedOptions,
+                        option => option.value
+                      )
+                    })
+                  }
+                >
+                  {(catalog.data?.images ?? []).map(image => (
+                    <option key={image.id} value={image.id}>
+                      {image.name} · {image.version}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <label className={formLabelClass}>
               适用月数（逗号分隔，留空不限）
               <input
@@ -372,19 +479,75 @@ export function AdminPromotionsPage() {
             </label>
             {error && <Alert tone="error">{error}</Alert>}
             <div className="flex justify-end gap-2">
-              <Button type="button" tone="secondary" onClick={() => { setEditing(null); setError('') }}>
+              <Button
+                type="button"
+                tone="secondary"
+                onClick={() => {
+                  setEditing(null)
+                  setError('')
+                }}
+              >
                 取消
               </Button>
-              <Button type="submit" loading={saving} disabled={!editing.name.trim()}>保存活动</Button>
+              <Button
+                type="submit"
+                loading={saving}
+                disabled={!editing.name.trim()}
+              >
+                保存活动
+              </Button>
             </div>
             {editing.id && editing.kind === 'campaign' && (
               <div className="grid gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                 <b className="text-xs">生成代金券</b>
                 <div className="grid grid-cols-4 gap-2 max-[560px]:grid-cols-2">
-                  <label className={formLabelClass}>类型<select className={formFieldClass} value={couponMode} onChange={e => setCouponMode(e.target.value as 'single' | 'general')}><option value="single">批量单次券</option><option value="general">通用码</option></select></label>
-                  <label className={formLabelClass}>数量<input className={formFieldClass} type="number" min="1" max="500" disabled={couponMode === 'general'} value={couponCount} onChange={e => setCouponCount(Number(e.target.value))} /></label>
-                  <label className={formLabelClass}>总次数<input className={formFieldClass} type="number" min="1" disabled={couponMode === 'single'} value={couponLimit} onChange={e => setCouponLimit(Number(e.target.value))} /></label>
-                  <label className={formLabelClass}>每用户次数<input className={formFieldClass} type="number" min="1" disabled={couponMode === 'single'} value={couponUserLimit} onChange={e => setCouponUserLimit(Number(e.target.value))} /></label>
+                  <label className={formLabelClass}>
+                    类型
+                    <select
+                      className={formFieldClass}
+                      value={couponMode}
+                      onChange={e =>
+                        setCouponMode(e.target.value as 'single' | 'general')
+                      }
+                    >
+                      <option value="single">批量单次券</option>
+                      <option value="general">通用码</option>
+                    </select>
+                  </label>
+                  <label className={formLabelClass}>
+                    数量
+                    <input
+                      className={formFieldClass}
+                      type="number"
+                      min="1"
+                      max="500"
+                      disabled={couponMode === 'general'}
+                      value={couponCount}
+                      onChange={e => setCouponCount(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className={formLabelClass}>
+                    总次数
+                    <input
+                      className={formFieldClass}
+                      type="number"
+                      min="1"
+                      disabled={couponMode === 'single'}
+                      value={couponLimit}
+                      onChange={e => setCouponLimit(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className={formLabelClass}>
+                    每用户次数
+                    <input
+                      className={formFieldClass}
+                      type="number"
+                      min="1"
+                      disabled={couponMode === 'single'}
+                      value={couponUserLimit}
+                      onChange={e => setCouponUserLimit(Number(e.target.value))}
+                    />
+                  </label>
                 </div>
                 <Button
                   type="button"
@@ -395,7 +558,8 @@ export function AdminPromotionsPage() {
                       mode: couponMode,
                       count: couponMode === 'general' ? 1 : couponCount,
                       totalLimit: couponMode === 'single' ? 1 : couponLimit,
-                      perUserLimit: couponMode === 'single' ? 1 : couponUserLimit
+                      perUserLimit:
+                        couponMode === 'single' ? 1 : couponUserLimit
                     })
                       .unwrap()
                       .then(r => setCodes(r.coupons.map(x => x.code)))
@@ -405,7 +569,11 @@ export function AdminPromotionsPage() {
                 </Button>
               </div>
             )}
-            {codes.length > 0 && <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-100">请立即复制券码：{codes.join('，')}</p>}
+            {codes.length > 0 && (
+              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                请立即复制券码：{codes.join('，')}
+              </p>
+            )}
           </form>
         </Dialog>
       )}

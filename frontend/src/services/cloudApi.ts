@@ -178,7 +178,13 @@ export const cloudApi = createApi({
     }),
     renewOrder: builder.mutation<
       { order: Order; task?: Task },
-      { id: string; months: number; couponCode?: string; selectionId?: string; payFullPrice?: boolean }
+      {
+        id: string
+        months: number
+        couponCode?: string
+        selectionId?: string
+        payFullPrice?: boolean
+      }
     >({
       query: ({ id, months }) => ({
         url: `/orders/${id}/renew`,
@@ -189,7 +195,13 @@ export const cloudApi = createApi({
     }),
     quoteRenewal: builder.mutation<
       PriceQuote,
-      { id: string; months: number; couponCode?: string; selectionId?: string; payFullPrice?: boolean }
+      {
+        id: string
+        months: number
+        couponCode?: string
+        selectionId?: string
+        payFullPrice?: boolean
+      }
     >({
       query: ({ id, ...body }) => ({
         url: `/orders/${id}/renew/quote`,

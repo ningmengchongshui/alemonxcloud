@@ -81,12 +81,17 @@ export function CreateServicePage({
   const selectedImage = images.find(image => image.id === selectedImageID)
   const imageVersions = selectedImage?.versions ?? []
   const selectedVersion =
-    imageVersions.find(version => version.tag === imageVersion) ?? imageVersions[0]
+    imageVersions.find(version => version.tag === imageVersion) ??
+    imageVersions[0]
   const plans = catalog?.plans ?? []
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
   const total = (selectedPlan?.monthlyPriceFen ?? 0) * months
-  function preview(selected = selectionID, code = couponCode, fullPrice = payFullPrice) {
+  function preview(
+    selected = selectionID,
+    code = couponCode,
+    fullPrice = payFullPrice
+  ) {
     if (!selectedImage || !selectedPlan) return
     setError('')
     void quotePurchase({

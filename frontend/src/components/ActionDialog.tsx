@@ -35,8 +35,8 @@ export function ActionDialog({
   onSecondaryInputChange,
   onConfirm,
   onCancel,
-  busy
-  ,children
+  busy,
+  children
 }: ActionDialogProps) {
   return (
     <Dialog title={title} description={description} onClose={onCancel}>

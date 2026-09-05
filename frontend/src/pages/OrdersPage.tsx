@@ -3,8 +3,8 @@ import type { Order, RefundQuote } from '@/types/cloud'
 import {
   useLazyGetRefundQuoteQuery,
   useRefundOrderMutation,
-  useRenewOrderMutation
-  ,useQuoteRenewalMutation
+  useRenewOrderMutation,
+  useQuoteRenewalMutation
 } from '@/services/cloudApi'
 import { ActionDialog } from '@/components/ActionDialog'
 import {
@@ -97,10 +97,38 @@ export function OrdersPage({
   const [renewCoupon, setRenewCoupon] = useState('')
   const [renewSelection, setRenewSelection] = useState('')
   const [renewFullPrice, setRenewFullPrice] = useState(false)
-  const [renewQuote, setRenewQuote] = useState<import('@/types/cloud').PriceQuote | null>(null)
+  const [renewQuote, setRenewQuote] = useState<
+    import('@/types/cloud').PriceQuote | null
+  >(null)
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
-  const [quoteRenewal, { isLoading: renewalQuoting }] = useQuoteRenewalMutation()
-  const refreshRenewQuote = (order: Order, code = renewCoupon, selection = renewSelection, full = renewFullPrice) => void quoteRenewal({ id: order.id, months: Number(months) || 1, couponCode: code || undefined, selectionId: selection || undefined, payFullPrice: full }).unwrap().then(value => { setRenewQuote(value); setRenewSelection(value.selectedId ?? ''); setRenewFullPrice(Boolean(value.payFullPrice)) }).catch(error => setRenewalError(typeof error?.data?.message === 'string' ? error.data.message : '优惠试算失败'))
+  const [quoteRenewal, { isLoading: renewalQuoting }] =
+    useQuoteRenewalMutation()
+  const refreshRenewQuote = (
+    order: Order,
+    code = renewCoupon,
+    selection = renewSelection,
+    full = renewFullPrice
+  ) =>
+    void quoteRenewal({
+      id: order.id,
+      months: Number(months) || 1,
+      couponCode: code || undefined,
+      selectionId: selection || undefined,
+      payFullPrice: full
+    })
+      .unwrap()
+      .then(value => {
+        setRenewQuote(value)
+        setRenewSelection(value.selectedId ?? '')
+        setRenewFullPrice(Boolean(value.payFullPrice))
+      })
+      .catch(error =>
+        setRenewalError(
+          typeof error?.data?.message === 'string'
+            ? error.data.message
+            : '优惠试算失败'
+        )
+      )
   const [loadRefundQuote, { isFetching: quoteLoading }] =
     useLazyGetRefundQuoteQuery()
   const [submitRefund, { isLoading: refundLoading }] = useRefundOrderMutation()
@@ -272,7 +300,9 @@ export function OrdersPage({
                           setRenewFullPrice(false)
                           setRenewQuote(null)
                           setRenewing(order)
-                          void quoteRenewal({ id: order.id, months: 1 }).unwrap().then(setRenewQuote)
+                          void quoteRenewal({ id: order.id, months: 1 })
+                            .unwrap()
+                            .then(setRenewQuote)
                         }}
                       >
                         钱包续费
@@ -341,8 +371,9 @@ export function OrdersPage({
             void renewOrder({
               id: renewing.id,
               months: value,
-              couponCode: renewCoupon || undefined
-              ,selectionId: renewSelection || undefined, payFullPrice: renewFullPrice
+              couponCode: renewCoupon || undefined,
+              selectionId: renewSelection || undefined,
+              payFullPrice: renewFullPrice
             })
               .unwrap()
               .then(() => {
@@ -366,8 +397,46 @@ export function OrdersPage({
           }}
         >
           <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-            <Button type="button" tone="secondary" loading={renewalQuoting} onClick={() => refreshRenewQuote(renewing)}>试算续费优惠</Button>
-            {renewQuote && <><p className="m-0">原价 {(renewQuote.listAmountFen / 100).toFixed(2)} XCoin，实付 {(renewQuote.amountFen / 100).toFixed(2)} XCoin</p>{renewQuote.candidates.length > 0 && <select value={renewFullPrice ? '__full__' : renewSelection} onChange={event => { const full = event.target.value === '__full__'; setRenewFullPrice(full); setRenewSelection(full ? '' : event.target.value); refreshRenewQuote(renewing, renewCoupon, full ? '' : event.target.value, full) }}><option value="__full__">不使用优惠，按原价购买</option>{renewQuote.candidates.map(item => <option key={item.id} value={item.id}>{item.name} · 减 {(item.discountAmountFen / 100).toFixed(2)} XCoin</option>)}</select>}</>}
+            <Button
+              type="button"
+              tone="secondary"
+              loading={renewalQuoting}
+              onClick={() => refreshRenewQuote(renewing)}
+            >
+              试算续费优惠
+            </Button>
+            {renewQuote && (
+              <>
+                <p className="m-0">
+                  原价 {(renewQuote.listAmountFen / 100).toFixed(2)} XCoin，实付{' '}
+                  {(renewQuote.amountFen / 100).toFixed(2)} XCoin
+                </p>
+                {renewQuote.candidates.length > 0 && (
+                  <select
+                    value={renewFullPrice ? '__full__' : renewSelection}
+                    onChange={event => {
+                      const full = event.target.value === '__full__'
+                      setRenewFullPrice(full)
+                      setRenewSelection(full ? '' : event.target.value)
+                      refreshRenewQuote(
+                        renewing,
+                        renewCoupon,
+                        full ? '' : event.target.value,
+                        full
+                      )
+                    }}
+                  >
+                    <option value="__full__">不使用优惠，按原价购买</option>
+                    {renewQuote.candidates.map(item => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} · 减{' '}
+                        {(item.discountAmountFen / 100).toFixed(2)} XCoin
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </>
+            )}
           </div>
         </ActionDialog>
       )}
