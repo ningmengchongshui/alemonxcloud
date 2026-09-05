@@ -2,6 +2,13 @@ import { NodeConfigButton, NodeEditor } from '@/components/NodeEditor'
 import { useGetAdminNodesQuery } from '@/services/cloudApi'
 import { Button, PageHeader } from '@/components/ui'
 
+const cpuValue = (value: number) =>
+  Number.isInteger(value) ? String(value) : value.toFixed(1)
+const memoryValue = (value: number) => {
+  const gb = value / 1024
+  return Number.isInteger(gb) ? String(gb) : gb.toFixed(1)
+}
+
 export function AdminNodesPage() {
   const nodes = useGetAdminNodesQuery()
   const online = (nodes.data ?? []).filter(
@@ -13,6 +20,14 @@ export function AdminNodesPage() {
   )
   const memory = (nodes.data ?? []).reduce(
     (total, node) => total + node.memoryTotalMB,
+    0
+  )
+  const reservedCPU = (nodes.data ?? []).reduce(
+    (total, node) => total + node.cpuReserved,
+    0
+  )
+  const reservedMemory = (nodes.data ?? []).reduce(
+    (total, node) => total + node.memoryReservedMB,
     0
   )
   return (
@@ -33,8 +48,8 @@ export function AdminNodesPage() {
       />
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <span className="text-xs text-slate-500">
-          {online.length} 个在线 · 可调度 {cpu} 核 · {Math.round(memory / 1024)}{' '}
-          GB
+          {online.length} 个在线 · 已分配 {cpuValue(reservedCPU)}/{cpuValue(cpu)}
+          {' '}核 · {memoryValue(reservedMemory)}/{memoryValue(memory)} GB
         </span>
         <NodeEditor />
       </div>
@@ -47,7 +62,9 @@ export function AdminNodesPage() {
             </div>
             <div className="node-details">
               <span>
-                {node.cpuTotal} 核 / {Math.round(node.memoryTotalMB / 1024)} GB
+                <b className="text-slate-700 dark:text-white">已分配</b>{' '}
+                {cpuValue(node.cpuReserved)}/{cpuValue(node.cpuTotal)} 核 ·{' '}
+                {memoryValue(node.memoryReservedMB)}/{memoryValue(node.memoryTotalMB)} GB
               </span>
               <span>{node.managedContainerCount ?? 0} 个托管容器</span>
               {(node.offlineInstanceCount ?? 0) > 0 && (

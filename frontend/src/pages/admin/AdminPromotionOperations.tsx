@@ -2,6 +2,10 @@ import { useState } from 'react'
 import {
   Alert,
   Button,
+  Dialog,
+  DialogFooter,
+  dialogFieldClass,
+  dialogLabelClass,
   EmptyState,
   PageHeader,
   StatusBadge
@@ -16,8 +20,6 @@ import {
 } from '@/services/cloudApi'
 import type { CouponBatch } from '@/types/cloud'
 
-const field =
-  'mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900'
 const blank = (): CouponBatch => ({
   id: '',
   name: '',
@@ -36,7 +38,7 @@ const blank = (): CouponBatch => ({
   issuedCount: 0,
   createdAt: ''
 })
-export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
+export function AdminCouponsPage() {
   const batches = useGetAdminCouponBatchesQuery()
   const [save, { isLoading }] = useSaveAdminCouponBatchMutation()
   const [voidUnused] = useVoidAdminCouponBatchMutation()
@@ -68,9 +70,6 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
         description="券批次独立定义规则与库存；公开领取或定向发放后，用户得到独立单次代金券。"
         actions={
           <>
-            <Button tone="secondary" onClick={onBack}>
-              返回
-            </Button>
             <Button
               onClick={() => {
                 setError('')
@@ -96,23 +95,39 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
         </section>
       )}
       {editing && (
-        <section className="mb-6 max-w-3xl rounded-xl border border-blue-200 bg-blue-50 p-5 dark:border-blue-900 dark:bg-blue-950">
-          <h2 className="text-lg font-bold">
-            {editing.id ? '编辑券批次' : '创建券批次'}
-          </h2>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label>
+        <Dialog
+          title={editing.id ? '编辑券批次' : '创建券批次'}
+          description="设置发放方式、优惠规则与库存上限。保存后可在列表中继续管理。"
+          className="max-w-3xl"
+          onClose={() => {
+            setEditing(null)
+            setError('')
+          }}
+        >
+          <form
+            className="space-y-4"
+            onSubmit={event => {
+              event.preventDefault()
+              void submit()
+            }}
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
+            <label className={dialogLabelClass} htmlFor="coupon-batch-name">
               名称
               <input
-                className={field}
+                id="coupon-batch-name"
+                className={dialogFieldClass}
                 value={editing.name}
                 onChange={e => setEditing({ ...editing, name: e.target.value })}
+                placeholder="例如：新用户体验券"
+                data-autofocus
               />
             </label>
-            <label>
+            <label className={dialogLabelClass} htmlFor="coupon-batch-distribution">
               发放方式
               <select
-                className={field}
+                id="coupon-batch-distribution"
+                className={dialogFieldClass}
                 value={editing.distributionMode}
                 onChange={e =>
                   setEditing({
@@ -126,10 +141,11 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
                 <option value="targeted">定向发放</option>
               </select>
             </label>
-            <label>
+            <label className={dialogLabelClass} htmlFor="coupon-batch-discount-type">
               优惠类型
               <select
-                className={field}
+                id="coupon-batch-discount-type"
+                className={dialogFieldClass}
                 value={editing.discountType}
                 onChange={e =>
                   setEditing({
@@ -142,13 +158,15 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
                 <option value="percent">实付折扣</option>
               </select>
             </label>
-            <label>
+            <label className={dialogLabelClass} htmlFor="coupon-batch-discount-value">
               {editing.discountType === 'fixed'
                 ? '减免金额（分）'
                 : '实付折数（95=95折）'}
               <input
-                className={field}
+                id="coupon-batch-discount-value"
+                className={dialogFieldClass}
                 type="number"
+                min="0"
                 value={
                   editing.discountType === 'percent'
                     ? editing.discountValue / 100
@@ -165,21 +183,24 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
                 }
               />
             </label>
-            <label>
+            <label className={dialogLabelClass} htmlFor="coupon-batch-issue-limit">
               总发放量（0不限）
               <input
-                className={field}
+                id="coupon-batch-issue-limit"
+                className={dialogFieldClass}
                 type="number"
+                min="0"
                 value={editing.issueLimit}
                 onChange={e =>
                   setEditing({ ...editing, issueLimit: Number(e.target.value) })
                 }
               />
             </label>
-            <label>
+            <label className={dialogLabelClass} htmlFor="coupon-batch-user-limit">
               每人限领
               <input
-                className={field}
+                id="coupon-batch-user-limit"
+                className={dialogFieldClass}
                 type="number"
                 min="1"
                 value={editing.perUserLimit}
@@ -191,10 +212,11 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
                 }
               />
             </label>
-            <label>
+            <label className={dialogLabelClass} htmlFor="coupon-batch-scope">
               适用范围
               <select
-                className={field}
+                id="coupon-batch-scope"
+                className={dialogFieldClass}
                 value={editing.scope}
                 onChange={e =>
                   setEditing({
@@ -208,10 +230,11 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
                 <option value="renewal">仅续费</option>
               </select>
             </label>
-            <label>
+            <label className={dialogLabelClass} htmlFor="coupon-batch-status">
               状态
               <select
-                className={field}
+                id="coupon-batch-status"
+                className={dialogFieldClass}
                 value={editing.status}
                 onChange={e =>
                   setEditing({
@@ -224,17 +247,18 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
                 <option value="active">启用</option>
               </select>
             </label>
-          </div>
-          {error && <Alert tone="error">{error}</Alert>}
-          <div className="mt-4 flex gap-2">
-            <Button tone="secondary" onClick={() => setEditing(null)}>
+            </div>
+            {error && <Alert tone="error">{error}</Alert>}
+            <DialogFooter>
+            <Button type="button" tone="secondary" onClick={() => setEditing(null)}>
               取消
             </Button>
-            <Button loading={isLoading} onClick={() => void submit()}>
+            <Button type="submit" loading={isLoading} disabled={!editing.name.trim()}>
               保存批次
             </Button>
-          </div>
-        </section>
+            </DialogFooter>
+          </form>
+        </Dialog>
       )}
       {(batches.data ?? []).length === 0 ? (
         <EmptyState
@@ -310,7 +334,7 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
     </section>
   )
 }
-export function AdminCouponRedemptionsPage({ onBack }: { onBack: () => void }) {
+export function AdminCouponRedemptionsPage() {
   const redemptions = useGetAdminCouponRedemptionsQuery()
   return (
     <section className="page super-page">
@@ -318,11 +342,6 @@ export function AdminCouponRedemptionsPage({ onBack }: { onBack: () => void }) {
         eyebrow="营销运营"
         title="优惠核销记录"
         description="已核销记录不可修改，订单快照与钱包流水以此为准。"
-        actions={
-          <Button tone="secondary" onClick={onBack}>
-            返回
-          </Button>
-        }
       />
       {(redemptions.data ?? []).length === 0 ? (
         <EmptyState
@@ -364,7 +383,7 @@ export function AdminCouponIssuePage({ batch }: { batch: CouponBatch }) {
   return (
     <section>
       <input
-        className={field}
+        className={dialogFieldClass}
         placeholder="搜索用户名、邮箱或 ID"
         value={q}
         onChange={e => setQ(e.target.value)}

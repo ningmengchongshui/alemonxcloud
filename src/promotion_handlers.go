@@ -19,7 +19,7 @@ func quotePurchaseHandler(c *gin.Context) {
 		SelectionID  string `json:"selectionId"`
 		PayFullPrice bool   `json:"payFullPrice"`
 	}
-	if c.ShouldBindJSON(&b) != nil || b.Months < 1 || b.Months > 24 {
+	if c.ShouldBindJSON(&b) != nil || b.Months < 1 || b.Months > 60 {
 		c.JSON(400, gin.H{"message": "报价参数无效"})
 		return
 	}
@@ -117,7 +117,7 @@ func quoteRenewHandler(c *gin.Context) {
 		SelectionID  string `json:"selectionId"`
 		PayFullPrice bool   `json:"payFullPrice"`
 	}
-	if c.ShouldBindJSON(&b) != nil || b.Months < 1 || b.Months > 24 {
+	if c.ShouldBindJSON(&b) != nil || b.Months < 1 || b.Months > 60 {
 		c.JSON(400, gin.H{"message": "报价参数无效"})
 		return
 	}

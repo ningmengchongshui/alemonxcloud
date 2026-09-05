@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react'
-import { Button, Dialog } from '@/components/ui'
+import {
+  Button,
+  Dialog,
+  DialogFooter,
+  dialogFieldClass,
+  dialogLabelClass
+} from '@/components/ui'
 
 interface ActionDialogProps {
   title: string
@@ -42,7 +48,7 @@ export function ActionDialog({
     <Dialog title={title} description={description} onClose={onCancel}>
       {inputLabel && (
         <label
-          className="mb-4 block text-[11px] font-bold text-slate-700 dark:text-slate-100"
+          className={`mb-4 ${dialogLabelClass}`}
           htmlFor="action-dialog-input"
         >
           {inputLabel}
@@ -52,23 +58,23 @@ export function ActionDialog({
             value={inputValue ?? ''}
             onChange={event => onInputChange?.(event.target.value)}
             placeholder={inputPlaceholder}
-            className="mt-2 block w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+            className={dialogFieldClass}
           />
         </label>
       )}
       {secondaryInputLabel && (
-        <label className="mb-4 block text-[11px] font-bold text-slate-700 dark:text-slate-100">
+        <label className={`mb-4 ${dialogLabelClass}`}>
           {secondaryInputLabel}
           <input
             value={secondaryInputValue ?? ''}
             onChange={event => onSecondaryInputChange?.(event.target.value)}
             placeholder={secondaryInputPlaceholder}
-            className="mt-2 block w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+            className={dialogFieldClass}
           />
         </label>
       )}
       {children}
-      <div className="flex justify-end gap-2">
+      <DialogFooter>
         <Button tone="secondary" onClick={onCancel}>
           取消
         </Button>
@@ -80,7 +86,7 @@ export function ActionDialog({
         >
           {confirmLabel}
         </Button>
-      </div>
+      </DialogFooter>
     </Dialog>
   )
 }

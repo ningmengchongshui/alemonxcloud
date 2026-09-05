@@ -259,18 +259,11 @@ func quoteForModern(ctx context.Context, ownerID, scope, planID, imageID string,
 			c *coupon
 		}{v.p, &cp}
 	}
-	q := priceQuote{ListAmountFen: list, AmountFen: list, Candidates: candidates}
-	for _, v := range candidates {
-		if v.DiscountAmountFen > q.DiscountAmountFen {
-			q.DiscountAmountFen = v.DiscountAmountFen
-			q.SelectedID = v.ID
-		}
-	}
-	if payFullPrice {
-		q.SelectedID = ""
-		q.DiscountAmountFen = 0
-		q.PayFullPrice = true
-	} else if selectedID != "" {
+	// Settlement must be an explicit choice: without a selected coupon or
+	// activity, keep the list price. This prevents the server from silently
+	// applying a "best" discount when a client only asks for a quote.
+	q := priceQuote{ListAmountFen: list, AmountFen: list, Candidates: candidates, PayFullPrice: payFullPrice}
+	if selectedID != "" && !payFullPrice {
 		v, ok := selected[selectedID]
 		if !ok {
 			return priceQuote{}, nil, nil, errors.New("所选优惠不可用")

@@ -67,7 +67,7 @@ export function AdminCatalogPage() {
                 </td>
                 <td>¥{(plan.monthlyPriceFen / 100).toFixed(2)}</td>
                 <td>{plan.enabled ? '可售' : '已下架'}</td>
-                <td>
+                <td  className="flex gap-2">
                   <button
                     className="text-button"
                     onClick={() => setTargetID(plan.id)}

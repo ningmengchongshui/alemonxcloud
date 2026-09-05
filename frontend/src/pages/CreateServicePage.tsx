@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useDispatch } from 'react-redux'
+import { PriceQuoteSelector } from '@/components/PriceQuoteSelector'
+import { XCoinAmount } from '@/components/XCoinMark'
 import {
   useGetWalletQuery,
   usePurchaseMutation,
@@ -67,6 +69,7 @@ export function CreateServicePage({
   const [imageVersion, setImageVersion] = useState('')
   const [planID, setPlanID] = useState('')
   const [months, setMonths] = useState(1)
+  const [periodMode, setPeriodMode] = useState<'month' | 'year'>('month')
   const [error, setError] = useState('')
   const [selectionID, setSelectionID] = useState('')
   const [payFullPrice, setPayFullPrice] = useState(false)
@@ -116,8 +119,8 @@ export function CreateServicePage({
   useEffect(() => {
     setQuote(null)
     setSelectionID('')
-    setPayFullPrice(false)
-    if (selectedImage && selectedPlan) preview('', false)
+    setPayFullPrice(true)
+    if (selectedImage && selectedPlan) preview('', true)
   }, [selectedImage, selectedPlan, months, preview])
 
   function submit() {
@@ -279,11 +282,43 @@ export function CreateServicePage({
               <span className="selection-number">3</span>
               <div>
                 <h2>选择周期</h2>
-                <p>费用将从钱包余额扣除。</p>
+                <p>支持按月或按年购买，费用将从钱包余额扣除。</p>
               </div>
             </div>
+            <div
+              className="mb-3 flex w-fit rounded-lg bg-slate-100 p-1 dark:bg-slate-900"
+              role="tablist"
+              aria-label="周期单位"
+            >
+              {[
+                ['month', '按月'],
+                ['year', '按年']
+              ].map(([mode, label]) => (
+                <button
+                  type="button"
+                  key={mode}
+                  role="tab"
+                  aria-selected={periodMode === mode}
+                  className={`rounded-md px-3 py-1.5 text-xs font-bold transition-colors ${periodMode === mode ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-200' : 'text-slate-500 dark:text-slate-300'}`}
+                  onClick={() => {
+                    const nextMode = mode as 'month' | 'year'
+                    setPeriodMode(nextMode)
+                    setMonths(current =>
+                      nextMode === 'year'
+                        ? current >= 12 ? Math.min(60, Math.ceil(current / 12) * 12) : 12
+                        : Math.min(current, 12)
+                    )
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="period-controls" role="group" aria-label="订阅周期">
-              {[1, 3, 6, 12].map(value => (
+              {(periodMode === 'month'
+                ? Array.from({ length: 12 }, (_, index) => index + 1)
+                : [1, 2, 3, 4, 5].map(year => year * 12)
+              ).map(value => (
                 <button
                   type="button"
                   key={value}
@@ -291,7 +326,7 @@ export function CreateServicePage({
                   aria-pressed={months === value}
                   onClick={() => setMonths(value)}
                 >
-                  {value} 个月
+                  {periodMode === 'month' ? `${value} 个月` : `${value / 12} 年`}
                 </button>
               ))}
             </div>
@@ -322,57 +357,33 @@ export function CreateServicePage({
             </div>
             <div>
               <dt>周期</dt>
-              <dd>{months} 个月</dd>
+              <dd>
+                {periodMode === 'year' ? `${months / 12} 年` : `${months} 个月`}
+              </dd>
             </div>
           </dl>
           <div className="summary-total">
             <span>应付</span>
-            <strong>
+            <strong className="inline-flex items-center gap-1">
               {selectedPlan
-                ? `${((quote?.amountFen ?? total) / 100).toFixed(2)} XCoin`
+                ? <XCoinAmount value={((quote?.amountFen ?? total) / 100).toFixed(2)} />
                 : '—'}
             </strong>
           </div>
-          <div className="my-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-            {quote && (
-              <>
-                <div className="flex flex-col  items-center justify-between">
-                  <div>
-                    余额：
-                    {wallet
-                      ? `${(wallet.balanceFen / 100).toFixed(2)} XCoin`
-                      : '同步中'}
-                  </div>
-
-                  <div>原价 {(quote.listAmountFen / 100).toFixed(2)} XCoin</div>
-                  <div>
-                    已优惠 {(quote.discountAmountFen / 100).toFixed(2)} XCoin
-                  </div>
-                </div>
-                <div className="mt-2 flex items-center justify-between">
-                  {quote.candidates.length > 1 && (
-                    <select
-                      value={payFullPrice ? '__full__' : selectionID}
-                      onChange={e => {
-                        const full = e.target.value === '__full__'
-                        setPayFullPrice(full)
-                        setSelectionID(full ? '' : e.target.value)
-                        preview(full ? '' : e.target.value, full)
-                      }}
-                    >
-                      <option value="__full__">不使用优惠，按原价购买</option>
-                      {quote.candidates.map(item => (
-                        <option key={item.id} value={item.id}>
-                          {item.name} · 减{' '}
-                          {(item.discountAmountFen / 100).toFixed(2)} XCoin
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </>
-            )}
+          <div className="my-3 text-xs text-slate-500 dark:text-slate-300">
+            钱包余额：{' '}
+            {wallet ? <XCoinAmount value={(wallet.balanceFen / 100).toFixed(2)} /> : '同步中'}
           </div>
+          <PriceQuoteSelector
+            quote={quote}
+            selectionID={selectionID}
+            payFullPrice={payFullPrice}
+            onSelect={(selected, fullPrice) => {
+              setPayFullPrice(fullPrice)
+              setSelectionID(fullPrice ? '' : selected)
+              preview(fullPrice ? '' : selected, fullPrice)
+            }}
+          />
           {error && <Alert tone="error">{error}</Alert>}
           <Button
             className="w-full"

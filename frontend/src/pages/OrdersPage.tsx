@@ -9,47 +9,43 @@ import {
   Dialog,
   EmptyState,
   FilterTabs,
+  InlineAction,
   LoadingState,
   PageHeader,
   StatusBadge
 } from '@/components/ui'
+import { XCoinAmount } from '@/components/XCoinMark'
 import { trackConsoleEvent } from '@/services/telemetry'
 
 const orderStates: Record<
   string,
-  { label: string; tone: string; hint: string }
+  { label: string; tone: string }
 > = {
   deploying: {
     label: '部署中',
-    tone: 'progress',
-    hint: '钱包已扣款，系统正在为你准备运行环境。'
+    tone: 'progress'
   },
   active: {
     label: '已生效',
-    tone: 'success',
-    hint: '服务正在运行，可在实例列表中访问。'
+    tone: 'success'
   },
   expired: {
     label: '已到期',
-    tone: 'danger',
-    hint: '服务已到期，可用钱包续费并自动恢复。'
+    tone: 'danger'
   },
   refunded: {
     label: '已退款',
-    tone: 'neutral',
-    hint: '退款已退回钱包；未退款的服务期仍按调整后的日期继续。'
+    tone: 'neutral'
   },
-  cancelled: { label: '已取消', tone: 'neutral', hint: '此历史订单已取消。' },
-  rejected: { label: '未通过', tone: 'danger', hint: '此历史订单未完成。' },
+  cancelled: { label: '已取消', tone: 'neutral' },
+  rejected: { label: '未通过', tone: 'danger' },
   pending_payment: {
     label: '历史待付款',
-    tone: 'pending',
-    hint: '人工付款订单流程已停用，请重新使用钱包购买。'
+    tone: 'pending'
   },
   pending_review: {
     label: '历史待处理',
-    tone: 'pending',
-    hint: '人工付款订单流程已停用，请重新使用钱包购买。'
+    tone: 'pending'
   }
 }
 
@@ -71,10 +67,6 @@ const dateTime = (value?: string) =>
         minute: '2-digit'
       }).format(new Date(value))
     : '—'
-const orderStages = ['钱包扣款', '资源部署', '服务生效']
-const stageForStatus = (status: string) =>
-  status === 'deploying' ? 1 : status === 'active' ? 2 : 0
-
 export function OrdersPage({
   orders,
   loading,
@@ -110,7 +102,7 @@ export function OrdersPage({
   })
 
   return (
-    <section className="page me-page orders-page">
+    <section className="page me-page">
       <PageHeader
         title="服务订阅"
         description="在这里查看部署进度和订阅记录；续费请前往对应实例。"
@@ -163,120 +155,105 @@ export function OrdersPage({
           description="请切换筛选条件，查看其他订单状态。"
         />
       ) : (
-        <section className="orders-list" aria-label="订单列表">
-          {visibleOrders.map(order => {
-            const state = orderStates[order.status] ?? {
-              label: order.status,
-              tone: 'neutral',
-              hint: '订单状态正在同步。'
-            }
-            return (
-              <article className="order-card" key={order.id}>
-                <div className="order-card-top">
-                  <div>
-                    <StatusBadge
-                      tone={
-                        state.tone === 'success'
-                          ? 'success'
-                          : state.tone === 'danger'
-                            ? 'danger'
-                            : state.tone === 'progress'
-                              ? 'progress'
-                              : state.tone === 'pending'
-                                ? 'pending'
-                                : 'neutral'
-                      }
+        <section
+          className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800"
+          aria-label="订单列表"
+        >
+          <div className="overflow-x-auto">
+            <table className="min-w-[760px] w-full text-left text-xs">
+              <thead className="bg-slate-50 text-[10px] font-bold text-slate-500 dark:bg-slate-900 dark:text-slate-300">
+                <tr>
+                  <th className="px-5 py-3">服务与订单</th>
+                  <th className="px-4 py-3">状态</th>
+                  <th className="px-4 py-3">金额</th>
+                  <th className="px-4 py-3">服务期</th>
+                  <th className="px-5 py-3 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                {visibleOrders.map(order => {
+                  const state = orderStates[order.status] ?? {
+                    label: order.status,
+                    tone: 'neutral'
+                  }
+                  const badgeTone =
+                    state.tone === 'success'
+                      ? 'success'
+                      : state.tone === 'danger'
+                        ? 'danger'
+                        : state.tone === 'progress'
+                          ? 'progress'
+                          : state.tone === 'pending'
+                            ? 'pending'
+                            : 'neutral'
+                  return (
+                    <tr
+                      key={order.id}
+                      className="align-middle hover:bg-slate-50/70 dark:hover:bg-slate-900/50"
                     >
-                      {state.label}
-                    </StatusBadge>
-                    <h2>
-                      {order.imageName} <small>· {order.planName}</small>
-                    </h2>
-                    <p>
-                      订单号 {order.id.slice(0, 14)} · 创建于{' '}
-                      {date(order.createdAt)}
-                    </p>
-                  </div>
-                  <strong className="order-price">
-                    ¥{(order.amountFen / 100).toFixed(2)}
-                  </strong>
-                </div>
-                <div
-                  className="order-progress"
-                  aria-label={`订单进度：${state.label}`}
-                >
-                  {orderStages.map((stage, index) => (
-                    <div
-                      key={stage}
-                      className={
-                        index <= stageForStatus(order.status) ? 'done' : ''
-                      }
-                    >
-                      <i>
-                        {index < stageForStatus(order.status) ? '✓' : index + 1}
-                      </i>
-                      <span>{stage}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="order-card-bottom">
-                  <p>{state.hint}</p>
-                  <dl>
-                    <div>
-                      <dt>镜像版本</dt>
-                      <dd>{order.imageVersion || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt>服务开始</dt>
-                      <dd>{date(order.serviceStartsAt)}</dd>
-                    </div>
-                    <div>
-                      <dt>服务到期</dt>
-                      <dd>{date(order.expiresAt)}</dd>
-                    </div>
-                    {order.refundAmountFen ? (
-                      <div>
-                        <dt>退款金额</dt>
-                        <dd>
-                          {(order.refundAmountFen / 100).toFixed(2)} XCoin
-                        </dd>
-                      </div>
-                    ) : null}
-                  </dl>
-                  <div className="flex flex-wrap gap-2">
-                    {order.status === 'active' && order.serviceStartsAt && (
-                      <Button
-                        tone="secondary"
-                        onClick={() => {
-                          setRefundError('')
-                          setRefundQuote(null)
-                          setRefunding(order)
-                          void loadRefundQuote(order.id)
-                            .unwrap()
-                            .then(quote => {
-                              setRefundQuote(quote)
-                              if (!quote.eligible)
-                                setRefundError(
-                                  quote.reason ?? '该订单暂不可退款'
-                                )
-                            })
-                            .catch(error => {
-                              setRefundError(
-                                typeof error?.data?.message === 'string'
-                                  ? error.data.message
-                                  : '暂时无法获取退款试算，请稍后重试'
-                              )
-                            })
-                        }}
-                      >
-                        申请退款
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </article>
-            )
-          })}
+                      <td className="px-5 py-3.5">
+                        <b className="block text-sm text-slate-800 dark:text-white">
+                          {order.imageName}
+                          <span className="ml-1.5 text-xs font-normal text-slate-500 dark:text-slate-300">
+                            · {order.planName}
+                          </span>
+                        </b>
+                        <span className="mt-1 block text-[11px] text-slate-400">
+                          {order.imageVersion || '—'} · {order.id.slice(0, 14)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <StatusBadge tone={badgeTone}>{state.label}</StatusBadge>
+                      </td>
+                      <td className="px-4 py-3.5 font-bold text-slate-700 dark:text-slate-100">
+                        <XCoinAmount value={(order.amountFen / 100).toFixed(2)} />
+                        {order.refundAmountFen ? (
+                          <span className="mt-1 block text-[10px] font-normal text-slate-400">
+                            已退回 {(order.refundAmountFen / 100).toFixed(2)}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3.5 text-[11px] leading-5 text-slate-500 dark:text-slate-300">
+                        <span className="block">起：{date(order.serviceStartsAt)}</span>
+                        <span className="block">止：{date(order.expiresAt)}</span>
+                      </td>
+                      <td className="px-5 py-3.5 text-right">
+                        {order.status === 'active' && order.serviceStartsAt ? (
+                          <InlineAction
+                            onClick={() => {
+                              setRefundError('')
+                              setRefundQuote(null)
+                              setRefunding(order)
+                              void loadRefundQuote(order.id)
+                                .unwrap()
+                                .then(quote => {
+                                  setRefundQuote(quote)
+                                  if (!quote.eligible)
+                                    setRefundError(
+                                      quote.reason ?? '该订单暂不可退款'
+                                    )
+                                })
+                                .catch(error => {
+                                  setRefundError(
+                                    typeof error?.data?.message === 'string'
+                                      ? error.data.message
+                                      : '暂时无法获取退款试算，请稍后重试'
+                                  )
+                                })
+                            }}
+                          >
+                            申请退款
+                          </InlineAction>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
       {refunding && (

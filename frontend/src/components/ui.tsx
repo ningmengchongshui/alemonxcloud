@@ -392,3 +392,17 @@ export function Dialog({
     </div>
   )
 }
+
+export const dialogLabelClass =
+  'block text-[11px] font-bold text-slate-700 dark:text-slate-100'
+
+export const dialogFieldClass =
+  'mt-1.5 block w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-3 focus:ring-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:focus:border-blue-400 dark:focus:ring-blue-950'
+
+export function DialogFooter({ children }: PropsWithChildren) {
+  return (
+    <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-700">
+      {children}
+    </div>
+  )
+}

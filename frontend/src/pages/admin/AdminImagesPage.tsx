@@ -8,7 +8,15 @@ import {
   useSaveAdminImageMutation,
   useSaveAdminImageVersionMutation
 } from '@/services/cloudApi'
-import { Alert, Button, Dialog, PageHeader } from '@/components/ui'
+import {
+  Alert,
+  Button,
+  Dialog,
+  DialogFooter,
+  dialogFieldClass,
+  dialogLabelClass,
+  PageHeader
+} from '@/components/ui'
 import type { CatalogImage } from '@/types/cloud'
 
 export function AdminImagesPage() {
@@ -83,7 +91,7 @@ export function AdminImagesPage() {
                     .join('、') || '暂无'}
                 </td>
                 <td>{image.enabled ? '可售' : '已下架'}</td>
-                <td>
+                <td  className="flex gap-2">
                   <button
                     className="text-button"
                     onClick={() => setTargetID(image.id)}
@@ -99,8 +107,8 @@ export function AdminImagesPage() {
                   >
                     修改名称
                   </button>
-                  <Button
-                    tone="secondary"
+                  <button
+                    className="text-button"
                     onClick={() => {
                       setVersionsFor(image)
                       setTag('')
@@ -109,7 +117,7 @@ export function AdminImagesPage() {
                     }}
                   >
                     版本配置
-                  </Button>
+                  </button>
                 </td>
               </tr>
             ))}
@@ -132,32 +140,41 @@ export function AdminImagesPage() {
           description="仅修改用户和运营端显示名称，不会改变镜像仓库或已部署实例。"
           onClose={() => setRenaming(null)}
         >
-          <div className="space-y-4">
-            <label>
+          <form
+            className="space-y-4"
+            onSubmit={event => {
+              event.preventDefault()
+              if (!softwareName.trim()) return
+              void saveImage({ ...renaming, name: softwareName.trim() })
+                .unwrap()
+                .then(() => setRenaming(null))
+                .catch(() => setVersionError('软件名称保存失败'))
+            }}
+          >
+            <label className={dialogLabelClass} htmlFor="software-display-name">
               软件名称
               <input
+                id="software-display-name"
+                className={dialogFieldClass}
                 value={softwareName}
                 onChange={event => setSoftwareName(event.target.value)}
+                placeholder="请输入软件显示名称"
                 data-autofocus
               />
             </label>
-            <div className="flex justify-end gap-2">
-              <Button tone="secondary" onClick={() => setRenaming(null)}>
+            {versionError && <Alert tone="error">{versionError}</Alert>}
+            <DialogFooter>
+              <Button type="button" tone="secondary" onClick={() => setRenaming(null)}>
                 取消
               </Button>
               <Button
+                type="submit"
                 disabled={!softwareName.trim()}
-                onClick={() =>
-                  void saveImage({ ...renaming, name: softwareName.trim() })
-                    .unwrap()
-                    .then(() => setRenaming(null))
-                    .catch(() => setVersionError('软件名称保存失败'))
-                }
               >
                 保存名称
               </Button>
-            </div>
-          </div>
+            </DialogFooter>
+          </form>
         </Dialog>
       )}
       {versionsFor && (

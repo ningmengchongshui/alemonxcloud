@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useDispatch } from 'react-redux'
 import { ActionDialog } from '@/components/ActionDialog'
+import { PriceQuoteSelector } from '@/components/PriceQuoteSelector'
 import {
   Alert,
   Button,
@@ -167,11 +168,11 @@ export function InstancesPage({
   function openRenewal(order: Order) {
     setMonths('1')
     setRenewSelection('')
-    setRenewFullPrice(false)
+    setRenewFullPrice(true)
     setRenewQuote(null)
     setRenewalError('')
     setRenewing(order)
-    void quoteRenewal({ id: order.id, months: 1 })
+    void quoteRenewal({ id: order.id, months: 1, payFullPrice: true })
       .unwrap()
       .then(value => {
         setRenewQuote(value)
@@ -416,7 +417,7 @@ export function InstancesPage({
                           setPending({ id: item.id, action: 'destroy' })
                         }
                       >
-                        计划销毁
+                        销毁
                       </Button>
                     )}
                     {lifecycle === 'destroy_scheduled' && (
@@ -454,7 +455,7 @@ export function InstancesPage({
                           setPending({ id: item.id, action: 'archive' })
                         }
                       >
-                        从列表移除
+                        移除
                       </Button>
                     )}
                     {lifecycle === 'deployment_failed' && (
@@ -505,38 +506,17 @@ export function InstancesPage({
               onChange={event => setMonths(event.target.value)}
             />
           </label>
-          <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-            {renewQuote && (
-              <>
-                <p className="m-0">
-                  原价 {(renewQuote.listAmountFen / 100).toFixed(2)} XCoin，实付{' '}
-                  {(renewQuote.amountFen / 100).toFixed(2)} XCoin
-                </p>
-                {renewQuote.candidates.length > 0 && (
-                  <select
-                    value={renewFullPrice ? '__full__' : renewSelection}
-                    onChange={event => {
-                      const full = event.target.value === '__full__'
-                      setRenewFullPrice(full)
-                      setRenewSelection(full ? '' : event.target.value)
-                      refreshRenewQuote(
-                        renewing,
-                        full ? '' : event.target.value,
-                        full
-                      )
-                    }}
-                  >
-                    <option value="__full__">不使用优惠，按原价购买</option>
-                    {renewQuote.candidates.map(item => (
-                      <option key={item.id} value={item.id}>
-                        {item.name} · 减{' '}
-                        {(item.discountAmountFen / 100).toFixed(2)} XCoin
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </>
-            )}
+          <div className="mt-4">
+            <PriceQuoteSelector
+              quote={renewQuote}
+              selectionID={renewSelection}
+              payFullPrice={renewFullPrice}
+              onSelect={(selected, fullPrice) => {
+                setRenewFullPrice(fullPrice)
+                setRenewSelection(fullPrice ? '' : selected)
+                refreshRenewQuote(renewing, fullPrice ? '' : selected, fullPrice)
+              }}
+            />
           </div>
           {renewalError && <Alert tone="error">{renewalError}</Alert>}
           <div className="mt-5 flex justify-end gap-2">

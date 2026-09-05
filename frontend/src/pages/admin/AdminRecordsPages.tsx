@@ -8,7 +8,15 @@ import {
   useRetryTaskMutation,
   useSearchAdminUsersQuery
 } from '@/services/cloudApi'
-import { Button, Dialog, PageHeader } from '@/components/ui'
+import {
+  Alert,
+  Button,
+  Dialog,
+  DialogFooter,
+  dialogFieldClass,
+  dialogLabelClass,
+  PageHeader
+} from '@/components/ui'
 import type { CloudUser } from '@/types/cloud'
 
 export function AdminOrdersPage() {
@@ -105,7 +113,7 @@ export function AdminTasksPage() {
                 <td>{task.status}</td>
                 <td>{task.attempts}</td>
                 <td>{task.lastError || '—'}</td>
-                <td>
+                <td  className="flex gap-2">
                   {task.status === 'failed' && (
                     <button
                       className="text-button"
@@ -135,6 +143,7 @@ export function AdminUsersPage({
   const [adjusting, setAdjusting] = useState<CloudUser | null>(null)
   const [amount, setAmount] = useState('')
   const [note, setNote] = useState('')
+  const [adjustError, setAdjustError] = useState('')
   const [direction, setDirection] = useState<'increase' | 'decrease'>(
     'increase'
   )
@@ -145,14 +154,21 @@ export function AdminUsersPage({
   async function submitAdjust() {
     if (!adjusting || !note.trim()) return
     const value = Math.round(Number(amount) * 100)
-    if (!Number.isInteger(value) || value <= 0) return
-    await adjust({
-      id: adjusting.id,
-      amountFen: value,
-      direction,
-      note: note.trim()
-    }).unwrap()
-    setAdjusting(null)
+    if (!Number.isInteger(value) || value <= 0) {
+      setAdjustError('请输入大于 0 的有效金额。')
+      return
+    }
+    try {
+      await adjust({
+        id: adjusting.id,
+        amountFen: value,
+        direction,
+        note: note.trim()
+      }).unwrap()
+      setAdjusting(null)
+    } catch {
+      setAdjustError('余额变更未完成，请稍后重试。')
+    }
   }
   return (
     <section className="page super-page">
@@ -189,7 +205,7 @@ export function AdminUsersPage({
                 <td>{user.email || '—'}</td>
                 <td>{(user.balanceFen / 100).toFixed(2)} 代币</td>
                 <td>{new Date(user.lastLoginAt).toLocaleString('zh-CN')}</td>
-                <td>
+                <td  className="flex gap-2">
                   <button
                     className="text-button"
                     onClick={() =>
@@ -206,6 +222,7 @@ export function AdminUsersPage({
                       setAdjusting(user)
                       setAmount('')
                       setNote('')
+                      setAdjustError('')
                       setDirection('increase')
                     }}
                   >
@@ -251,13 +268,30 @@ export function AdminUsersPage({
         <Dialog
           eyebrow="用户与钱包"
           title="变更余额"
-          description={adjusting.username}
-          onClose={() => setAdjusting(null)}
+          description={`为 ${adjusting.username} 调整钱包余额。此操作会记入账本，无法直接修改或删除。`}
+          onClose={() => {
+            setAdjusting(null)
+            setAdjustError('')
+          }}
         >
-          <div className="space-y-3">
-            <label>
-              操作
+          <form
+            className="space-y-4"
+            onSubmit={event => {
+              event.preventDefault()
+              void submitAdjust()
+            }}
+          >
+            <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs dark:bg-slate-900">
+              <span className="text-slate-500 dark:text-slate-300">当前余额</span>
+              <b className="ml-2 text-slate-800 dark:text-white">
+                {(adjusting.balanceFen / 100).toFixed(2)} XCoin
+              </b>
+            </div>
+            <label className={dialogLabelClass} htmlFor="wallet-adjust-direction">
+              变更方式
               <select
+                id="wallet-adjust-direction"
+                className={dialogFieldClass}
                 value={direction}
                 onChange={event =>
                   setDirection(event.target.value as 'increase' | 'decrease')
@@ -267,36 +301,56 @@ export function AdminUsersPage({
                 <option value="decrease">扣减余额</option>
               </select>
             </label>
-            <label>
-              金额（代币）
+            <label className={dialogLabelClass} htmlFor="wallet-adjust-amount">
+              金额（XCoin）
               <input
+                id="wallet-adjust-amount"
+                className={dialogFieldClass}
                 type="number"
                 min="0.01"
                 step="0.01"
                 value={amount}
-                onChange={event => setAmount(event.target.value)}
+                onChange={event => {
+                  setAmount(event.target.value)
+                  setAdjustError('')
+                }}
+                placeholder="例如 100.00"
+                data-autofocus
               />
             </label>
-            <label>
+            <label className={dialogLabelClass} htmlFor="wallet-adjust-note">
               运营备注
-              <input
+              <textarea
+                id="wallet-adjust-note"
+                className={dialogFieldClass}
+                rows={3}
+                maxLength={240}
                 value={note}
-                onChange={event => setNote(event.target.value)}
+                onChange={event => {
+                  setNote(event.target.value)
+                  setAdjustError('')
+                }}
+                placeholder="请说明本次变更的原因，便于审计追溯"
               />
             </label>
-            <div className="flex justify-end gap-2">
-              <Button tone="secondary" onClick={() => setAdjusting(null)}>
+            {adjustError && <Alert tone="error">{adjustError}</Alert>}
+            <DialogFooter>
+              <Button
+                type="button"
+                tone="secondary"
+                onClick={() => setAdjusting(null)}
+              >
                 取消
               </Button>
               <Button
+                type="submit"
                 loading={saving}
                 disabled={!amount || !note.trim()}
-                onClick={() => void submitAdjust()}
               >
                 确认变更
               </Button>
-            </div>
-          </div>
+            </DialogFooter>
+          </form>
         </Dialog>
       )}
     </section>

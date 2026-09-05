@@ -35,10 +35,8 @@ export function AdminPage({
   if (page === 'orders') return <AdminOrdersPage />
   if (page === 'tasks') return <AdminTasksPage />
   if (page === 'tickets') return <AdminTicketsPage />
-  if (page === 'coupons')
-    return <AdminCouponsPage onBack={() => window.history.back()} />
-  if (page === 'redemptions')
-    return <AdminCouponRedemptionsPage onBack={() => window.history.back()} />
+  if (page === 'coupons') return <AdminCouponsPage />
+  if (page === 'redemptions') return <AdminCouponRedemptionsPage />
   if (page === 'promotions')
     return (
       <AdminPromotionsPage

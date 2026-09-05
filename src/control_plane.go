@@ -442,8 +442,8 @@ func savePlan(ctx context.Context, value plan) error {
 }
 
 func createOrder(ctx context.Context, ownerID, planID, imageID string, months int, note string) (order, error) {
-	if months < 1 || months > 24 {
-		return order{}, errors.New("订阅周期应为 1 至 24 个月")
+	if months < 1 || months > 60 {
+		return order{}, errors.New("订阅周期应为 1 至 60 个月")
 	}
 	var selected plan
 	if err := instanceDB.QueryRowContext(ctx, `SELECT id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans WHERE id=? AND enabled=TRUE`, planID).Scan(&selected.ID, &selected.Name, &selected.CPU, &selected.MemoryMB, &selected.MonthlyFen, &selected.Enabled, &selected.SortOrder, &selected.CreatedAt); err != nil {

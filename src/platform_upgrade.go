@@ -424,8 +424,8 @@ func nodeRequest(ctx context.Context, n node, method, path string, payload any, 
 }
 
 func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVersion string, months int, selectionID string, payFullPrice bool) (order, controlTask, error) {
-	if months < 1 || months > 24 {
-		return order{}, controlTask{}, errors.New("订阅周期应为 1 至 24 个月")
+	if months < 1 || months > 60 {
+		return order{}, controlTask{}, errors.New("订阅周期应为 1 至 60 个月")
 	}
 	// Ping before opening the serializable transaction. database/sql can discard
 	// an idle connection here and obtain a fresh one from an external MySQL pool.
@@ -530,8 +530,8 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 // reserve fresh capacity: the instance already owns its node reservation until
 // it is purged.  Expired instances are restarted only after the debit commits.
 func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months int, selectionID string, payFullPrice bool) (order, *controlTask, error) {
-	if months < 1 || months > 24 {
-		return order{}, nil, errors.New("订阅周期应为 1 至 24 个月")
+	if months < 1 || months > 60 {
+		return order{}, nil, errors.New("订阅周期应为 1 至 60 个月")
 	}
 	tx, err := beginSerializableTx(ctx)
 	if err != nil {
