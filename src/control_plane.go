@@ -155,7 +155,10 @@ func initializeControlPlane(ctx context.Context) error {
 
 func isDuplicateMigration(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "duplicate column") || strings.Contains(message, "duplicate key") || strings.Contains(message, "already exists")
+	return strings.Contains(message, "duplicate column") ||
+		strings.Contains(message, "duplicate key") ||
+		strings.Contains(message, "already exists") ||
+		(strings.Contains(message, "can't drop") && strings.Contains(message, "check that column/key exists"))
 }
 
 func listCatalog(ctx context.Context, includeDisabled bool) ([]catalogImage, []plan, error) {

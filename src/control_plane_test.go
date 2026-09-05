@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -74,5 +75,14 @@ func TestLifecycleTaskIdempotencyKeyUsesScheduledTime(t *testing.T) {
 	key := lifecycleTaskKey("ins_abc", "destroy", at)
 	if !strings.Contains(key, "destroy:ins_abc:") || !strings.HasSuffix(key, "Z") {
 		t.Fatalf("invalid lifecycle key: %s", key)
+	}
+}
+
+func TestMigrationAllowsOnlyMissingIndexDropAsIdempotent(t *testing.T) {
+	if !isDuplicateMigration(errors.New("Error 1091 (42000): Can't DROP 'idx'; check that column/key exists")) {
+		t.Fatal("missing legacy index must not block an idempotent migration")
+	}
+	if isDuplicateMigration(errors.New("Error 1064 (42000): syntax error")) {
+		t.Fatal("unrelated migration errors must still block startup")
 	}
 }
