@@ -78,9 +78,9 @@ export function CreateServicePage({
   const sourceImages = images.filter(image => image.imageRef === selectedRef)
   const selectedImageID = imageID || sourceImages[0]?.id || ''
   const selectedImage = images.find(image => image.id === selectedImageID)
+  const imageVersions = selectedImage?.versions ?? []
   const selectedVersion =
-    selectedImage?.versions.find(version => version.tag === imageVersion) ??
-    selectedImage?.versions[0]
+    imageVersions.find(version => version.tag === imageVersion) ?? imageVersions[0]
   const plans = catalog?.plans ?? []
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)

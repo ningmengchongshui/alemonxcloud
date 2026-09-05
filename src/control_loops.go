@@ -24,7 +24,7 @@ func startControlLoops() {
 	syncInstanceStates(context.Background())
 }
 func enabledNodes(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND last_heartbeat_at>=?`, time.Now().Add(-nodeHeartbeatTTL()))
 	if err != nil {
 		return nil, err
 	}

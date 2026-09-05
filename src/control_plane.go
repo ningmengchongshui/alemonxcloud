@@ -381,7 +381,21 @@ func listAllOrders(ctx context.Context) ([]order, error) {
 func scanOrders(ctx context.Context, statement string, args ...any) ([]order, error) {
 	rows, err := instanceDB.QueryContext(ctx, statement, args...)
 	if err != nil {
-		return nil, err
+		// A rolling deployment may briefly run the new binary against a database
+		// whose optional promotion migration has not completed. Orders must stay
+		// readable during that window; retry with legacy-compatible projections.
+		if !isMissingOrderUpgrade(err) {
+			return nil, err
+		}
+		legacy := strings.NewReplacer(
+			"COALESCE(o.list_amount_fen,o.amount_fen)", "o.amount_fen",
+			"COALESCE(o.discount_amount_fen,0)", "0",
+			"o.promotion_snapshot", "NULL",
+		).Replace(statement)
+		rows, err = instanceDB.QueryContext(ctx, legacy, args...)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer rows.Close()
 	items := []order{}
@@ -393,6 +407,11 @@ func scanOrders(ctx context.Context, statement string, args ...any) ([]order, er
 		items = append(items, v)
 	}
 	return items, rows.Err()
+}
+
+func isMissingOrderUpgrade(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unknown column") && (strings.Contains(message, "promotion_snapshot") || strings.Contains(message, "list_amount_fen") || strings.Contains(message, "discount_amount_fen"))
 }
 
 func cancelOrder(ctx context.Context, id, ownerID string) error {

@@ -71,7 +71,7 @@ export function AdminImagesPage() {
                   <code>{image.imageRef}</code>
                 </td>
                 <td>
-                  {image.versions
+                  {(image.versions ?? [])
                     .filter(version => version.enabled)
                     .map(version => version.tag)
                     .join('、') || '暂无'}
