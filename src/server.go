@@ -120,7 +120,6 @@ func Run() {
 	router.GET("/api/instances", requireSession, listInstances)
 	router.POST("/api/instances", requireSession, createInstance)
 	router.POST("/api/instances/:id/:action", requireSession, queueInstanceAction)
-	router.GET("/api/instances/:id/update-versions", requireSession, instanceUpdateVersions)
 	router.DELETE("/api/instances/:id", requireSession, queueDeleteInstance)
 	router.GET("/api/instances/:id/logs", requireSession, instanceLogs)
 	router.GET("/api/catalog", requireSession, catalog)

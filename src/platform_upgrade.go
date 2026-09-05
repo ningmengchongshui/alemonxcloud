@@ -454,7 +454,13 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	}
 	var selectedDigest string
 	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(image_digest,'') FROM xcloud_image_versions WHERE image_id=? AND version_tag=? AND enabled=TRUE AND version_status='ready' FOR UPDATE`, imageID, imageVersion).Scan(&selectedDigest); err != nil {
-		return order{}, controlTask{}, errors.New("镜像版本不可购买")
+		if err != sql.ErrNoRows || imageVersion != "latest" {
+			return order{}, controlTask{}, errors.New("镜像版本不可购买")
+		}
+		// latest is the public fallback when no concrete release has been
+		// configured. It intentionally has no stored digest: Docker resolves the
+		// moving tag when the deployment task pulls it.
+		selectedDigest = ""
 	}
 	var balance int
 	if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {

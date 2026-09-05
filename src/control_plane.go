@@ -419,8 +419,7 @@ func saveImage(ctx context.Context, value catalogImage) error {
 	if err != nil || !isNew {
 		return err
 	}
-	_, err = instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_image_versions (id,image_id,version_tag,image_digest,enabled,version_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`, newID("ver"), value.ID, "latest", nil, false, "draft", value.CreatedAt, time.Now())
-	return err
+	return nil
 }
 func nullableString(value string) any {
 	if value == "" {
@@ -972,12 +971,19 @@ func executeTask(ctx context.Context, task controlTask) error {
 			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
 		}
 	case "update":
-		var update struct {
-			Version string `json:"version"`
-			Digest  string `json:"digest"`
+		if !validImageTag(item.Version) {
+			return errors.New("实例没有可更新的版本标记")
 		}
-		if json.Unmarshal(task.Payload, &update) != nil || update.Version == "" || update.Digest == "" {
-			return errors.New("实例更新任务缺少已验证版本")
+		var pull struct {
+			RepoDigests []string `json:"repoDigests"`
+		}
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/pull", map[string]any{"image": deploymentImage(item.Image, item.Version, "")}, &pull)
+		if err != nil {
+			return err
+		}
+		digest := immutableDigest(pull.RepoDigests)
+		if digest == "" {
+			return errors.New("节点未返回可验证的镜像摘要")
 		}
 		var cpu float64
 		var memoryMB, bandwidthMbps int
@@ -985,11 +991,11 @@ func executeTask(ctx context.Context, task controlTask) error {
 			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/destroy", nil, nil)
 		}
 		if err == nil {
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, update.Version, update.Digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, nil)
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, nil)
 		}
 		if err == nil {
 			runtime := "running"
-			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{"running"}, "running", &runtime, "version=?,image_digest=?", update.Version, update.Digest)
+			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{"running"}, "running", &runtime, "image_digest=?", digest)
 		}
 	case "destroy":
 		err = executeDestroyTask(ctx, task, item.ID, item.ContainerName, n)

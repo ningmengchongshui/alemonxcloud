@@ -106,6 +106,13 @@ func TestPublicCatalogHidesRepositoryDiagnostics(t *testing.T) {
 	}
 }
 
+func TestPublicCatalogFallsBackToLatestWithoutConfiguredVersions(t *testing.T) {
+	items := publicCatalogImages([]catalogImage{{ID: "img", Name: "软件"}})
+	if len(items) != 1 || len(items[0].Versions) != 1 || items[0].Versions[0].Tag != "latest" {
+		t.Fatalf("empty version configuration must expose Docker latest fallback: %#v", items)
+	}
+}
+
 func TestMigrationAllowsOnlyMissingIndexDropAsIdempotent(t *testing.T) {
 	if !isDuplicateMigration(errors.New("Error 1091 (42000): Can't DROP 'idx'; check that column/key exists")) {
 		t.Fatal("missing legacy index must not block an idempotent migration")

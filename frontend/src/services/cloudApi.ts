@@ -80,24 +80,16 @@ export const cloudApi = createApi({
           | 'archive'
           | 'retry-deploy'
           | 'update'
-        version?: string
       }
     >({
-      query: ({ id, action, version }) => ({
+      query: ({ id, action }) => ({
         url: `/instances/${id}/${action}`,
-        method: 'POST',
-        body: version ? { version } : undefined
+        method: 'POST'
       }),
       invalidatesTags: ['Instances']
     }),
     getInstanceLogs: builder.query<{ lines: string[] }, string>({
       query: id => `/instances/${id}/logs`
-    }),
-    getInstanceUpdateVersions: builder.query<
-      { versions: string[]; currentVersion: string },
-      string
-    >({
-      query: id => `/instances/${id}/update-versions`
     }),
     getCatalog: builder.query<Catalog, void>({
       query: () => '/catalog',
@@ -618,7 +610,6 @@ export const {
   useGetAdminTasksQuery,
   useGetAdminAuditLogsQuery,
   useGetAdminMetricsQuery,
-  useGetInstanceUpdateVersionsQuery,
   useSearchAdminUsersQuery,
   useGetAdminWalletEntriesQuery,
   useAdjustAdminWalletMutation,

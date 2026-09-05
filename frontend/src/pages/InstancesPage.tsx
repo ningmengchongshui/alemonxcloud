@@ -7,13 +7,9 @@ import {
   EmptyState,
   LoadingState,
   PageHeader,
-  StatusBadge,
-  Dialog
+  StatusBadge
 } from '@/components/ui'
-import {
-  useGetInstanceUpdateVersionsQuery,
-  useInstanceActionMutation
-} from '@/services/cloudApi'
+import { useInstanceActionMutation } from '@/services/cloudApi'
 import { trackConsoleEvent } from '@/services/telemetry'
 import { watchTask } from '@/store/uiSlice'
 import type { Instance } from '@/types/cloud'
@@ -101,13 +97,7 @@ export function InstancesPage({
   const [pending, setPending] = useState<{
     id: string
     action: InstanceAction
-    version?: string
   } | null>(null)
-  const [updateFor, setUpdateFor] = useState<Instance | null>(null)
-  const updateVersions = useGetInstanceUpdateVersionsQuery(
-    updateFor?.id ?? '',
-    { skip: !updateFor }
-  )
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
   const dispatch = useDispatch()
   const sorted = [...instances].sort(
@@ -295,7 +285,9 @@ export function InstancesPage({
                         <Button
                           tone="secondary"
                           disabled={operating}
-                          onClick={() => setUpdateFor(item)}
+                          onClick={() =>
+                            setPending({ id: item.id, action: 'update' })
+                          }
                         >
                           更新
                         </Button>
@@ -385,34 +377,6 @@ export function InstancesPage({
             )
           })}
         </div>
-      )}
-      {updateFor && (
-        <Dialog
-          title="更新实例"
-          description="选择已验证的软件版本。更新会重建容器，但会保留实例数据目录。"
-          onClose={() => setUpdateFor(null)}
-        >
-          <div className="flex flex-wrap gap-2">
-            {(updateVersions.data?.versions ?? []).map(version => (
-              <Button
-                key={version}
-                tone="secondary"
-                disabled={version === updateFor.version || operating}
-                onClick={() => {
-                  setPending({ id: updateFor.id, action: 'update', version })
-                  setUpdateFor(null)
-                }}
-              >
-                {version}
-                {version === updateFor.version ? '（当前版本）' : ''}
-              </Button>
-            ))}
-            {!updateVersions.isLoading &&
-              (updateVersions.data?.versions ?? []).length === 0 && (
-                <Alert tone="error">暂无可用于更新的已验证版本。</Alert>
-              )}
-          </div>
-        </Dialog>
       )}
       {pending && (
         <ActionDialog

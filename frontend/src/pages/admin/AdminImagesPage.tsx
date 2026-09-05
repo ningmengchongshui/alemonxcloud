@@ -18,7 +18,8 @@ export function AdminImagesPage() {
   const [renaming, setRenaming] = useState<CatalogImage | null>(null)
   const [softwareName, setSoftwareName] = useState('')
   const [versionsFor, setVersionsFor] = useState<CatalogImage | null>(null)
-  const [tag, setTag] = useState('latest')
+  const [tag, setTag] = useState('')
+  const [addingVersion, setAddingVersion] = useState(false)
   const [versionError, setVersionError] = useState('')
   const [saveVersion, { isLoading: savingVersion }] =
     useSaveAdminImageVersionMutation()
@@ -28,8 +29,10 @@ export function AdminImagesPage() {
     useDeleteAdminImageVersionMutation()
   const target = catalog.data?.images.find(image => image.id === targetID)
   const currentVersions = versionsFor
-    ? (catalog.data?.images.find(image => image.id === versionsFor.id)
-        ?.versions ?? versionsFor.versions)
+    ? (
+        catalog.data?.images.find(image => image.id === versionsFor.id)
+          ?.versions ?? versionsFor.versions
+      ).filter(version => version.tag !== 'latest')
     : []
   async function toggle() {
     if (!target) return
@@ -98,16 +101,17 @@ export function AdminImagesPage() {
                   >
                     修改名称
                   </button>
-                  <button
-                    className="text-button"
+                  <Button
+                    tone="secondary"
                     onClick={() => {
                       setVersionsFor(image)
-                      setTag('latest')
+                      setTag('')
+                      setAddingVersion(false)
                       setVersionError('')
                     }}
                   >
-                    管理版本
-                  </button>
+                    版本配置
+                  </Button>
                 </td>
               </tr>
             ))}
@@ -161,7 +165,7 @@ export function AdminImagesPage() {
       {versionsFor && (
         <Dialog
           title={`${versionsFor.name} · 版本管理`}
-          description="新增时填写版本号并保存；需要拉取最新镜像时，点击对应版本的“更新”。"
+          description="这里配置用户购买时可选择的版本。"
           onClose={() => setVersionsFor(null)}
         >
           <div className="space-y-4">
@@ -212,47 +216,64 @@ export function AdminImagesPage() {
                   </div>
                 </div>
               ))}
+              {currentVersions.length === 0 && (
+                <p className="m-0 rounded-lg bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-900 dark:text-slate-300">
+                  还没有版本，点击下方“＋ 新增版本”添加。
+                </p>
+              )}
             </div>
-            <div className="grid gap-3">
-              <label>
-                版本号
-                <input
-                  value={tag}
-                  onChange={event => setTag(event.target.value)}
-                  placeholder="例如 v2.4.1"
-                />
-              </label>
-            </div>
+            {addingVersion ? (
+              <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                <label className="min-w-52 flex-1">
+                  版本号
+                  <input
+                    value={tag}
+                    onChange={event => setTag(event.target.value)}
+                    placeholder="例如 v2.4.1"
+                    data-autofocus
+                  />
+                </label>
+                <Button
+                  tone="secondary"
+                  onClick={() => {
+                    setAddingVersion(false)
+                    setTag('')
+                  }}
+                >
+                  取消
+                </Button>
+                <Button
+                  loading={savingVersion}
+                  disabled={!tag.trim()}
+                  onClick={() =>
+                    void saveVersion({
+                      id: '',
+                      imageId: versionsFor.id,
+                      tag,
+                      imageDigest: '',
+                      enabled: false,
+                      status: 'draft'
+                    })
+                      .unwrap()
+                      .then(() => {
+                        setTag('')
+                        setAddingVersion(false)
+                      })
+                      .catch(() => setVersionError('版本保存失败'))
+                  }
+                >
+                  保存
+                </Button>
+              </div>
+            ) : (
+              <Button tone="secondary" onClick={() => setAddingVersion(true)}>
+                ＋ 新增版本
+              </Button>
+            )}
             {versionError ? <Alert tone="error">{versionError}</Alert> : null}
             <div className="flex justify-end gap-2">
               <Button tone="secondary" onClick={() => setVersionsFor(null)}>
                 关闭
-              </Button>
-              <Button
-                loading={savingVersion}
-                onClick={() =>
-                  void saveVersion({
-                    id: '',
-                    imageId: versionsFor.id,
-                    tag,
-                    imageDigest: '',
-                    enabled: false,
-                    status: 'draft'
-                  })
-                    .unwrap()
-                    .then(() => {
-                      setTag('')
-                    })
-                    .catch(error =>
-                      setVersionError(
-                        typeof error?.data?.message === 'string'
-                          ? error.data.message
-                          : '版本保存失败'
-                      )
-                    )
-                }
-              >
-                保存版本
               </Button>
             </div>
           </div>

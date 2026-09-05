@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,6 +28,11 @@ func publicCatalogImages(images []catalogImage) []publicCatalogImage {
 		versions := make([]publicImageVersion, 0, len(image.Versions))
 		for _, version := range image.Versions {
 			versions = append(versions, publicImageVersion{Tag: version.Tag})
+		}
+		// Docker-style fallback: a source without configured release versions
+		// remains purchasable through its moving latest tag.
+		if len(versions) == 0 {
+			versions = append(versions, publicImageVersion{Tag: "latest"})
 		}
 		publicImages = append(publicImages, publicCatalogImage{ID: image.ID, Name: image.Name, Versions: versions})
 	}
@@ -799,48 +803,17 @@ func queueInstanceAction(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"task": task})
 }
 
-func instanceUpdateVersions(c *gin.Context) {
-	item, ok := ownedInstance(c)
-	if !ok {
-		return
-	}
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT DISTINCT v.version_tag FROM xcloud_image_versions v JOIN xcloud_orders o ON o.image_id=v.image_id WHERE o.instance_id=? AND v.enabled=TRUE AND v.version_status='ready' ORDER BY v.version_tag`, item.ID)
-	if err != nil {
-		internalError(c, err)
-		return
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var tag string
-		if rows.Scan(&tag) == nil {
-			items = append(items, tag)
-		}
-	}
-	c.JSON(http.StatusOK, gin.H{"versions": items, "currentVersion": item.Version})
-}
-
 func queueInstanceUpdate(c *gin.Context, item instance, actorID string) {
-	var body struct {
-		Version string `json:"version"`
-	}
-	if c.ShouldBindJSON(&body) != nil || !validImageTag(strings.TrimSpace(body.Version)) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择可购买的软件版本"})
-		return
-	}
 	if item.Status != "running" {
 		c.JSON(http.StatusConflict, gin.H{"message": "仅运行中的实例可以更新"})
 		return
 	}
-	var imageID, digest string
-	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT o.image_id,v.image_digest FROM xcloud_orders o JOIN xcloud_image_versions v ON v.image_id=o.image_id AND v.version_tag=? AND v.enabled=TRUE AND v.version_status='ready' WHERE o.instance_id=? ORDER BY o.created_at DESC LIMIT 1`, body.Version, item.ID).Scan(&imageID, &digest)
-	if err != nil || digest == "" {
-		c.JSON(http.StatusConflict, gin.H{"message": "该版本尚不可更新"})
+	if !validImageTag(item.Version) {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例没有可更新的版本标记"})
 		return
 	}
-	payload, _ := json.Marshal(map[string]string{"version": body.Version, "digest": digest})
 	now := time.Now()
-	task := controlTask{ID: newID("task"), InstanceID: item.ID, Action: "update", IdempotencyKey: "update:" + item.ID + ":" + body.Version + ":" + now.UTC().Format(time.RFC3339Nano), Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, Payload: payload}
+	task := controlTask{ID: newID("task"), InstanceID: item.ID, Action: "update", IdempotencyKey: "update:" + item.ID + ":" + now.UTC().Format(time.RFC3339Nano), Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now}
 	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET runtime_status='updating' WHERE id=? AND owner_id=? AND status='running' AND COALESCE(runtime_status,'')<>'updating'`, item.ID, item.OwnerID)
 	if err != nil {
 		internalError(c, err)
@@ -850,13 +823,13 @@ func queueInstanceUpdate(c *gin.Context, item instance, actorID string) {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例正在更新或状态已变化"})
 		return
 	}
-	if _, err = instanceDB.ExecContext(c.Request.Context(), `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,payload) VALUES (?,?,?,?,?,?,?,?,?,?)`, task.ID, task.InstanceID, task.Action, task.IdempotencyKey, task.Status, 0, task.RunAfter, now, now, payload); err != nil {
+	if _, err = instanceDB.ExecContext(c.Request.Context(), `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, task.ID, task.InstanceID, task.Action, task.IdempotencyKey, task.Status, 0, task.RunAfter, now, now); err != nil {
 		_, _ = instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET runtime_status='running' WHERE id=? AND status='running' AND runtime_status='updating'`, item.ID)
 		internalError(c, err)
 		return
 	}
 	appendTaskEvent(c.Request.Context(), task.ID, "queued", "等待执行实例更新")
-	_ = writeAudit(c.Request.Context(), actorID, "instance.update", "instance", item.ID, map[string]any{"version": body.Version, "taskId": task.ID})
+	_ = writeAudit(c.Request.Context(), actorID, "instance.update", "instance", item.ID, map[string]any{"tag": item.Version, "taskId": task.ID})
 	if err = enqueuePersistedTask(c.Request.Context(), task); err != nil {
 		c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "更新任务已记录，等待队列恢复"})
 		return
