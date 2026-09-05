@@ -85,30 +85,33 @@ export function CreateServicePage({
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
   const total = (selectedPlan?.monthlyPriceFen ?? 0) * months
-  const preview = useCallback((selected: string, fullPrice: boolean) => {
-    if (!selectedImage || !selectedPlan) return
-    setError('')
-    void quotePurchase({
-      planId: selectedPlan.id,
-      imageId: selectedImage.id,
-      months,
-      selectionId: selected,
-      payFullPrice: fullPrice
-    })
-      .unwrap()
-      .then(value => {
-        setQuote(value)
-        setSelectionID(value.selectedId ?? '')
-        setPayFullPrice(Boolean(value.payFullPrice))
+  const preview = useCallback(
+    (selected: string, fullPrice: boolean) => {
+      if (!selectedImage || !selectedPlan) return
+      setError('')
+      void quotePurchase({
+        planId: selectedPlan.id,
+        imageId: selectedImage.id,
+        months,
+        selectionId: selected,
+        payFullPrice: fullPrice
       })
-      .catch(value =>
-        setError(
-          typeof value?.data?.message === 'string'
-            ? value.data.message
-            : '暂时无法计算优惠'
+        .unwrap()
+        .then(value => {
+          setQuote(value)
+          setSelectionID(value.selectedId ?? '')
+          setPayFullPrice(Boolean(value.payFullPrice))
+        })
+        .catch(value =>
+          setError(
+            typeof value?.data?.message === 'string'
+              ? value.data.message
+              : '暂时无法计算优惠'
+          )
         )
-      )
-  }, [months, quotePurchase, selectedImage, selectedPlan])
+    },
+    [months, quotePurchase, selectedImage, selectedPlan]
+  )
   useEffect(() => {
     setQuote(null)
     setSelectionID('')

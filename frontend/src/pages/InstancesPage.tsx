@@ -7,9 +7,13 @@ import {
   EmptyState,
   LoadingState,
   PageHeader,
-  StatusBadge
+  StatusBadge,
+  Dialog
 } from '@/components/ui'
-import { useInstanceActionMutation } from '@/services/cloudApi'
+import {
+  useGetInstanceUpdateVersionsQuery,
+  useInstanceActionMutation
+} from '@/services/cloudApi'
 import { trackConsoleEvent } from '@/services/telemetry'
 import { watchTask } from '@/store/uiSlice'
 import type { Instance } from '@/types/cloud'
@@ -23,6 +27,7 @@ type InstanceAction =
   | 'cancel-destroy'
   | 'archive'
   | 'retry-deploy'
+  | 'update'
 
 function stateFor(status: string) {
   const value = status.toLowerCase()
@@ -58,21 +63,27 @@ function actionCopy(action: InstanceAction) {
         ? ['取消销毁计划', '实例会继续保持当前运行状态。', '取消销毁计划']
         : action === 'retry-deploy'
           ? ['重试部署', '将重新创建实例运行资源，确定继续吗？', '重试部署']
-        : action === 'archive'
-          ? [
-              '从列表移除',
-              '这只会隐藏实例记录，不会调用节点或删除数据。',
-              '从列表移除'
-            ]
-          : action === 'restart'
-            ? ['重启实例', '服务会短暂不可访问，确定继续吗？', '确认重启']
-            : action === 'stop'
+          : action === 'update'
+            ? [
+                '更新实例',
+                '将短暂重建容器并保留数据目录，服务会暂时不可访问。',
+                '确认更新'
+              ]
+            : action === 'archive'
               ? [
-                  '关闭实例',
-                  '服务将停止运行，但数据和订阅保留。确定继续吗？',
-                  '确认关机'
+                  '从列表移除',
+                  '这只会隐藏实例记录，不会调用节点或删除数据。',
+                  '从列表移除'
                 ]
-              : ['启动实例', '服务将恢复运行。确定继续吗？', '确认启动']
+              : action === 'restart'
+                ? ['重启实例', '服务会短暂不可访问，确定继续吗？', '确认重启']
+                : action === 'stop'
+                  ? [
+                      '关闭实例',
+                      '服务将停止运行，但数据和订阅保留。确定继续吗？',
+                      '确认关机'
+                    ]
+                  : ['启动实例', '服务将恢复运行。确定继续吗？', '确认启动']
 }
 
 export function InstancesPage({
@@ -90,7 +101,13 @@ export function InstancesPage({
   const [pending, setPending] = useState<{
     id: string
     action: InstanceAction
+    version?: string
   } | null>(null)
+  const [updateFor, setUpdateFor] = useState<Instance | null>(null)
+  const updateVersions = useGetInstanceUpdateVersionsQuery(
+    updateFor?.id ?? '',
+    { skip: !updateFor }
+  )
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
   const dispatch = useDispatch()
   const sorted = [...instances].sort(
@@ -212,7 +229,11 @@ export function InstancesPage({
                     <b className="mt-0.5 block text-xs text-slate-700 dark:text-slate-100">
                       {item.spec}
                     </b>
-					{item.bandwidthMbps ? <span className="mt-1 block text-[10px] text-slate-500 dark:text-slate-300">最高共享 {item.bandwidthMbps} Mbps</span> : null}
+                    {item.bandwidthMbps ? (
+                      <span className="mt-1 block text-[10px] text-slate-500 dark:text-slate-300">
+                        最高共享 {item.bandwidthMbps} Mbps
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 {lifecycle === 'destroy_scheduled' && (
@@ -271,6 +292,13 @@ export function InstancesPage({
                     )}
                     {runtime === 'running' && canOperate && (
                       <>
+                        <Button
+                          tone="secondary"
+                          disabled={operating}
+                          onClick={() => setUpdateFor(item)}
+                        >
+                          更新
+                        </Button>
                         <Button
                           tone="secondary"
                           disabled={!canOperate || operating}
@@ -357,6 +385,34 @@ export function InstancesPage({
             )
           })}
         </div>
+      )}
+      {updateFor && (
+        <Dialog
+          title="更新实例"
+          description="选择已验证的软件版本。更新会重建容器，但会保留实例数据目录。"
+          onClose={() => setUpdateFor(null)}
+        >
+          <div className="flex flex-wrap gap-2">
+            {(updateVersions.data?.versions ?? []).map(version => (
+              <Button
+                key={version}
+                tone="secondary"
+                disabled={version === updateFor.version || operating}
+                onClick={() => {
+                  setPending({ id: updateFor.id, action: 'update', version })
+                  setUpdateFor(null)
+                }}
+              >
+                {version}
+                {version === updateFor.version ? '（当前版本）' : ''}
+              </Button>
+            ))}
+            {!updateVersions.isLoading &&
+              (updateVersions.data?.versions ?? []).length === 0 && (
+                <Alert tone="error">暂无可用于更新的已验证版本。</Alert>
+              )}
+          </div>
+        </Dialog>
       )}
       {pending && (
         <ActionDialog

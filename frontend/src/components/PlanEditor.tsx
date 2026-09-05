@@ -90,7 +90,17 @@ export function PlanEditor() {
                 />
               </label>
             </div>
-            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100">最高共享带宽 Mbps<input className={inputClass} type="number" min="1" max="10000" value={bandwidth} onChange={event => setBandwidth(Number(event.target.value))} /></label>
+            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100">
+              最高共享带宽 Mbps
+              <input
+                className={inputClass}
+                type="number"
+                min="1"
+                max="10000"
+                value={bandwidth}
+                onChange={event => setBandwidth(Number(event.target.value))}
+              />
+            </label>
             <label
               className="block text-[11px] font-bold text-slate-700 dark:text-slate-100"
               htmlFor="plan-price"
@@ -112,7 +122,13 @@ export function PlanEditor() {
               </Button>
               <Button
                 loading={isLoading}
-                disabled={!name.trim() || cpu < 1 || memory < 256 || bandwidth < 1 || price < 0}
+                disabled={
+                  !name.trim() ||
+                  cpu < 1 ||
+                  memory < 256 ||
+                  bandwidth < 1 ||
+                  price < 0
+                }
                 onClick={() => void submit()}
               >
                 保存计算套餐

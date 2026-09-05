@@ -79,16 +79,25 @@ export const cloudApi = createApi({
           | 'cancel-destroy'
           | 'archive'
           | 'retry-deploy'
+          | 'update'
+        version?: string
       }
     >({
-      query: ({ id, action }) => ({
+      query: ({ id, action, version }) => ({
         url: `/instances/${id}/${action}`,
-        method: 'POST'
+        method: 'POST',
+        body: version ? { version } : undefined
       }),
       invalidatesTags: ['Instances']
     }),
     getInstanceLogs: builder.query<{ lines: string[] }, string>({
       query: id => `/instances/${id}/logs`
+    }),
+    getInstanceUpdateVersions: builder.query<
+      { versions: string[]; currentVersion: string },
+      string
+    >({
+      query: id => `/instances/${id}/update-versions`
     }),
     getCatalog: builder.query<Catalog, void>({
       query: () => '/catalog',
@@ -487,6 +496,16 @@ export const cloudApi = createApi({
       }),
       invalidatesTags: ['Admin']
     }),
+    deleteAdminImageVersion: builder.mutation<
+      void,
+      { imageId: string; versionId: string }
+    >({
+      query: ({ imageId, versionId }) => ({
+        url: `/admin/images/${imageId}/versions/${versionId}`,
+        method: 'DELETE'
+      }),
+      invalidatesTags: ['Admin', 'Catalog']
+    }),
     publishAdminImageVersion: builder.mutation<
       { version: ImageVersion; message: string },
       { imageId: string; tag: string }
@@ -599,12 +618,14 @@ export const {
   useGetAdminTasksQuery,
   useGetAdminAuditLogsQuery,
   useGetAdminMetricsQuery,
+  useGetInstanceUpdateVersionsQuery,
   useSearchAdminUsersQuery,
   useGetAdminWalletEntriesQuery,
   useAdjustAdminWalletMutation,
   useSaveAdminImageMutation,
   useSaveAdminImageVersionMutation,
   usePullAdminImageVersionMutation,
+  useDeleteAdminImageVersionMutation,
   usePublishAdminImageVersionMutation,
   useSaveAdminPlanMutation,
   useSaveAdminNodeMutation,

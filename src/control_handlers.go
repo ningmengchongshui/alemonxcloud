@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -352,6 +353,35 @@ func adminSaveImageVersion(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image_version.save", "image_version", item.ID, map[string]any{"imageId": item.ImageID, "tag": item.Tag})
 	c.JSON(http.StatusOK, item)
+}
+func adminDeleteImageVersion(c *gin.Context) {
+	var tag string
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT version_tag FROM xcloud_image_versions WHERE id=? AND image_id=?`, c.Param("versionID"), c.Param("id")).Scan(&tag); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "版本不存在"})
+		return
+	}
+	var used int
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_orders WHERE image_id=? AND selected_image_version=?`, c.Param("id"), tag).Scan(&used); err != nil {
+		internalError(c, err)
+		return
+	}
+	if used > 0 {
+		c.JSON(http.StatusConflict, gin.H{"message": "该版本已有历史订单，不能删除；可改为下架"})
+		return
+	}
+	_, _ = instanceDB.ExecContext(c.Request.Context(), `DELETE FROM xcloud_image_version_pulls WHERE image_version_id=?`, c.Param("versionID"))
+	result, err := instanceDB.ExecContext(c.Request.Context(), `DELETE FROM xcloud_image_versions WHERE id=? AND image_id=?`, c.Param("versionID"), c.Param("id"))
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		c.JSON(http.StatusConflict, gin.H{"message": "版本已变化，请刷新后重试"})
+		return
+	}
+	user := c.MustGet("user").(oidcUser)
+	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image_version.delete", "image_version", c.Param("versionID"), map[string]any{"imageId": c.Param("id"), "tag": tag})
+	c.Status(http.StatusNoContent)
 }
 func adminPullImageVersion(c *gin.Context) {
 	versionID := c.Param("versionID")
@@ -745,6 +775,10 @@ func queueInstanceAction(c *gin.Context) {
 		queueDeploymentRetry(c, item, user.ID)
 		return
 	}
+	if action == "update" {
+		queueInstanceUpdate(c, item, user.ID)
+		return
+	}
 	if action != "start" && action != "stop" && action != "restart" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的实例操作"})
 		return
@@ -760,6 +794,71 @@ func queueInstanceAction(c *gin.Context) {
 	}
 	if err := enqueuePersistedTask(c.Request.Context(), task); err != nil {
 		c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "任务已记录，等待队列恢复"})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"task": task})
+}
+
+func instanceUpdateVersions(c *gin.Context) {
+	item, ok := ownedInstance(c)
+	if !ok {
+		return
+	}
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT DISTINCT v.version_tag FROM xcloud_image_versions v JOIN xcloud_orders o ON o.image_id=v.image_id WHERE o.instance_id=? AND v.enabled=TRUE AND v.version_status='ready' ORDER BY v.version_tag`, item.ID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var tag string
+		if rows.Scan(&tag) == nil {
+			items = append(items, tag)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"versions": items, "currentVersion": item.Version})
+}
+
+func queueInstanceUpdate(c *gin.Context, item instance, actorID string) {
+	var body struct {
+		Version string `json:"version"`
+	}
+	if c.ShouldBindJSON(&body) != nil || !validImageTag(strings.TrimSpace(body.Version)) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择可购买的软件版本"})
+		return
+	}
+	if item.Status != "running" {
+		c.JSON(http.StatusConflict, gin.H{"message": "仅运行中的实例可以更新"})
+		return
+	}
+	var imageID, digest string
+	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT o.image_id,v.image_digest FROM xcloud_orders o JOIN xcloud_image_versions v ON v.image_id=o.image_id AND v.version_tag=? AND v.enabled=TRUE AND v.version_status='ready' WHERE o.instance_id=? ORDER BY o.created_at DESC LIMIT 1`, body.Version, item.ID).Scan(&imageID, &digest)
+	if err != nil || digest == "" {
+		c.JSON(http.StatusConflict, gin.H{"message": "该版本尚不可更新"})
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"version": body.Version, "digest": digest})
+	now := time.Now()
+	task := controlTask{ID: newID("task"), InstanceID: item.ID, Action: "update", IdempotencyKey: "update:" + item.ID + ":" + body.Version + ":" + now.UTC().Format(time.RFC3339Nano), Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, Payload: payload}
+	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET runtime_status='updating' WHERE id=? AND owner_id=? AND status='running' AND COALESCE(runtime_status,'')<>'updating'`, item.ID, item.OwnerID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例正在更新或状态已变化"})
+		return
+	}
+	if _, err = instanceDB.ExecContext(c.Request.Context(), `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,payload) VALUES (?,?,?,?,?,?,?,?,?,?)`, task.ID, task.InstanceID, task.Action, task.IdempotencyKey, task.Status, 0, task.RunAfter, now, now, payload); err != nil {
+		_, _ = instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET runtime_status='running' WHERE id=? AND status='running' AND runtime_status='updating'`, item.ID)
+		internalError(c, err)
+		return
+	}
+	appendTaskEvent(c.Request.Context(), task.ID, "queued", "等待执行实例更新")
+	_ = writeAudit(c.Request.Context(), actorID, "instance.update", "instance", item.ID, map[string]any{"version": body.Version, "taskId": task.ID})
+	if err = enqueuePersistedTask(c.Request.Context(), task); err != nil {
+		c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "更新任务已记录，等待队列恢复"})
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"task": task})

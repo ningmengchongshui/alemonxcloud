@@ -124,7 +124,7 @@ func syncInstanceStates(ctx context.Context) {
 	if instanceDB == nil {
 		return
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.container_name,i.status,COALESCE(i.runtime_status,''),n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.agent_token_ciphertext,'') FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('deploying','running','stopped','destroy_scheduled')`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.container_name,i.status,COALESCE(i.runtime_status,''),n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.agent_token_ciphertext,'') FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('deploying','running','stopped','destroy_scheduled') AND COALESCE(i.runtime_status,'')<>'updating'`)
 	if err != nil {
 		log.Printf("load instance state: %v", err)
 		return

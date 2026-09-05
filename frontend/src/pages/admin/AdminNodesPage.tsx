@@ -52,7 +52,8 @@ export function AdminNodesPage() {
               <span>{node.managedContainerCount ?? 0} 个托管容器</span>
               {(node.offlineInstanceCount ?? 0) > 0 && (
                 <span className="text-amber-700 dark:text-amber-200">
-                  待销毁/保留实例 {node.offlineInstanceCount} 个 · 清理任务 {node.pendingCleanupTasks ?? 0} 个
+                  待销毁/保留实例 {node.offlineInstanceCount} 个 · 清理任务{' '}
+                  {node.pendingCleanupTasks ?? 0} 个
                 </span>
               )}
               {node.lastAgentError && (

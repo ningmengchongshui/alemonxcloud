@@ -120,6 +120,7 @@ func Run() {
 	router.GET("/api/instances", requireSession, listInstances)
 	router.POST("/api/instances", requireSession, createInstance)
 	router.POST("/api/instances/:id/:action", requireSession, queueInstanceAction)
+	router.GET("/api/instances/:id/update-versions", requireSession, instanceUpdateVersions)
 	router.DELETE("/api/instances/:id", requireSession, queueDeleteInstance)
 	router.GET("/api/instances/:id/logs", requireSession, instanceLogs)
 	router.GET("/api/catalog", requireSession, catalog)
@@ -161,6 +162,7 @@ func Run() {
 	router.POST("/api/admin/images/:id/versions", requireAdmin, adminSaveImageVersion)
 	router.POST("/api/admin/images/:id/versions/publish", requireAdmin, adminPublishImageVersion)
 	router.PUT("/api/admin/images/:id/versions/:versionID", requireAdmin, adminSaveImageVersion)
+	router.DELETE("/api/admin/images/:id/versions/:versionID", requireAdmin, adminDeleteImageVersion)
 	router.POST("/api/admin/images/:id/versions/:versionID/pull", requireAdmin, adminPullImageVersion)
 	router.POST("/api/admin/plans", requireAdmin, adminSavePlan)
 	router.PUT("/api/admin/plans/:id", requireAdmin, adminSavePlan)
@@ -327,7 +329,7 @@ func instanceGateway(c *gin.Context) {
 		return
 	}
 	var nodeID string
-	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT node_id FROM xcloud_instances WHERE route_key=? AND COALESCE(runtime_status,'')<>'missing' AND (status IN ('running','deploying') OR (status='destroy_scheduled' AND COALESCE(runtime_status,'stopped')='running'))`, route).Scan(&nodeID); err != nil {
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT node_id FROM xcloud_instances WHERE route_key=? AND COALESCE(runtime_status,'running')='running' AND (status IN ('running','deploying') OR (status='destroy_scheduled' AND COALESCE(runtime_status,'stopped')='running'))`, route).Scan(&nodeID); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不可用"})
 		return
 	}

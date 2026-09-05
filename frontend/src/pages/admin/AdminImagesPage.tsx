@@ -3,8 +3,8 @@ import { ActionDialog } from '@/components/ActionDialog'
 import { ImageSourceEditor } from '@/components/ImageSourceEditor'
 import {
   useGetAdminCatalogQuery,
+  useDeleteAdminImageVersionMutation,
   usePullAdminImageVersionMutation,
-  usePublishAdminImageVersionMutation,
   useSaveAdminImageMutation,
   useSaveAdminImageVersionMutation
 } from '@/services/cloudApi'
@@ -24,8 +24,8 @@ export function AdminImagesPage() {
     useSaveAdminImageVersionMutation()
   const [pullVersion, { isLoading: pulling }] =
     usePullAdminImageVersionMutation()
-  const [publishVersion, { isLoading: publishing }] =
-    usePublishAdminImageVersionMutation()
+  const [deleteVersion, { isLoading: deletingVersion }] =
+    useDeleteAdminImageVersionMutation()
   const target = catalog.data?.images.find(image => image.id === targetID)
   const currentVersions = versionsFor
     ? (catalog.data?.images.find(image => image.id === versionsFor.id)
@@ -161,7 +161,7 @@ export function AdminImagesPage() {
       {versionsFor && (
         <Dialog
           title={`${versionsFor.name} · 版本管理`}
-          description="填写版本号后点击“验证并上架”。系统会在健康节点校验一致性，成功后用户才可购买。"
+          description="新增时填写版本号并保存；需要拉取最新镜像时，点击对应版本的“更新”。"
           onClose={() => setVersionsFor(null)}
         >
           <div className="space-y-4">
@@ -173,23 +173,9 @@ export function AdminImagesPage() {
                 >
                   <span>
                     <b>{version.tag}</b>
-                    <small className="ml-2 text-slate-500">
-                      {version.tag === 'latest' ? '非固定版本' : '推荐固定版本'}
-                    </small>
                   </span>
                   <div className="flex gap-2">
-                    <span>
-                      {version.status === 'ready'
-                        ? version.enabled
-                          ? '可购买'
-                          : '已下架'
-                        : version.status === 'syncing'
-                          ? '同步中'
-                          : version.status === 'failed'
-                            ? '校验失败'
-                            : '草稿'}
-                    </span>
-                    {version.status === 'ready' ? (
+                    {version.enabled || version.status === 'ready' ? (
                       <Button
                         tone="secondary"
                         loading={savingVersion}
@@ -209,18 +195,21 @@ export function AdminImagesPage() {
                       disabled={version.status === 'syncing'}
                       onClick={() => void pullVersion(version)}
                     >
-                      重新验证
+                      更新
+                    </Button>
+                    <Button
+                      tone="danger"
+                      loading={deletingVersion}
+                      onClick={() =>
+                        void deleteVersion({
+                          imageId: version.imageId,
+                          versionId: version.id
+                        })
+                      }
+                    >
+                      删除
                     </Button>
                   </div>
-                  {version.lastError ? (
-                    <p className="m-0 w-full text-xs text-rose-600 dark:text-rose-300">
-                      {version.lastError}
-                    </p>
-                  ) : null}
-                  <details className="w-full text-xs text-slate-500 dark:text-slate-300">
-                    <summary>技术详情</summary>
-                    <p className="mb-0 mt-2 break-all">Digest：{version.imageDigest || '尚未生成'}</p>
-                  </details>
                 </div>
               ))}
             </div>
@@ -230,7 +219,7 @@ export function AdminImagesPage() {
                 <input
                   value={tag}
                   onChange={event => setTag(event.target.value)}
-                  placeholder="例如 v2.4.1；latest 为非固定版本"
+                  placeholder="例如 v2.4.1"
                 />
               </label>
             </div>
@@ -240,23 +229,30 @@ export function AdminImagesPage() {
                 关闭
               </Button>
               <Button
-                loading={publishing}
+                loading={savingVersion}
                 onClick={() =>
-                  void publishVersion({ imageId: versionsFor.id, tag })
+                  void saveVersion({
+                    id: '',
+                    imageId: versionsFor.id,
+                    tag,
+                    imageDigest: '',
+                    enabled: false,
+                    status: 'draft'
+                  })
                     .unwrap()
                     .then(() => {
                       setTag('')
                     })
                     .catch(error =>
-                        setVersionError(
-                          typeof error?.data?.message === 'string'
-                            ? error.data.message
-                            : '验证并上架未完成'
-                        )
+                      setVersionError(
+                        typeof error?.data?.message === 'string'
+                          ? error.data.message
+                          : '版本保存失败'
+                      )
                     )
                 }
               >
-                验证并上架
+                保存版本
               </Button>
             </div>
           </div>

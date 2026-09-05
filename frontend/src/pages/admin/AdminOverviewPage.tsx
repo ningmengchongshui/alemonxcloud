@@ -21,11 +21,31 @@ export function AdminOverviewPage() {
     node => node.enabled && node.lastHeartbeatAt
   )
   const lifecycleRisks = [
-    ['部署失败', metrics.data?.deploymentFailed ?? 0, '请在实例任务中确认错误后重试部署。'],
-    ['运行资源丢失', metrics.data?.runtimeMissing ?? 0, '容器 404 不会自动重建；请先核对节点和数据目录。'],
-    ['销毁受阻', metrics.data?.destroyBlocked ?? 0, '等待节点恢复后会继续处理销毁任务。'],
-    ['离线节点影响实例', metrics.data?.offlineInstances ?? 0, '请前往节点管理查看受影响节点与清理任务。'],
-    ['24 小时租约恢复', metrics.data?.leaseRecoveries24h ?? 0, '请检查消费者进程与 RabbitMQ 连接稳定性。']
+    [
+      '部署失败',
+      metrics.data?.deploymentFailed ?? 0,
+      '请在实例任务中确认错误后重试部署。'
+    ],
+    [
+      '运行资源丢失',
+      metrics.data?.runtimeMissing ?? 0,
+      '容器 404 不会自动重建；请先核对节点和数据目录。'
+    ],
+    [
+      '销毁受阻',
+      metrics.data?.destroyBlocked ?? 0,
+      '等待节点恢复后会继续处理销毁任务。'
+    ],
+    [
+      '离线节点影响实例',
+      metrics.data?.offlineInstances ?? 0,
+      '请前往节点管理查看受影响节点与清理任务。'
+    ],
+    [
+      '24 小时租约恢复',
+      metrics.data?.leaseRecoveries24h ?? 0,
+      '请检查消费者进程与 RabbitMQ 连接稳定性。'
+    ]
   ].filter(([, count]) => Number(count) > 0)
   async function refresh() {
     await Promise.all([
@@ -122,17 +142,26 @@ export function AdminOverviewPage() {
           <h2 className="m-0 text-sm font-bold">实例生命周期风险</h2>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {lifecycleRisks.map(([label, count, detail]) => (
-              <article className="rounded-lg bg-white p-3 text-xs dark:bg-slate-900" key={String(label)}>
-                <b>{label} · {count}</b>
-                <p className="mb-0 mt-1 text-slate-600 dark:text-slate-300">{detail}</p>
+              <article
+                className="rounded-lg bg-white p-3 text-xs dark:bg-slate-900"
+                key={String(label)}
+              >
+                <b>
+                  {label} · {count}
+                </b>
+                <p className="mb-0 mt-1 text-slate-600 dark:text-slate-300">
+                  {detail}
+                </p>
               </article>
             ))}
           </div>
         </section>
       )}
-      {deploying.length === 0 && failed.length === 0 && lifecycleRisks.length === 0 && (
-        <Alert tone="success">当前没有需要人工处理的部署或失败任务。</Alert>
-      )}
+      {deploying.length === 0 &&
+        failed.length === 0 &&
+        lifecycleRisks.length === 0 && (
+          <Alert tone="success">当前没有需要人工处理的部署或失败任务。</Alert>
+        )}
     </section>
   )
 }

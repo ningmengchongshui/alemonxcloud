@@ -203,19 +203,20 @@ type order struct {
 }
 
 type controlTask struct {
-	ID             string     `json:"id"`
-	InstanceID     string     `json:"instanceId"`
-	Action         string     `json:"action"`
-	IdempotencyKey string     `json:"-"`
-	Status         string     `json:"status"`
-	LastError      string     `json:"lastError"`
-	Attempts       int        `json:"attempts"`
-	RunAfter       time.Time  `json:"runAfter"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-	ClaimedAt      *time.Time `json:"claimedAt,omitempty"`
-	ClaimExpiresAt *time.Time `json:"claimExpiresAt,omitempty"`
-	WorkerID       string     `json:"workerId,omitempty"`
+	ID             string          `json:"id"`
+	InstanceID     string          `json:"instanceId"`
+	Action         string          `json:"action"`
+	IdempotencyKey string          `json:"-"`
+	Status         string          `json:"status"`
+	LastError      string          `json:"lastError"`
+	Attempts       int             `json:"attempts"`
+	RunAfter       time.Time       `json:"runAfter"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+	ClaimedAt      *time.Time      `json:"claimedAt,omitempty"`
+	ClaimExpiresAt *time.Time      `json:"claimExpiresAt,omitempty"`
+	WorkerID       string          `json:"workerId,omitempty"`
+	Payload        json.RawMessage `json:"-"`
 }
 type auditLog struct {
 	ID         int64     `json:"id"`
@@ -709,10 +710,10 @@ func nodeHeartbeatTTL() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-const taskSelectFields = `id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at,claimed_at,claim_expires_at,COALESCE(worker_id,'')`
+const taskSelectFields = `id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at,claimed_at,claim_expires_at,COALESCE(worker_id,''),COALESCE(payload,JSON_OBJECT())`
 
 func scanControlTask(scanner interface{ Scan(...any) error }, task *controlTask) error {
-	return scanner.Scan(&task.ID, &task.InstanceID, &task.Action, &task.IdempotencyKey, &task.Status, &task.Attempts, &task.LastError, &task.RunAfter, &task.CreatedAt, &task.UpdatedAt, &task.ClaimedAt, &task.ClaimExpiresAt, &task.WorkerID)
+	return scanner.Scan(&task.ID, &task.InstanceID, &task.Action, &task.IdempotencyKey, &task.Status, &task.Attempts, &task.LastError, &task.RunAfter, &task.CreatedAt, &task.UpdatedAt, &task.ClaimedAt, &task.ClaimExpiresAt, &task.WorkerID, &task.Payload)
 }
 
 func loadTask(ctx context.Context, id string) (controlTask, error) {
@@ -840,6 +841,11 @@ func finishTask(ctx context.Context, task controlTask, err error) (bool, error) 
 // prevents a paid instance from remaining in deploying forever while still
 // consuming node capacity.
 func failDeployment(ctx context.Context, task controlTask, cause error) {
+	if task.Action == "update" && task.Attempts >= 3 {
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET runtime_status='missing' WHERE id=? AND status='running'`, task.InstanceID)
+		_ = writeAudit(ctx, "system", "instance.update_failed", "instance", task.InstanceID, map[string]any{"taskId": task.ID, "error": truncateError(cause.Error())})
+		return
+	}
 	if task.Action == "bandwidth" {
 		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='failed',bandwidth_last_error=? WHERE id=?`, truncateError(cause.Error()), task.InstanceID)
 		return
@@ -892,7 +898,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 			return err
 		}
 		var imageRef, digest, selectedVersion string
-		err = instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(o.selected_image_digest,i.image_digest,''),COALESCE(o.selected_image_version,i.version) FROM xcloud_orders o JOIN xcloud_images i ON i.id=o.image_id WHERE o.instance_id=? ORDER BY o.created_at DESC LIMIT 1`, item.ID).Scan(&imageRef, &digest, &selectedVersion)
+		err = instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(ins.image_digest,o.selected_image_digest,i.image_digest,''),COALESCE(ins.version,o.selected_image_version,i.version) FROM xcloud_instances ins JOIN xcloud_orders o ON o.instance_id=ins.id JOIN xcloud_images i ON i.id=o.image_id WHERE ins.id=? ORDER BY o.created_at DESC LIMIT 1`, item.ID).Scan(&imageRef, &digest, &selectedVersion)
 		if err != nil {
 			return err
 		}
@@ -964,6 +970,26 @@ func executeTask(ctx context.Context, task controlTask) error {
 				next = item.Status
 			}
 			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
+		}
+	case "update":
+		var update struct {
+			Version string `json:"version"`
+			Digest  string `json:"digest"`
+		}
+		if json.Unmarshal(task.Payload, &update) != nil || update.Version == "" || update.Digest == "" {
+			return errors.New("实例更新任务缺少已验证版本")
+		}
+		var cpu float64
+		var memoryMB, bandwidthMbps int
+		if err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb,bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB, &bandwidthMbps); err == nil {
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/destroy", nil, nil)
+		}
+		if err == nil {
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, update.Version, update.Digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, nil)
+		}
+		if err == nil {
+			runtime := "running"
+			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{"running"}, "running", &runtime, "version=?,image_digest=?", update.Version, update.Digest)
 		}
 	case "destroy":
 		err = executeDestroyTask(ctx, task, item.ID, item.ContainerName, n)

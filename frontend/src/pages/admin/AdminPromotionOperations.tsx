@@ -50,8 +50,11 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
       setEditing(null)
     } catch (error: unknown) {
       const message =
-        typeof error === 'object' && error !== null && 'data' in error &&
-        typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+        typeof error === 'object' &&
+        error !== null &&
+        'data' in error &&
+        typeof (error as { data?: { message?: unknown } }).data?.message ===
+          'string'
           ? (error as { data: { message: string } }).data.message
           : '保存失败'
       setError(message)
