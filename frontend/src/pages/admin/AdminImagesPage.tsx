@@ -32,7 +32,7 @@ export function AdminImagesPage() {
     ? (
         catalog.data?.images.find(image => image.id === versionsFor.id)
           ?.versions ?? versionsFor.versions
-      ).filter(version => version.tag !== 'latest')
+      )
     : []
   async function toggle() {
     if (!target) return

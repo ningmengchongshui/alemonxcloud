@@ -196,7 +196,7 @@
   }
 
   .page {
-    @apply mx-auto max-w-screen-2xl px-7 py-11;
+    @apply mx-auto max-w-screen-2xl px-7 py-8;
   }
 
   .page-heading {

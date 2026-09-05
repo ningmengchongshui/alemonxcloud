@@ -38,7 +38,8 @@ function PlanChoice({
       <span>
         <b>{plan.name}</b>
         <small>
-          {plan.cpu} 核 CPU · {plan.memoryMB / 1024} GB 内存
+          {plan.cpu} 核 CPU · {plan.memoryMB / 1024} GB 内存 · 最高共享{' '}
+          {plan.bandwidthMbps} Mbps
         </small>
       </span>
       <em>
@@ -213,23 +214,26 @@ export function CreateServicePage({
                     </button>
                   ))}
                 </div>
-                <label htmlFor="image-version">
-                  镜像版本
-                  <select
-                    id="image-version"
-                    value={selectedVersion?.tag ?? ''}
-                    onChange={event => {
-                      setImageVersion(event.target.value)
-                      setError('')
-                    }}
-                  >
-                    {(selectedImage?.versions ?? []).map(version => (
-                      <option key={version.tag} value={version.tag}>
-                        {version.tag}
-                      </option>
+                <div className="mt-5">
+                  <p className="mb-2 text-sm font-bold">选择镜像版本</p>
+                  <div className="choice-grid">
+                    {imageVersions.map(version => (
+                      <button
+                        key={version.tag}
+                        type="button"
+                        className={`catalog-choice ${selectedVersion?.tag === version.tag ? 'selected' : ''}`}
+                        aria-pressed={selectedVersion?.tag === version.tag}
+                        onClick={() => {
+                          setImageVersion(version.tag)
+                          setError('')
+                        }}
+                      >
+                        <span className="choice-mark">{selectedVersion?.tag === version.tag ? '✓' : ''}</span>
+                        <span><b>{version.tag}</b></span>
+                      </button>
                     ))}
-                  </select>
-                </label>
+                  </div>
+                </div>
               </>
             )}
           </section>
@@ -308,7 +312,7 @@ export function CreateServicePage({
               <dt>资源</dt>
               <dd>
                 {selectedPlan
-                  ? `${selectedPlan.cpu} 核 CPU · ${selectedPlan.memoryMB / 1024} GB 内存`
+                  ? `${selectedPlan.cpu} 核 CPU · ${selectedPlan.memoryMB / 1024} GB 内存 · 最高共享 ${selectedPlan.bandwidthMbps} Mbps`
                   : '—'}
               </dd>
             </div>

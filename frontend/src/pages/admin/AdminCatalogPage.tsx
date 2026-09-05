@@ -41,7 +41,8 @@ export function AdminCatalogPage() {
           <thead>
             <tr>
               <th>套餐</th>
-              <th>配置</th>
+              <th>计算资源</th>
+              <th>网络</th>
               <th>月价</th>
               <th>状态</th>
               <th />
@@ -55,6 +56,14 @@ export function AdminCatalogPage() {
                 </td>
                 <td>
                   {plan.cpu} 核 / {plan.memoryMB / 1024} GB
+                </td>
+                <td>
+                  <span className="font-medium text-slate-700 dark:text-slate-100">
+                    最高共享 {plan.bandwidthMbps} Mbps
+                  </span>
+                  <small className="mt-0.5 block text-[10px] text-slate-400">
+                    按套餐上限限速
+                  </small>
                 </td>
                 <td>¥{(plan.monthlyPriceFen / 100).toFixed(2)}</td>
                 <td>{plan.enabled ? '可售' : '已下架'}</td>
