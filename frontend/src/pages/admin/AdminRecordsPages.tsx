@@ -5,7 +5,9 @@ import {
   useGetAdminOrdersQuery,
   useGetAdminTasksQuery,
   useGetAdminWalletEntriesQuery,
+  useDiscardReviewTaskMutation,
   useRetryTaskMutation,
+  useResumeReviewTaskMutation,
   useSearchAdminUsersQuery
 } from '@/services/cloudApi'
 import {
@@ -75,12 +77,14 @@ export function AdminOrdersPage() {
 export function AdminTasksPage() {
   const tasks = useGetAdminTasksQuery()
   const [retry] = useRetryTaskMutation()
+  const [resume] = useResumeReviewTaskMutation()
+  const [discard] = useDiscardReviewTaskMutation()
   return (
     <section className="page super-page">
       <PageHeader
         eyebrow="任务队列"
         title="任务执行记录"
-        description="查看部署和生命周期任务；失败任务可以安全重试。"
+        description="危险的过期生命周期任务会进入待复核，确认前不会再次操作容器。"
         actions={
           <Button
             tone="secondary"
@@ -112,7 +116,12 @@ export function AdminTasksPage() {
                 </td>
                 <td>{task.status}</td>
                 <td>{task.attempts}</td>
-                <td>{task.lastError || '—'}</td>
+                <td>
+                  {task.lastError || '—'}
+                  {task.recoveryCount ? (
+                    <small>已恢复 {task.recoveryCount} 次</small>
+                  ) : null}
+                </td>
                 <td className="flex gap-2">
                   {task.status === 'failed' && (
                     <button
@@ -121,6 +130,22 @@ export function AdminTasksPage() {
                     >
                       安全重试
                     </button>
+                  )}
+                  {task.status === 'needs_review' && (
+                    <>
+                      <button
+                        className="text-button"
+                        onClick={() => void resume(task.id)}
+                      >
+                        确认恢复
+                      </button>
+                      <button
+                        className="text-button text-danger"
+                        onClick={() => void discard(task.id)}
+                      >
+                        作废任务
+                      </button>
+                    </>
                   )}
                 </td>
               </tr>

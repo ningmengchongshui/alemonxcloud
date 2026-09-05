@@ -18,6 +18,7 @@ import type {
   Wallet,
   WalletEntry,
   Ticket,
+  InstanceTaskRecord,
   TicketDetail,
   TicketPriority,
   TicketStatus,
@@ -182,7 +183,7 @@ export const cloudApi = createApi({
       query: () => ({ url: '/notifications/read-all', method: 'POST' }),
       invalidatesTags: ['Notifications']
     }),
-    getInstanceTasks: builder.query<Array<{ task: Task }>, string>({
+    getInstanceTasks: builder.query<InstanceTaskRecord[], string>({
       query: id => `/instances/${id}/tasks`
     }),
     getTask: builder.query<Task, string>({
@@ -534,6 +535,20 @@ export const cloudApi = createApi({
       query: id => ({ url: `/admin/tasks/${id}/retry`, method: 'POST' }),
       invalidatesTags: ['Admin']
     }),
+    resumeReviewTask: builder.mutation<void, string>({
+      query: id => ({
+        url: `/admin/tasks/${id}/review-resume`,
+        method: 'POST'
+      }),
+      invalidatesTags: ['Admin']
+    }),
+    discardReviewTask: builder.mutation<void, string>({
+      query: id => ({
+        url: `/admin/tasks/${id}/review-discard`,
+        method: 'POST'
+      }),
+      invalidatesTags: ['Admin']
+    }),
     logout: builder.mutation<void, void>({
       query: () => ({ url: '/logout', method: 'POST' }),
       invalidatesTags: ['Session', 'Instances']
@@ -626,6 +641,8 @@ export const {
   useSaveAdminPlanMutation,
   useSaveAdminNodeMutation,
   useRetryTaskMutation,
+  useResumeReviewTaskMutation,
+  useDiscardReviewTaskMutation,
   useLogoutMutation,
   useAuthorizeMutation,
   useCallbackMutation,

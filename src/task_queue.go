@@ -173,14 +173,23 @@ func processDelivery(delivery amqp091.Delivery) {
 		_ = delivery.Ack(false)
 		return
 	}
-	claimed, err := claimTask(context.Background(), task.ID)
+	claimed, err := claimTask(context.Background(), task)
 	if err != nil || !claimed {
 		_ = delivery.Ack(false)
 		return
 	}
 	task.Attempts++
 	task.WorkerID = taskWorkerID()
+	// Reload the execution token written by the atomic claim before any Agent
+	// call. A stale worker can never complete or release a newer execution.
+	if task, err = loadTask(context.Background(), task.ID); err != nil {
+		_ = delivery.Ack(false)
+		return
+	}
+	leaseStop := make(chan struct{})
+	go renewTaskLease(task, leaseStop)
 	err = executeTask(context.Background(), task)
+	close(leaseStop)
 	finished, finishErr := finishTask(context.Background(), task, err)
 	if finishErr != nil {
 		log.Printf("finish task %s: %v", task.ID, finishErr)
@@ -203,6 +212,35 @@ func processDelivery(delivery amqp091.Delivery) {
 	}
 	_ = writeAudit(context.Background(), "system", "task.succeeded", "task", task.ID, map[string]any{"action": task.Action, "instanceId": task.InstanceID})
 	_ = delivery.Ack(false)
+}
+
+func renewTaskLease(task controlTask, stop <-chan struct{}) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			result, err := instanceDB.ExecContext(context.Background(), `UPDATE xcloud_tasks SET heartbeat_at=NOW(),claim_expires_at=DATE_ADD(NOW(), INTERVAL 5 MINUTE),updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND execution_token=? AND claim_expires_at>NOW()`, task.ID, taskRunning, task.WorkerID, task.ExecutionToken)
+			if err != nil {
+				log.Printf("renew task lease %s: %v", task.ID, err)
+				appendTaskEvent(context.Background(), task.ID, "lease_renew_failed", truncateError(err.Error()))
+				continue
+			}
+			if n, _ := result.RowsAffected(); n != 1 {
+				appendTaskEvent(context.Background(), task.ID, "lease_renew_failed", "任务已失去执行租约")
+				return
+			}
+			if lifecycleTask(task.Action) {
+				_, err = instanceDB.ExecContext(context.Background(), `UPDATE xcloud_instances SET active_task_expires_at=DATE_ADD(NOW(), INTERVAL 5 MINUTE) WHERE id=? AND active_task_id=? AND active_task_token=?`, task.InstanceID, task.ID, task.ExecutionToken)
+				if err != nil {
+					log.Printf("renew instance lock %s: %v", task.InstanceID, err)
+					appendTaskEvent(context.Background(), task.ID, "lease_renew_failed", truncateError(err.Error()))
+				}
+			}
+		}
+	}
 }
 func recoverPendingTasks() {
 	if instanceDB == nil || !queueAvailable() {
@@ -238,7 +276,11 @@ func recoverExpiredTaskLeases(ctx context.Context) {
 		if err := scanControlTask(rows, &task); err != nil {
 			continue
 		}
-		result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,run_after=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,updated_at=NOW() WHERE id=? AND status=? AND claim_expires_at<=NOW()`, taskPending, task.ID, taskRunning)
+		next, detail := taskPending, "消费者租约已过期，任务重新排队"
+		if dangerousRecoveredTask(task.Action) || !safeRecoveryState(ctx, task) {
+			next, detail = taskReview, "历史生命周期任务已隔离，等待管理员复核"
+		}
+		result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,run_after=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,recovery_count=recovery_count+1,last_error=?,updated_at=NOW() WHERE id=? AND status=? AND claim_expires_at<=NOW()`, next, detail, task.ID, taskRunning)
 		if err != nil {
 			log.Printf("recover task lease %s: %v", task.ID, err)
 			continue
@@ -246,14 +288,32 @@ func recoverExpiredTaskLeases(ctx context.Context) {
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			continue
 		}
-		appendTaskEvent(ctx, task.ID, "lease_recovered", "消费者租约已过期，任务重新排队")
-		_ = writeAudit(ctx, "system", "task.lease_recovered", "task", task.ID, map[string]any{"instanceId": task.InstanceID})
-		if queueAvailable() {
+		event := "lease_recovered"
+		if next == taskReview {
+			event = "recovery_quarantined"
+		}
+		appendTaskEvent(ctx, task.ID, event, detail)
+		_ = writeAudit(ctx, "system", "task."+event, "task", task.ID, map[string]any{"instanceId": task.InstanceID, "action": task.Action})
+		if next == taskPending && queueAvailable() {
 			if err := enqueuePersistedTask(ctx, task); err != nil {
 				log.Printf("republish recovered task %s: %v", task.ID, err)
 			}
 		}
 	}
+}
+
+func dangerousRecoveredTask(action string) bool {
+	return action == "stop" || action == "update" || action == "restart" || action == "destroy" || action == "purge" || action == "retry-deploy"
+}
+func safeRecoveryState(ctx context.Context, task controlTask) bool {
+	if task.Action != "create" && task.Action != "start" {
+		return task.Action == "bandwidth"
+	}
+	var status string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_instances WHERE id=?`, task.InstanceID).Scan(&status); err != nil {
+		return false
+	}
+	return (task.Action == "create" && status == "deploying") || (task.Action == "start" && (status == "stopped" || status == "destroy_scheduled"))
 }
 func minDuration(a, b time.Duration) time.Duration {
 	if a < b {

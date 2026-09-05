@@ -116,7 +116,17 @@ func runServer() {
 	}
 	gin.SetMode(env("GIN_MODE", gin.ReleaseMode))
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(gin.Logger(), gin.CustomRecovery(func(c *gin.Context, recovered any) {
+		// net/http uses ErrAbortHandler to stop a reverse-proxy response when a
+		// client closes a long-lived stream. It is expected connection churn, not
+		// an Agent panic and must not be logged as a crash or turned into another
+		// misleading "instance unavailable" response.
+		if err, ok := recovered.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+			return
+		}
+		log.Printf("agent panic recovered: %v", recovered)
+		c.AbortWithStatus(http.StatusInternalServerError)
+	}))
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	control := r.Group("/container", requireControlToken)
 	control.POST("/create", createContainer)
@@ -714,10 +724,10 @@ func restartContainer(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法写入实例 Compose 配置"})
 		return
 	}
-	// Restart is a desired-state reconciliation: regenerate the managed Compose
-	// file and recreate the service. --pull never is intentional; image updates
-	// are an explicit user action and must not be smuggled into a restart.
-	if _, err := docker(ctx, "compose", "-p", composeProject(input.Route), "-f", composePath, "up", "-d", "--pull", "never", "--force-recreate", "--remove-orphans"); err != nil {
+	// Restart reconciles desired state without forcing a destructive recreate.
+	// Compose itself recreates only when the generated configuration changed;
+	// --pull never keeps image updates an explicit user action.
+	if _, err := docker(ctx, "compose", "-p", composeProject(input.Route), "-f", composePath, "up", "-d", "--pull", "never", "--remove-orphans"); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 重启容器失败"})
 		return
 	}
@@ -1006,10 +1016,13 @@ func proxyContainer(c *gin.Context) {
 	proxy.FlushInterval = -1
 	proxy.ErrorHandler = func(w http.ResponseWriter, request *http.Request, err error) {
 		log.Printf("instance proxy route=%s method=%s path=%s: %v", route, request.Method, request.URL.Path, err)
-		// A client cancelling a terminal stream, a WebSocket reconnect, or a
-		// transient upstream reset does not mean the container changed IP. The
-		// previous invalidation turned ordinary long-connection churn into a
-		// Docker lookup storm and cascaded 502s for every subsequent request.
+		if isUpstreamConnectionFailure(err) {
+			// A recreate changes the container IP. Do not serve the stale address
+			// for the remaining stale-cache window; the next request will use the
+			// refreshed address instead of receiving repeated connection refused.
+			invalidateRouteTarget(route, ip)
+			refreshRouteTargetCacheInBackground()
+		}
 		http.Error(w, "实例暂不可用", http.StatusBadGateway)
 	}
 	c.Request.Header.Del("X-Route-Key")
@@ -1120,6 +1133,25 @@ func storeRouteTarget(route, ip string) {
 	routeTargetCache.Lock()
 	routeTargetCache.values[route] = cachedRouteTarget{ip: ip, expiresAt: now.Add(time.Minute), staleUntil: now.Add(10 * time.Minute)}
 	routeTargetCache.Unlock()
+}
+
+func invalidateRouteTarget(route, expectedIP string) {
+	routeTargetCache.Lock()
+	if cached, ok := routeTargetCache.values[route]; ok && (expectedIP == "" || cached.ip == expectedIP) {
+		delete(routeTargetCache.values, route)
+	}
+	routeTargetCache.Unlock()
+}
+
+func isUpstreamConnectionFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "connection refused") || strings.Contains(message, "connection reset") || strings.Contains(message, "broken pipe")
 }
 
 func docker(ctx context.Context, args ...string) (string, error) {

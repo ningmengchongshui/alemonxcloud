@@ -98,6 +98,17 @@ func TestTaskLeaseDuration(t *testing.T) {
 	}
 }
 
+func TestLifecycleTaskActionsRequireInstanceLock(t *testing.T) {
+	for _, action := range []string{"create", "retry-deploy", "start", "stop", "update", "restart", "destroy", "purge"} {
+		if !lifecycleTask(action) {
+			t.Fatalf("%s must acquire the instance lifecycle lock", action)
+		}
+	}
+	if lifecycleTask("bandwidth") {
+		t.Fatal("bandwidth reconciliation must not block lifecycle operations")
+	}
+}
+
 func TestPublicCatalogHidesRepositoryDiagnostics(t *testing.T) {
 	items := publicCatalogImages([]catalogImage{{ID: "img", Name: "软件", ImageRef: "registry.example/private", ImageDigest: "sha256:" + strings.Repeat("a", 64), Versions: []imageVersion{{Tag: "v1", ImageDigest: "sha256:" + strings.Repeat("b", 64), LastError: "internal"}}}})
 	raw, err := json.Marshal(items)

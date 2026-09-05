@@ -253,6 +253,19 @@ export interface Task {
   claimedAt?: string
   claimExpiresAt?: string
   workerId?: string
+  heartbeatAt?: string
+  recoveryCount?: number
+}
+export interface TaskEvent {
+  id: number
+  taskId: string
+  event: string
+  detail: string
+  createdAt: string
+}
+export interface InstanceTaskRecord {
+  task: Task
+  events: TaskEvent[]
 }
 export interface Wallet {
   id: string
@@ -310,6 +323,7 @@ export interface AdminMetrics {
   destroyBlocked: number
   offlineInstances: number
   leaseRecoveries24h: number
+  tasksNeedsReview?: number
 }
 export type TicketStatus = 'open' | 'in_progress' | 'closed'
 export type TicketPriority = 'normal' | 'high' | 'urgent'

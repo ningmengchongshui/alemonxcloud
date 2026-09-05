@@ -772,6 +772,42 @@ func retryTask(c *gin.Context) {
 	c.Status(http.StatusAccepted)
 }
 
+func resumeReviewTask(c *gin.Context) {
+	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_tasks SET status=?,run_after=NOW(),last_error=NULL,claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE id=? AND status=?`, taskPending, c.Param("id"), taskReview)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		c.JSON(http.StatusConflict, gin.H{"message": "任务当前不可恢复"})
+		return
+	}
+	user := c.MustGet("user").(oidcUser)
+	_, _ = instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET active_task_id=NULL,active_task_token=NULL,active_task_expires_at=NULL WHERE active_task_id=?`, c.Param("id"))
+	appendTaskEvent(c.Request.Context(), c.Param("id"), "review_resumed", "管理员确认恢复")
+	_ = writeAudit(c.Request.Context(), user.ID, "task.review_resume", "task", c.Param("id"), nil)
+	if task, err := loadTask(c.Request.Context(), c.Param("id")); err == nil {
+		_ = enqueuePersistedTask(c.Request.Context(), task)
+	}
+	c.Status(http.StatusAccepted)
+}
+func discardReviewTask(c *gin.Context) {
+	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_tasks SET status=?,finished_at=NOW(),last_error='管理员作废',updated_at=NOW() WHERE id=? AND status=?`, taskFailed, c.Param("id"), taskReview)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		c.JSON(http.StatusConflict, gin.H{"message": "任务当前不可作废"})
+		return
+	}
+	user := c.MustGet("user").(oidcUser)
+	_, _ = instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET active_task_id=NULL,active_task_token=NULL,active_task_expires_at=NULL WHERE active_task_id=?`, c.Param("id"))
+	appendTaskEvent(c.Request.Context(), c.Param("id"), "review_discarded", "管理员作废隔离任务")
+	_ = writeAudit(c.Request.Context(), user.ID, "task.review_discard", "task", c.Param("id"), nil)
+	c.Status(http.StatusNoContent)
+}
+
 func queueInstanceAction(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	item, ok := ownedInstance(c)
@@ -792,6 +828,13 @@ func queueInstanceAction(c *gin.Context) {
 	}
 	if action == "archive" {
 		archiveDestroyedInstance(c, item, user.ID)
+		return
+	}
+	if active, err := activeLifecycleTask(c.Request.Context(), item.ID); err != nil {
+		internalError(c, err)
+		return
+	} else if active != nil {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例正在处理中", "task": active})
 		return
 	}
 	if action == "destroy-now" {
@@ -824,6 +867,31 @@ func queueInstanceAction(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"task": task})
+}
+
+// activeLifecycleTask prevents a user action from creating a second queue
+// behind an in-flight lifecycle task. The caller receives the task summary and
+// can refresh its true state instead of risking a conflicting Agent call.
+func activeLifecycleTask(ctx context.Context, instanceID string) (*controlTask, error) {
+	var taskID string
+	err := instanceDB.QueryRowContext(ctx, `SELECT id FROM xcloud_tasks
+		WHERE instance_id=? AND status IN ('pending','running')
+		AND action IN ('create','retry-deploy','start','stop','update','restart','destroy','purge')
+		ORDER BY created_at DESC LIMIT 1`, instanceID).Scan(&taskID)
+	if err == sql.ErrNoRows || taskID == "" {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	task, err := loadTask(ctx, taskID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
 }
 
 func queueInstanceUpdate(c *gin.Context, item instance, actorID string) {
@@ -865,21 +933,6 @@ func queueDeploymentRetry(c *gin.Context, item instance, actorID string) {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例当前不可重试部署"})
 		return
 	}
-	var nodeID string
-	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(node_id,'') FROM xcloud_instances WHERE id=? AND owner_id=? AND status='deployment_failed'`, item.ID, item.OwnerID).Scan(&nodeID); err != nil {
-		businessError(c, err)
-		return
-	}
-	n, err := nodeByID(c.Request.Context(), nodeID)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"message": "实例节点不可用，暂不能重试部署"})
-		return
-	}
-	// Remove stale runtime resources but preserve the instance data directory.
-	if err := nodeRequest(c.Request.Context(), n, httpMethodPost, "/container/"+item.ContainerName+"/destroy", nil, nil); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"message": "无法清理上次部署残留，请稍后重试"})
-		return
-	}
 	runtime := "unknown"
 	changed, err := transitionInstance(c.Request.Context(), instanceDB, item.ID, []string{"deployment_failed"}, "deploying", &runtime, "")
 	if err != nil {
@@ -890,7 +943,7 @@ func queueDeploymentRetry(c *gin.Context, item instance, actorID string) {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例状态已变化，请刷新后重试"})
 		return
 	}
-	task, err := scheduleInstanceTask(c.Request.Context(), item.ID, "create", actorID)
+	task, err := scheduleInstanceTask(c.Request.Context(), item.ID, "retry-deploy", actorID)
 	if err != nil {
 		_, _ = transitionInstance(c.Request.Context(), instanceDB, item.ID, []string{"deploying"}, "deployment_failed", nil, "")
 		businessError(c, err)
@@ -933,12 +986,25 @@ func scheduleManualDestroy(c *gin.Context, item instance, actorID string) {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例状态已变化，请刷新后重试"})
 		return
 	}
-	_ = writeAudit(c.Request.Context(), actorID, "instance.destroy_scheduled", "instance", item.ID, map[string]any{"reason": "manual", "destroyAt": destroyAt})
+	task, taskErr := scheduleLifecycleTaskAt(c.Request.Context(), item.ID, "destroy", destroyAt, destroyAt)
+	if taskErr != nil {
+		internalError(c, taskErr)
+		return
+	}
+	appendTaskEvent(c.Request.Context(), task.ID, "manual_destroy_scheduled", "用户手动计划销毁；将在计划时间执行")
+	_ = writeAudit(c.Request.Context(), actorID, "instance.destroy_scheduled", "instance", item.ID, map[string]any{"reason": "manual", "destroyAt": destroyAt, "taskId": task.ID})
 	_ = createNotification(c.Request.Context(), item.OwnerID, "instance_destroy_scheduled", "实例已计划销毁", fmt.Sprintf("服务将继续保持当前状态，实例资源预计于 %s 销毁。", destroyAt.Format("2006-01-02 15:04")), map[string]any{"instanceId": item.ID, "destroyAt": destroyAt, "reason": "manual"})
-	c.JSON(http.StatusAccepted, gin.H{"message": "已计划 7 天后销毁实例资源", "destroyAt": destroyAt})
+	c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "已计划 7 天后销毁实例资源", "destroyAt": destroyAt})
 }
 
 func cancelManualDestroy(c *gin.Context, item instance, actorID string) {
+	if active, err := activeLifecycleTask(c.Request.Context(), item.ID); err != nil {
+		internalError(c, err)
+		return
+	} else if active != nil {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例正在处理中，暂不能取消销毁", "task": active})
+		return
+	}
 	if item.Status != "destroy_scheduled" {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例当前未处于待销毁状态"})
 		return

@@ -541,13 +541,16 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	var p plan
 	var img catalogImage
 	var instanceStatus, runtimeStatus, destroyReason string
-	var currentExpiry sql.NullTime
-	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at,ins.status,COALESCE(ins.runtime_status,''),COALESCE(ins.destroy_reason,''),ins.expires_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id JOIN xcloud_instances ins ON ins.id=o.instance_id WHERE o.id=? AND o.owner_id=? AND o.status IN (?,?,?) FOR UPDATE`, sourceOrderID, ownerID, orderActive, orderExpired, orderRefund).Scan(&source.ID, &source.OwnerID, &source.PlanID, &source.ImageID, &source.InstanceID, &source.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt, &instanceStatus, &runtimeStatus, &destroyReason, &currentExpiry)
+	var currentExpiry, activeTaskExpiresAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at,ins.status,COALESCE(ins.runtime_status,''),COALESCE(ins.destroy_reason,''),ins.expires_at,ins.active_task_expires_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id JOIN xcloud_instances ins ON ins.id=o.instance_id WHERE o.id=? AND o.owner_id=? AND o.status IN (?,?,?) FOR UPDATE`, sourceOrderID, ownerID, orderActive, orderExpired, orderRefund).Scan(&source.ID, &source.OwnerID, &source.PlanID, &source.ImageID, &source.InstanceID, &source.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt, &instanceStatus, &runtimeStatus, &destroyReason, &currentExpiry, &activeTaskExpiresAt)
 	if err != nil {
 		return order{}, nil, errors.New("订单不可续费")
 	}
 	if !p.Enabled {
 		return order{}, nil, errors.New("套餐已下架，无法续费")
+	}
+	if activeTaskExpiresAt.Valid && activeTaskExpiresAt.Time.After(time.Now()) {
+		return order{}, nil, errors.New("实例生命周期任务处理中，请稍后再续费")
 	}
 	// Renewal continues the instance's existing immutable image snapshot. A
 	// later source/version delisting must not prevent a paying customer from

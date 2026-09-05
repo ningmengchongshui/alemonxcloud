@@ -198,6 +198,8 @@ func Run() {
 	router.GET("/api/admin/tasks", requireAdmin, adminTasks)
 	router.GET("/api/admin/audit-logs", requireAdmin, adminAuditLogs)
 	router.POST("/api/admin/tasks/:id/retry", requireAdmin, retryTask)
+	router.POST("/api/admin/tasks/:id/review-resume", requireAdmin, resumeReviewTask)
+	router.POST("/api/admin/tasks/:id/review-discard", requireAdmin, discardReviewTask)
 	router.GET("/api/admin/metrics", requireAdmin, adminMetricsHandler)
 	router.POST("/api/oidc/authorize", oidcAuthorize)
 	router.POST("/api/oidc/callback", oidcCallback)

@@ -12,3 +12,16 @@ func TestTaskWorkerConcurrencyUsesBoundedConfiguration(t *testing.T) {
 		t.Fatalf("invalid worker count = %d, want fallback 4", got)
 	}
 }
+
+func TestExpiredDangerousLifecycleTasksAreQuarantined(t *testing.T) {
+	for _, action := range []string{"stop", "update", "restart", "destroy", "purge", "retry-deploy"} {
+		if !dangerousRecoveredTask(action) {
+			t.Fatalf("%s must require administrator review after lease expiry", action)
+		}
+	}
+	for _, action := range []string{"create", "start", "bandwidth"} {
+		if dangerousRecoveredTask(action) {
+			t.Fatalf("%s is not an automatically quarantined dangerous action", action)
+		}
+	}
+}
