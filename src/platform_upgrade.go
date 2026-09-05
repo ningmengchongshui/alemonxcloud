@@ -330,7 +330,7 @@ func appendTaskEvent(ctx context.Context, id, event, detail string) {
 	_, _ = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_task_events (task_id,event_type,detail,created_at) VALUES (?,?,?,NOW())`, id, event, truncateError(detail))
 }
 func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at FROM xcloud_nodes WHERE enabled=TRUE AND last_heartbeat_at>=? FOR UPDATE`, time.Now().Add(-nodeHeartbeatTTL()))
+	rows, err := tx.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND last_heartbeat_at>=? FOR UPDATE`, time.Now().Add(-nodeHeartbeatTTL()))
 	if err != nil {
 		return node{}, err
 	}
@@ -341,9 +341,14 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 	candidates := make([]node, 0)
 	for rows.Next() {
 		var n node
-		if err := rows.Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt); err != nil {
+		var capabilities []byte
+		if err := rows.Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt, &capabilities); err != nil {
 			_ = rows.Close()
 			return node{}, err
+		}
+		_ = json.Unmarshal(capabilities, &n.AgentCapabilities)
+		if !n.supportsAgentCapability("network.bandwidth.v1") {
+			continue
 		}
 		candidates = append(candidates, n)
 	}
@@ -433,7 +438,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	}
 	defer tx.Rollback()
 	var p plan
-	if err = tx.QueryRowContext(ctx, `SELECT id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans WHERE id=? AND enabled=TRUE FOR UPDATE`, planID).Scan(&p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT id,name,cpu,memory_mb,bandwidth_mbps,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans WHERE id=? AND enabled=TRUE FOR UPDATE`, planID).Scan(&p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.BandwidthMbps, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt); err != nil {
 		return order{}, controlTask{}, errors.New("套餐不可购买")
 	}
 	var img catalogImage
@@ -484,13 +489,13 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 		}
 	}
 	o := order{ID: orderID, OwnerID: ownerID, PlanID: p.ID, ImageID: img.ID, InstanceID: instanceID, AmountFen: amount, ListAmountFen: quote.ListAmountFen, DiscountAmountFen: quote.DiscountAmountFen, Status: orderDeploy, ServiceStartsAt: &now, ExpiresAt: &expires, CreatedAt: &now, UpdatedAt: &now, PlanName: p.Name, ImageName: img.Name, ImageVersion: imageVersion}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,list_amount_fen,discount_amount_fen,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,selected_image_digest,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, quote.ListAmountFen, quote.DiscountAmountFen, orderDeploy, "wallet", nullableString(entry.ID), n.ID, imageVersion, nullableString(selectedDigest), now, expires, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,list_amount_fen,discount_amount_fen,bandwidth_mbps,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,selected_image_digest,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, quote.ListAmountFen, quote.DiscountAmountFen, p.BandwidthMbps, orderDeploy, "wallet", nullableString(entry.ID), n.ID, imageVersion, nullableString(selectedDigest), now, expires, now, now); err != nil {
 		return order{}, controlTask{}, err
 	}
 	if err = consumePromotionTx(ctx, tx, ownerID, o.ID, quote, selectedPromotion, selectedCoupon); err != nil {
 		return order{}, controlTask{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, img.Name, img.ImageRef, imageVersion, fmt.Sprintf("%g 核 / %d GB", p.CPU, p.MemoryMB/1024), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, n.ID, o.ID, route, expires); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,bandwidth_mbps,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, img.Name, img.ImageRef, imageVersion, fmt.Sprintf("%g 核 / %d GB / 最高 %d Mbps", p.CPU, p.MemoryMB/1024, p.BandwidthMbps), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, p.BandwidthMbps, n.ID, o.ID, route, expires); err != nil {
 		return order{}, controlTask{}, err
 	}
 	t := controlTask{ID: newID("task"), InstanceID: instanceID, Action: "create", IdempotencyKey: "create:" + instanceID, Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now}
@@ -592,11 +597,23 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if runtimeStatus != "running" && runtimeStatus != "stopped" {
 		runtimeStatus = "stopped"
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET expires_at=?,purge_at=NULL,status=?,runtime_status=?,destroy_at=NULL,destroy_reason=NULL,destroyed_at=NULL WHERE id=?`, expires, runtimeStatus, runtimeStatus, source.InstanceID); err != nil {
+	wasExpiredDestroyScheduled := instanceStatus == "destroy_scheduled" && destroyReason == "expired"
+	changed, err := transitionInstance(ctx, tx, source.InstanceID, []string{instanceStatus}, runtimeStatus, &runtimeStatus, "expires_at=?,purge_at=NULL,destroy_at=NULL,destroy_reason=NULL,destroyed_at=NULL", expires)
+	if err != nil {
 		return order{}, nil, err
+	}
+	if !changed {
+		return order{}, nil, errInstanceStateConflict
 	}
 	var task *controlTask
 	taskID := ""
+	if wasExpiredDestroyScheduled && runtimeStatus != "running" {
+		startTask := controlTask{ID: newID("task"), InstanceID: source.InstanceID, Action: "start", IdempotencyKey: "renew-start:" + source.InstanceID + ":" + orderID, Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, startTask.ID, startTask.InstanceID, startTask.Action, startTask.IdempotencyKey, startTask.Status, 0, startTask.RunAfter, startTask.CreatedAt, startTask.UpdatedAt); err != nil {
+			return order{}, nil, err
+		}
+		task = &startTask
+	}
 	if task != nil {
 		taskID = task.ID
 	}

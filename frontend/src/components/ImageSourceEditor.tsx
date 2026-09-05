@@ -49,12 +49,12 @@ export function ImageSourceEditor() {
   return (
     <>
       <Button tone="secondary" onClick={() => setOpen(true)}>
-        ＋ 新增镜像来源
+        ＋ 新增软件
       </Button>
       {open && (
         <Dialog
-          title="新增镜像来源"
-          description="登记可信镜像地址后，平台会以受控版本提供给用户选择。"
+          title="新增软件"
+          description="登记可信镜像仓库后，再添加可购买版本。仓库地址创建后不可修改。"
           onClose={close}
         >
           <div className="space-y-4">
@@ -62,13 +62,13 @@ export function ImageSourceEditor() {
               className="block text-[11px] font-bold text-slate-700 dark:text-slate-100"
               htmlFor="image-source-name"
             >
-              镜像名称
+              软件名称
               <input
                 id="image-source-name"
                 className={inputClass}
                 value={name}
                 onChange={event => setName(event.target.value)}
-                placeholder="AlemonX"
+                placeholder="ALemonX"
                 data-autofocus
               />
             </label>
@@ -76,7 +76,7 @@ export function ImageSourceEditor() {
               className="block text-[11px] font-bold text-slate-700 dark:text-slate-100"
               htmlFor="image-source-ref"
             >
-              镜像地址
+              镜像仓库地址
               <input
                 id="image-source-ref"
                 className={inputClass}
@@ -95,7 +95,7 @@ export function ImageSourceEditor() {
                 disabled={!name.trim() || !ref.trim()}
                 onClick={() => void submit()}
               >
-                保存镜像来源
+                保存软件
               </Button>
             </div>
           </div>

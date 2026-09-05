@@ -45,6 +45,7 @@ type instance struct {
 	Spec          string     `json:"spec"`
 	Status        string     `json:"status"`
 	RuntimeStatus string     `json:"runtimeStatus,omitempty"`
+	BandwidthMbps int        `json:"bandwidthMbps,omitempty"`
 	DestroyAt     *time.Time `json:"destroyAt,omitempty"`
 	DestroyedAt   *time.Time `json:"destroyedAt,omitempty"`
 	PurgeAt       *time.Time `json:"purgeAt,omitempty"`
@@ -158,6 +159,7 @@ func Run() {
 	router.POST("/api/admin/images", requireAdmin, adminSaveImage)
 	router.PUT("/api/admin/images/:id", requireAdmin, adminSaveImage)
 	router.POST("/api/admin/images/:id/versions", requireAdmin, adminSaveImageVersion)
+	router.POST("/api/admin/images/:id/versions/publish", requireAdmin, adminPublishImageVersion)
 	router.PUT("/api/admin/images/:id/versions/:versionID", requireAdmin, adminSaveImageVersion)
 	router.POST("/api/admin/images/:id/versions/:versionID/pull", requireAdmin, adminPullImageVersion)
 	router.POST("/api/admin/plans", requireAdmin, adminSavePlan)
@@ -186,6 +188,7 @@ func Run() {
 	router.GET("/api/admin/nodes", requireAdmin, adminNodes)
 	router.POST("/api/admin/nodes", requireAdmin, adminSaveNode)
 	router.PUT("/api/admin/nodes/:id", requireAdmin, adminSaveNode)
+	router.POST("/api/admin/instances/bandwidth/reconcile", requireAdmin, reconcileAllBandwidthHandler)
 	router.GET("/api/admin/users", requireAdmin, adminUsers)
 	router.GET("/api/admin/users/:id/wallet/entries", requireAdmin, adminWalletEntries)
 	router.POST("/api/admin/users/:id/wallet/adjust", requireAdmin, adminAdjustWallet)
@@ -230,7 +233,7 @@ func Run() {
 		log.Fatal(err)
 	}
 	address = listener.Addr().String()
-	log.Printf("AlemonX Cloud %s listening on %s", Version, address)
+	log.Printf("ALemonX Cloud %s listening on %s", Version, address)
 	if err := router.RunListener(listener); err != nil {
 		log.Fatal(err)
 	}
@@ -324,7 +327,7 @@ func instanceGateway(c *gin.Context) {
 		return
 	}
 	var nodeID string
-	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT node_id FROM xcloud_instances WHERE route_key=? AND (status IN ('running','deploying') OR (status='destroy_scheduled' AND COALESCE(runtime_status,'stopped')='running'))`, route).Scan(&nodeID); err != nil {
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT node_id FROM xcloud_instances WHERE route_key=? AND COALESCE(runtime_status,'')<>'missing' AND (status IN ('running','deploying') OR (status='destroy_scheduled' AND COALESCE(runtime_status,'stopped')='running'))`, route).Scan(&nodeID); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不可用"})
 		return
 	}

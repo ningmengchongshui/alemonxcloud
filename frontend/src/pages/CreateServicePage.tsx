@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useDispatch } from 'react-redux'
 import {
   useGetWalletQuery,
@@ -64,7 +64,6 @@ export function CreateServicePage({
 }) {
   const [imageID, setImageID] = useState('')
   const [imageVersion, setImageVersion] = useState('')
-  const [imageRef, setImageRef] = useState('')
   const [planID, setPlanID] = useState('')
   const [months, setMonths] = useState(1)
   const [error, setError] = useState('')
@@ -76,10 +75,7 @@ export function CreateServicePage({
   const { data: wallet } = useGetWalletQuery()
   const dispatch = useDispatch()
   const images = catalog?.images ?? []
-  const imageSources = images
-  const selectedRef = imageRef || imageSources[0]?.imageRef || ''
-  const sourceImages = images.filter(image => image.imageRef === selectedRef)
-  const selectedImageID = imageID || sourceImages[0]?.id || ''
+  const selectedImageID = imageID || images[0]?.id || ''
   const selectedImage = images.find(image => image.id === selectedImageID)
   const imageVersions = selectedImage?.versions ?? []
   const selectedVersion =
@@ -89,7 +85,7 @@ export function CreateServicePage({
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
   const total = (selectedPlan?.monthlyPriceFen ?? 0) * months
-  function preview(selected = selectionID, fullPrice = payFullPrice) {
+  const preview = useCallback((selected: string, fullPrice: boolean) => {
     if (!selectedImage || !selectedPlan) return
     setError('')
     void quotePurchase({
@@ -112,13 +108,13 @@ export function CreateServicePage({
             : '暂时无法计算优惠'
         )
       )
-  }
+  }, [months, quotePurchase, selectedImage, selectedPlan])
   useEffect(() => {
     setQuote(null)
     setSelectionID('')
     setPayFullPrice(false)
     if (selectedImage && selectedPlan) preview('', false)
-  }, [selectedImage?.id, selectedPlan?.id, months])
+  }, [selectedImage, selectedPlan, months, preview])
 
   function submit() {
     if (!selectedImage || !selectedPlan) return
@@ -187,30 +183,29 @@ export function CreateServicePage({
                 镜像加载失败。
                 <InlineAction onClick={onRetry}>重新加载</InlineAction>
               </Alert>
-            ) : imageSources.length === 0 ? (
+            ) : images.length === 0 ? (
               <Alert tone="error">暂无可售镜像，请联系管理员配置。</Alert>
             ) : (
               <>
                 <div className="choice-grid image-grid">
-                  {imageSources.map(source => (
+                  {images.map(source => (
                     <button
-                      key={source.imageRef}
+                      key={source.id}
                       type="button"
-                      className={`catalog-choice ${selectedRef === source.imageRef ? 'selected' : ''}`}
-                      aria-pressed={selectedRef === source.imageRef}
+                      className={`catalog-choice ${selectedImageID === source.id ? 'selected' : ''}`}
+                      aria-pressed={selectedImageID === source.id}
                       onClick={() => {
-                        setImageRef(source.imageRef)
-                        setImageID('')
+                        setImageID(source.id)
                         setImageVersion('')
                         setError('')
                       }}
                     >
                       <span className="choice-mark">
-                        {selectedRef === source.imageRef ? '✓' : ''}
+                        {selectedImageID === source.id ? '✓' : ''}
                       </span>
                       <span>
                         <b>{source.name}</b>
-                        <small>{source.imageRef}</small>
+                        <small>请选择可购买版本</small>
                       </span>
                     </button>
                   ))}
@@ -226,7 +221,7 @@ export function CreateServicePage({
                     }}
                   >
                     {(selectedImage?.versions ?? []).map(version => (
-                      <option key={version.id} value={version.tag}>
+                      <option key={version.tag} value={version.tag}>
                         {version.tag}
                       </option>
                     ))}

@@ -50,6 +50,16 @@ export function AdminNodesPage() {
                 {node.cpuTotal} 核 / {Math.round(node.memoryTotalMB / 1024)} GB
               </span>
               <span>{node.managedContainerCount ?? 0} 个托管容器</span>
+              {(node.offlineInstanceCount ?? 0) > 0 && (
+                <span className="text-amber-700 dark:text-amber-200">
+                  待销毁/保留实例 {node.offlineInstanceCount} 个 · 清理任务 {node.pendingCleanupTasks ?? 0} 个
+                </span>
+              )}
+              {node.lastAgentError && (
+                <span className="text-red-700 dark:text-red-200">
+                  最近 Agent 错误：{node.lastAgentError}
+                </span>
+              )}
               <span>
                 {node.dockerVersion
                   ? `Docker ${node.dockerVersion}`

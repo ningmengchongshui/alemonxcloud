@@ -50,6 +50,7 @@ var agentCapabilities = []string{
 	"image.list.v1",
 	"route.proxy.v1",
 	"node.resources.v1",
+	"network.bandwidth.v1",
 }
 
 const (
@@ -60,11 +61,12 @@ const (
 )
 
 type createRequest struct {
-	Name     string  `json:"name" binding:"required"`
-	Image    string  `json:"image" binding:"required"`
-	CPU      float64 `json:"cpu" binding:"required"`
-	MemoryMB int     `json:"memoryMB" binding:"required"`
-	Route    string  `json:"route" binding:"required"`
+	Name          string  `json:"name" binding:"required"`
+	Image         string  `json:"image" binding:"required"`
+	CPU           float64 `json:"cpu" binding:"required"`
+	MemoryMB      int     `json:"memoryMB" binding:"required"`
+	BandwidthMbps int     `json:"bandwidthMbps" binding:"required"`
+	Route         string  `json:"route" binding:"required"`
 }
 
 func main() {
@@ -110,6 +112,7 @@ func runServer() {
 	control.POST("/:name/stop", stopContainer)
 	control.POST("/:name/restart", restartContainer)
 	control.POST("/:name/destroy", destroyContainer)
+	control.POST("/:name/bandwidth", applyContainerBandwidth)
 	control.GET("/:name/status", containerStatus)
 	control.GET("/:name/inspect", inspectContainer)
 	control.GET("/:name/logs", containerLogs)
@@ -120,6 +123,7 @@ func runServer() {
 	// Docker bridge gateway.  Exposure is constrained by the host firewall;
 	// See docs/03-部署指南.md for the required allow rule.
 	address := env("AGENT_ADDR", "0.0.0.0:13092")
+	go reconcileBandwidthLoop()
 	log.Printf("xcloud agent listening on %s", address)
 	if err := r.Run(address); err != nil {
 		log.Fatal(err)
@@ -315,7 +319,7 @@ func runSystemctl(args ...string) error {
 
 func systemdUnit() string {
 	return `[Unit]
-Description=AlemonX Cloud bare-metal agent
+Description=ALemonX Cloud bare-metal agent
 After=docker.service network-online.target
 Requires=docker.service
 
@@ -346,7 +350,7 @@ func requireControlToken(c *gin.Context) {
 
 func createContainer(c *gin.Context) {
 	var input createRequest
-	if c.ShouldBindJSON(&input) != nil || !safeContainerName.MatchString(input.Name) || !safeRouteKey.MatchString(input.Route) || !validManagedImage(input.Image) || input.CPU <= 0 || input.CPU > 64 || input.MemoryMB < 256 || input.MemoryMB > 262144 {
+	if c.ShouldBindJSON(&input) != nil || !safeContainerName.MatchString(input.Name) || !safeRouteKey.MatchString(input.Route) || !validManagedImage(input.Image) || input.CPU <= 0 || input.CPU > 64 || input.MemoryMB < 256 || input.MemoryMB > 262144 || input.BandwidthMbps < 1 || input.BandwidthMbps > 10000 {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "容器参数无效"})
 		return
 	}
@@ -373,7 +377,115 @@ func createContainer(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 创建容器失败"})
 		return
 	}
+	if err := applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps); err != nil {
+		_, _ = docker(ctx, "compose", "-f", composePath, "down", "--remove-orphans")
+		c.JSON(http.StatusBadGateway, gin.H{"message": "宿主机带宽限速规则加载失败"})
+		return
+	}
 	c.JSON(http.StatusCreated, gin.H{"name": input.Name, "status": "running", "composeFile": composePath})
+}
+
+func bandwidthToolsAvailable() bool {
+	for _, tool := range []string{"tc", "ip", "nsenter"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func hostVethForContainer(name string) (string, error) {
+	pid, err := docker(context.Background(), "inspect", "-f", "{{.State.Pid}}", name)
+	if err != nil {
+		return "", err
+	}
+	iflink, err := os.ReadFile(filepath.Join("/proc", strings.TrimSpace(pid), "root/sys/class/net/eth0/iflink"))
+	if err != nil {
+		return "", fmt.Errorf("read container iflink: %w", err)
+	}
+	want := strings.TrimSpace(string(iflink))
+	paths, err := filepath.Glob("/sys/class/net/*/ifindex")
+	if err != nil {
+		return "", err
+	}
+	for _, path := range paths {
+		value, readErr := os.ReadFile(path)
+		if readErr == nil && strings.TrimSpace(string(value)) == want {
+			return filepath.Base(filepath.Dir(path)), nil
+		}
+	}
+	return "", errors.New("host veth not found")
+}
+
+func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
+	if !bandwidthToolsAvailable() {
+		return errors.New("tc/ip/nsenter unavailable")
+	}
+	host, err := hostVethForContainer(name)
+	if err != nil {
+		return err
+	}
+	rate := strconv.Itoa(mbps) + "mbit"
+	if _, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", host, "root", "tbf", "rate", rate, "burst", "256kbit", "latency", "400ms").CombinedOutput(); err != nil {
+		return err
+	}
+	if _, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", host, "handle", "ffff:", "ingress").CombinedOutput(); err != nil {
+		return err
+	}
+	_, err = exec.CommandContext(ctx, "tc", "filter", "replace", "dev", host, "parent", "ffff:", "protocol", "all", "u32", "match", "u32", "0", "0", "police", "rate", rate, "burst", "256kbit", "drop", "flowid", ":1").CombinedOutput()
+	return err
+}
+
+func clearBandwidthLimit(ctx context.Context, name string) error {
+	host, err := hostVethForContainer(name)
+	if err != nil {
+		return nil
+	}
+	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "root").CombinedOutput()
+	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "ingress").CombinedOutput()
+	return nil
+}
+
+func applyContainerBandwidth(c *gin.Context) {
+	var input struct {
+		BandwidthMbps int `json:"bandwidthMbps"`
+	}
+	if c.ShouldBindJSON(&input) != nil || input.BandwidthMbps < 1 || input.BandwidthMbps > 10000 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "带宽参数无效"})
+		return
+	}
+	if err := applyBandwidthLimit(c.Request.Context(), c.Param("name"), input.BandwidthMbps); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "带宽规则加载失败"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func reconcileBandwidthLoop() {
+	reconcileBandwidth(context.Background())
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		reconcileBandwidth(context.Background())
+	}
+}
+func reconcileBandwidth(ctx context.Context) {
+	output, err := docker(ctx, "ps", "--filter", "label=xcloud.managed=true", "--format", "{{.Names}}|{{.Label \"xcloud.bandwidth_mbps\"}}")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.Split(line, "|")
+		if len(parts) != 2 || !safeContainerName.MatchString(parts[0]) {
+			continue
+		}
+		mbps, e := strconv.Atoi(parts[1])
+		if e == nil && mbps > 0 {
+			if e = applyBandwidthLimit(ctx, parts[0], mbps); e != nil {
+				log.Printf("restore bandwidth %s: %v", parts[0], e)
+			}
+		}
+	}
 }
 
 // instanceCompose is deliberately generated by the Agent rather than accepted
@@ -398,7 +510,7 @@ func instanceCompose(input createRequest, dataDir, workspaceDir string) string {
 	for _, key := range keys {
 		fmt.Fprintf(&out, "      %s: %s\n", key, yamlString(env[key]))
 	}
-	fmt.Fprintf(&out, "    volumes:\n      - %s\n      - %s\n    labels:\n      xcloud.managed: \"true\"\n      xcloud.route: %s\n    networks:\n      - xcloud_network\nnetworks:\n  xcloud_network:\n    external: true\n    name: %s\n", yamlString(dataDir+":/root"), yamlString(workspaceDir+":/app/workspace"), yamlString(input.Route), yamlString(envString("XCLOUD_DOCKER_NETWORK", "xcloud_network")))
+	fmt.Fprintf(&out, "    volumes:\n      - %s\n      - %s\n    labels:\n      xcloud.managed: \"true\"\n      xcloud.route: %s\n      xcloud.bandwidth_mbps: %q\n    networks:\n      - xcloud_network\nnetworks:\n  xcloud_network:\n    external: true\n    name: %s\n", yamlString(dataDir+":/root"), yamlString(workspaceDir+":/app/workspace"), yamlString(input.Route), strconv.Itoa(input.BandwidthMbps), yamlString(envString("XCLOUD_DOCKER_NETWORK", "xcloud_network")))
 	return out.String()
 }
 func composeProject(route string) string    { return "xcloud-" + route }
@@ -453,6 +565,7 @@ func destroyContainer(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Minute)
 	defer cancel()
+	_ = clearBandwidthLimit(ctx, name)
 	dataRoot := filepath.Clean(env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances"))
 	dataDir := filepath.Join(dataRoot, name)
 	if !strings.HasPrefix(filepath.Clean(dataDir)+string(os.PathSeparator), dataRoot+string(os.PathSeparator)) {
@@ -597,9 +710,16 @@ func agentStatus(c *gin.Context) {
 			count++
 		}
 	}
+	toolsReady := bandwidthToolsAvailable()
+	capabilities := make([]string, 0, len(agentCapabilities))
+	for _, capability := range agentCapabilities {
+		if capability != "network.bandwidth.v1" || toolsReady {
+			capabilities = append(capabilities, capability)
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok", "agentVersion": Version, "apiVersion": AgentAPIVersion,
-		"capabilities": agentCapabilities, "dockerVersion": strings.TrimSpace(output),
+		"capabilities": capabilities, "bandwidthToolsReady": toolsReady, "dockerVersion": strings.TrimSpace(output),
 		"cpuTotal": runtime.NumCPU(), "memoryTotalMB": hostMemoryMB(),
 		"diskAvailableBytes": int64(stat.Bavail) * int64(stat.Bsize), "managedContainerCount": count,
 	})
@@ -631,6 +751,15 @@ func containerAction(c *gin.Context, action string) {
 	if _, err := docker(ctx, action, name); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker 操作失败"})
 		return
+	}
+	if action == "start" || action == "restart" {
+		raw, err := docker(ctx, "inspect", "-f", "{{ index .Config.Labels \"xcloud.bandwidth_mbps\" }}", name)
+		mbps, parseErr := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || parseErr != nil || mbps < 1 || applyBandwidthLimit(ctx, name, mbps) != nil {
+			_, _ = docker(ctx, "stop", name)
+			c.JSON(http.StatusBadGateway, gin.H{"message": "带宽规则恢复失败，容器已停止"})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"name": name, "status": action})
 }

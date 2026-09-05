@@ -162,11 +162,20 @@ func processDelivery(delivery amqp091.Delivery) {
 		return
 	}
 	task.Attempts++
+	task.WorkerID = taskWorkerID()
 	err = executeTask(context.Background(), task)
-	if finishErr := finishTask(context.Background(), task, err); finishErr != nil {
+	finished, finishErr := finishTask(context.Background(), task, err)
+	if finishErr != nil {
 		log.Printf("finish task %s: %v", task.ID, finishErr)
 	}
+	if !finished {
+		// The lease was recovered or ownership changed while the Agent call was
+		// in flight. The durable replacement attempt owns the final outcome.
+		_ = delivery.Ack(false)
+		return
+	}
 	if err != nil {
+		failDeployment(context.Background(), task, err)
 		log.Printf("task %s %s failed (attempt %d): %v", task.ID, task.Action, task.Attempts, err)
 		if task.Attempts >= 3 {
 			_ = delivery.Nack(false, false)
@@ -190,6 +199,42 @@ func recoverPendingTasks() {
 	for _, task := range items {
 		if err := enqueuePersistedTask(context.Background(), task); err != nil {
 			log.Printf("republish task %s: %v", task.ID, err)
+		}
+	}
+}
+
+// recoverExpiredTaskLeases returns work claimed by a crashed consumer to the
+// durable queue. The conditional update guarantees a live consumer cannot be
+// reclaimed before its five minute lease expires.
+func recoverExpiredTaskLeases(ctx context.Context) {
+	if instanceDB == nil {
+		return
+	}
+	rows, err := instanceDB.QueryContext(ctx, `SELECT `+taskSelectFields+` FROM xcloud_tasks WHERE status=? AND claim_expires_at IS NOT NULL AND claim_expires_at<=NOW() ORDER BY claim_expires_at LIMIT 100`, taskRunning)
+	if err != nil {
+		log.Printf("load expired task leases: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var task controlTask
+		if err := scanControlTask(rows, &task); err != nil {
+			continue
+		}
+		result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,run_after=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,updated_at=NOW() WHERE id=? AND status=? AND claim_expires_at<=NOW()`, taskPending, task.ID, taskRunning)
+		if err != nil {
+			log.Printf("recover task lease %s: %v", task.ID, err)
+			continue
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			continue
+		}
+		appendTaskEvent(ctx, task.ID, "lease_recovered", "消费者租约已过期，任务重新排队")
+		_ = writeAudit(ctx, "system", "task.lease_recovered", "task", task.ID, map[string]any{"instanceId": task.InstanceID})
+		if queueAvailable() {
+			if err := enqueuePersistedTask(ctx, task); err != nil {
+				log.Printf("republish recovered task %s: %v", task.ID, err)
+			}
 		}
 	}
 }

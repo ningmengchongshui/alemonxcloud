@@ -7,6 +7,7 @@ Agent 运行在裸机上，负责 Docker 容器、镜像、资源探测与实例
 
 ```bash
 docker network create xcloud_network
+sudo dnf install -y iproute util-linux # Debian/Ubuntu 使用 apt install iproute2 util-linux
 sudo chmod -R 777 /var/lib/xcloud/instances
 make agent-build VERSION=v1.0.0
 sudo ./agent/xcloud-agent
@@ -42,6 +43,7 @@ curl -H "Authorization: Bearer <本节点令牌>" http://127.0.0.1:13092/contain
 | 容器查询 | `GET /container`、`/:name/status`、`/:name/inspect`、`/:name/logs` | 托管容器清单、运行/健康、有限元数据、最近 200 行日志 |
 | 镜像管理 | `POST /container/pull`、`GET /container/images`、`GET /container/images/inspect?image=` | 预拉取、查看节点本地镜像和验证摘要 |
 | 实例访问 | 非控制路径 + `X-Route-Key` | 仅按受控路由键反代到受管容器，不公开宿主机端口 |
+| 带宽上限 | `network.bandwidth.v1`、`POST /container/:name/bandwidth` | 对每实例实施套餐最高共享带宽，需 `tc`、`ip`、`nsenter` |
 
 控制面不会用“接口是否返回 404”来猜 Agent 是否需要更新。未声明某项能力的节点保留既有生命周期服务，但新功能会显示为不支持并跳过。例如镜像版本的“预拉取”只会调用声明 `image.pull.v1` 的节点。
 

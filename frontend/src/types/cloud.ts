@@ -44,6 +44,7 @@ export interface Instance {
   spec: string
   status: string
   runtimeStatus?: string
+  bandwidthMbps?: number
   destroyAt?: string
   destroyedAt?: string
   purgeAt?: string
@@ -71,6 +72,11 @@ export interface CatalogImage {
   enabled: boolean
   versions: ImageVersion[]
 }
+export interface PublicCatalogImage {
+  id: string
+  name: string
+  versions: Array<{ tag: string }>
+}
 export interface ImageVersion {
   id: string
   imageId: string
@@ -87,11 +93,16 @@ export interface Plan {
   name: string
   cpu: number
   memoryMB: number
+  bandwidthMbps: number
   monthlyPriceFen: number
   enabled: boolean
   sortOrder: number
 }
 export interface Catalog {
+  images: PublicCatalogImage[]
+  plans: Plan[]
+}
+export interface AdminCatalog {
   images: CatalogImage[]
   plans: Plan[]
 }
@@ -226,6 +237,9 @@ export interface Node {
   agentApiVersion?: number
   agentCapabilities?: string[]
   agentCompatibility?: 'compatible' | 'legacy' | 'outdated'
+  offlineInstanceCount?: number
+  pendingCleanupTasks?: number
+  lastAgentError?: string
 }
 export interface Task {
   id: string
@@ -235,6 +249,9 @@ export interface Task {
   attempts: number
   lastError: string
   createdAt: string
+  claimedAt?: string
+  claimExpiresAt?: string
+  workerId?: string
 }
 export interface Wallet {
   id: string
@@ -287,6 +304,11 @@ export interface AdminMetrics {
   taskBacklog: number
   openTickets: number
   urgentTickets: number
+  deploymentFailed: number
+  runtimeMissing: number
+  destroyBlocked: number
+  offlineInstances: number
+  leaseRecoveries24h: number
 }
 export type TicketStatus = 'open' | 'in_progress' | 'closed'
 export type TicketPriority = 'normal' | 'high' | 'urgent'

@@ -216,15 +216,22 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 			return refundQuote{}, walletEntry{}, err
 		}
 	}
-	var runtimeStatus string
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(runtime_status,status) FROM xcloud_instances WHERE id=? FOR UPDATE`, instanceID).Scan(&runtimeStatus); err != nil {
+	var runtimeStatus, instanceStatus string
+	if err = tx.QueryRowContext(ctx, `SELECT status,COALESCE(runtime_status,status) FROM xcloud_instances WHERE id=? FOR UPDATE`, instanceID).Scan(&instanceStatus, &runtimeStatus); err != nil {
 		return refundQuote{}, walletEntry{}, err
+	}
+	if instanceStatus != "running" && instanceStatus != "stopped" {
+		return refundQuote{}, walletEntry{}, errors.New("实例当前不可退款")
 	}
 	if runtimeStatus != "running" && runtimeStatus != "stopped" {
 		runtimeStatus = "stopped"
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET expires_at=?,status='destroy_scheduled',runtime_status=?,destroy_at=?,destroy_reason='refund',destroyed_at=NULL,purge_at=NULL,retention_days=? WHERE id=?`, quote.ServiceEndsAt, runtimeStatus, quote.ServiceEndsAt, refundRetentionDays, instanceID); err != nil {
+	changed, err := transitionInstance(ctx, tx, instanceID, []string{instanceStatus}, "destroy_scheduled", &runtimeStatus, "expires_at=?,destroy_at=?,destroy_reason='refund',destroyed_at=NULL,purge_at=NULL,retention_days=?", quote.ServiceEndsAt, quote.ServiceEndsAt, refundRetentionDays)
+	if err != nil {
 		return refundQuote{}, walletEntry{}, err
+	}
+	if !changed {
+		return refundQuote{}, walletEntry{}, errInstanceStateConflict
 	}
 	if err = writeAuditTx(ctx, tx, ownerID, "order.refund", "order", orderID, map[string]any{"refundAmountFen": quote.RefundAmountFen, "refundableDays": quote.RefundableDays, "serviceEndsAt": quote.ServiceEndsAt, "walletEntryId": entry.ID}); err != nil {
 		return refundQuote{}, walletEntry{}, err

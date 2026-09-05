@@ -55,15 +55,21 @@ func metrics(c *gin.Context) {
 		c.String(http.StatusServiceUnavailable, "xcloud_ready 0\n")
 		return
 	}
-	var pending, failed, running int
+	var pending, failed, running, deploymentFailed, missing, destroyBlocked, offlineInstances, leaseExpired, leaseRecoveries int
 	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_tasks WHERE status IN ('pending','running')`).Scan(&pending)
 	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_tasks WHERE status='failed'`).Scan(&failed)
 	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_instances WHERE status='running'`).Scan(&running)
+	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_instances WHERE status='deployment_failed'`).Scan(&deploymentFailed)
+	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_instances WHERE runtime_status='missing'`).Scan(&missing)
+	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_instances WHERE status='destroy_scheduled' AND destroy_at<=NOW()`).Scan(&destroyBlocked)
+	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('destroy_scheduled','destroyed') AND (n.enabled=FALSE OR n.last_heartbeat_at IS NULL OR n.last_heartbeat_at<?)`, time.Now().Add(-nodeHeartbeatTTL())).Scan(&offlineInstances)
+	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_tasks WHERE status='running' AND claim_expires_at<=NOW()`).Scan(&leaseExpired)
+	_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_task_events WHERE event_type='lease_recovered' AND created_at>=NOW()-INTERVAL 24 HOUR`).Scan(&leaseRecoveries)
 	ready := 1
 	if len(readinessProblems()) > 0 {
 		ready = 0
 	}
-	lines := []string{"# HELP xcloud_ready Control-plane readiness", "# TYPE xcloud_ready gauge", "xcloud_ready " + strconv.Itoa(ready), "# TYPE xcloud_tasks_backlog gauge", "xcloud_tasks_backlog " + strconv.Itoa(pending), "# TYPE xcloud_tasks_failed gauge", "xcloud_tasks_failed " + strconv.Itoa(failed), "# TYPE xcloud_instances_running gauge", "xcloud_instances_running " + strconv.Itoa(running)}
+	lines := []string{"# HELP xcloud_ready Control-plane readiness", "# TYPE xcloud_ready gauge", "xcloud_ready " + strconv.Itoa(ready), "# TYPE xcloud_tasks_backlog gauge", "xcloud_tasks_backlog " + strconv.Itoa(pending), "# TYPE xcloud_tasks_failed gauge", "xcloud_tasks_failed " + strconv.Itoa(failed), "# TYPE xcloud_instances_running gauge", "xcloud_instances_running " + strconv.Itoa(running), "xcloud_instances_deployment_failed " + strconv.Itoa(deploymentFailed), "xcloud_instances_runtime_missing " + strconv.Itoa(missing), "xcloud_tasks_lease_expired " + strconv.Itoa(leaseExpired), "xcloud_tasks_lease_recovered_24h " + strconv.Itoa(leaseRecoveries), "xcloud_instances_destroy_blocked " + strconv.Itoa(destroyBlocked), "xcloud_nodes_offline_instances " + strconv.Itoa(offlineInstances)}
 	nodes, err := listNodesWithUsage(c.Request.Context())
 	if err == nil {
 		for _, node := range nodes {

@@ -52,13 +52,13 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		defer memoryInstancesMu.RUnlock()
 		items := make([]instance, 0, len(memoryInstances))
 		for _, item := range memoryInstances {
-			if item.OwnerID == ownerID {
+			if item.OwnerID == ownerID && item.ArchivedAt == nil {
 				items = append(items, item)
 			}
 		}
 		return items, nil
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,image,version,spec,status,COALESCE(runtime_status,''),access_address,created_at,destroy_at,destroyed_at,purge_at,COALESCE(destroy_reason,''),archived_at FROM xcloud_instances WHERE owner_id=? AND archived_at IS NULL ORDER BY created_at DESC`, ownerID)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,image,version,spec,status,COALESCE(runtime_status,''),access_address,created_at,bandwidth_mbps,destroy_at,destroyed_at,purge_at,COALESCE(destroy_reason,''),archived_at FROM xcloud_instances WHERE owner_id=? AND archived_at IS NULL ORDER BY created_at DESC`, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 	for rows.Next() {
 		var item instance
 		var created time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &created, &item.BandwidthMbps, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Format("2006-01-02 15:04")
@@ -100,7 +100,7 @@ func getStoredInstance(ctx context.Context, id, ownerID string) (instance, bool,
 	}
 	var item instance
 	var created time.Time
-	err := instanceDB.QueryRowContext(ctx, `SELECT id,name,image,version,spec,status,COALESCE(runtime_status,''),access_address,container_name,created_at,destroy_at,destroyed_at,purge_at,COALESCE(destroy_reason,''),archived_at FROM xcloud_instances WHERE id=? AND owner_id=?`, id, ownerID).Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt)
+	err := instanceDB.QueryRowContext(ctx, `SELECT id,name,image,version,spec,status,COALESCE(runtime_status,''),access_address,container_name,created_at,destroy_at,destroyed_at,purge_at,COALESCE(destroy_reason,''),archived_at FROM xcloud_instances WHERE id=? AND owner_id=? AND archived_at IS NULL`, id, ownerID).Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt)
 	if err == sql.ErrNoRows {
 		return instance{}, false, nil
 	}

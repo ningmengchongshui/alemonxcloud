@@ -52,7 +52,7 @@ integration-up: ## Start the isolated MySQL, Redis, RabbitMQ and Agent test stac
 	docker compose -f compose.integration.yml up -d --build --wait
 
 test-integration: ## Run opt-in integration tests against the isolated stack
-	XCLOUD_INTEGRATION_MYSQL_DSN='xcloud:xcloud-test-only@tcp(127.0.0.1:13306)/xcloud_integration?parseTime=true' go test -tags=integration ./src/...
+	XCLOUD_INTEGRATION_MYSQL_DSN='xcloud:xcloud-test-only@tcp(127.0.0.1:23306)/xcloud_integration?parseTime=true' go test -tags=integration ./src/...
 
 integration-down: ## Stop and remove only the xcloud-integration test stack and volumes
 	docker compose -f compose.integration.yml down --volumes --remove-orphans

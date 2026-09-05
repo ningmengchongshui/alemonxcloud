@@ -48,8 +48,13 @@ export function AdminCouponsPage({ onBack }: { onBack: () => void }) {
     try {
       await save(editing).unwrap()
       setEditing(null)
-    } catch (e: any) {
-      setError(e?.data?.message ?? '保存失败')
+    } catch (error: unknown) {
+      const message =
+        typeof error === 'object' && error !== null && 'data' in error &&
+        typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+          ? (error as { data: { message: string } }).data.message
+          : '保存失败'
+      setError(message)
     }
   }
   return (

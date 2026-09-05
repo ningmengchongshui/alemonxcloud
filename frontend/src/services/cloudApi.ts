@@ -3,6 +3,7 @@ import type {
   AdminMetrics,
   AuditLog,
   Catalog,
+  AdminCatalog,
   CatalogImage,
   CloudUser,
   CurrentUser,
@@ -77,6 +78,7 @@ export const cloudApi = createApi({
           | 'destroy-now'
           | 'cancel-destroy'
           | 'archive'
+          | 'retry-deploy'
       }
     >({
       query: ({ id, action }) => ({
@@ -267,6 +269,8 @@ export const cloudApi = createApi({
           usedCount: _usedCount,
           ...body
         } = promotion
+        void _createdAt
+        void _usedCount
         return {
           url: body.id ? `/admin/promotions/${body.id}` : '/admin/promotions',
           method: body.id ? 'PUT' : 'POST',
@@ -359,7 +363,7 @@ export const cloudApi = createApi({
       query: id => ({ url: `/orders/${id}/refund`, method: 'POST' }),
       invalidatesTags: ['Wallet', 'Orders', 'Instances', 'Notifications']
     }),
-    getAdminCatalog: builder.query<Catalog, void>({
+    getAdminCatalog: builder.query<AdminCatalog, void>({
       query: () => '/admin/catalog',
       providesTags: ['Admin']
     }),
@@ -483,6 +487,17 @@ export const cloudApi = createApi({
       }),
       invalidatesTags: ['Admin']
     }),
+    publishAdminImageVersion: builder.mutation<
+      { version: ImageVersion; message: string },
+      { imageId: string; tag: string }
+    >({
+      query: ({ imageId, tag }) => ({
+        url: `/admin/images/${imageId}/versions/publish`,
+        method: 'POST',
+        body: { tag }
+      }),
+      invalidatesTags: ['Admin', 'Catalog']
+    }),
     saveAdminPlan: builder.mutation<Plan, Plan>({
       query: body => ({
         url: body.id ? `/admin/plans/${body.id}` : '/admin/plans',
@@ -590,6 +605,7 @@ export const {
   useSaveAdminImageMutation,
   useSaveAdminImageVersionMutation,
   usePullAdminImageVersionMutation,
+  usePublishAdminImageVersionMutation,
   useSaveAdminPlanMutation,
   useSaveAdminNodeMutation,
   useRetryTaskMutation,

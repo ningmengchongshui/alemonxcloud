@@ -10,6 +10,7 @@ export function PlanEditor() {
   const [name, setName] = useState('')
   const [cpu, setCPU] = useState(2)
   const [memory, setMemory] = useState(4096)
+  const [bandwidth, setBandwidth] = useState(10)
   const [price, setPrice] = useState(9900)
   const [error, setError] = useState('')
   const [save, { isLoading }] = useSaveAdminPlanMutation()
@@ -24,6 +25,7 @@ export function PlanEditor() {
         name: name.trim(),
         cpu,
         memoryMB: memory,
+        bandwidthMbps: bandwidth,
         monthlyPriceFen: price,
         enabled: true,
         sortOrder: 100
@@ -40,7 +42,7 @@ export function PlanEditor() {
       {open && (
         <Dialog
           title="新增计算套餐"
-          description="配置用户可购买的 CPU、内存与月度价格。"
+          description="配置用户可购买的 CPU、内存、共享网络最高带宽与月度价格。"
           onClose={close}
         >
           <div className="space-y-4">
@@ -88,6 +90,7 @@ export function PlanEditor() {
                 />
               </label>
             </div>
+            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100">最高共享带宽 Mbps<input className={inputClass} type="number" min="1" max="10000" value={bandwidth} onChange={event => setBandwidth(Number(event.target.value))} /></label>
             <label
               className="block text-[11px] font-bold text-slate-700 dark:text-slate-100"
               htmlFor="plan-price"
@@ -109,7 +112,7 @@ export function PlanEditor() {
               </Button>
               <Button
                 loading={isLoading}
-                disabled={!name.trim() || cpu < 1 || memory < 256 || price < 0}
+                disabled={!name.trim() || cpu < 1 || memory < 256 || bandwidth < 1 || price < 0}
                 onClick={() => void submit()}
               >
                 保存计算套餐

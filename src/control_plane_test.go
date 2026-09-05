@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -75,6 +76,33 @@ func TestLifecycleTaskIdempotencyKeyUsesScheduledTime(t *testing.T) {
 	key := lifecycleTaskKey("ins_abc", "destroy", at)
 	if !strings.Contains(key, "destroy:ins_abc:") || !strings.HasSuffix(key, "Z") {
 		t.Fatalf("invalid lifecycle key: %s", key)
+	}
+}
+
+func TestInstanceStateTransitionsAreExplicit(t *testing.T) {
+	for _, transition := range [][2]string{{"deploying", "running"}, {"deploying", "deployment_failed"}, {"deployment_failed", "deploying"}, {"destroy_scheduled", "destroyed"}, {"destroyed", "purged"}} {
+		if !canTransitionInstance(transition[0], transition[1]) {
+			t.Fatalf("expected transition %s -> %s", transition[0], transition[1])
+		}
+	}
+	for _, transition := range [][2]string{{"purged", "running"}, {"destroyed", "running"}, {"deployment_failed", "destroyed"}} {
+		if canTransitionInstance(transition[0], transition[1]) {
+			t.Fatalf("unexpected transition %s -> %s", transition[0], transition[1])
+		}
+	}
+}
+
+func TestTaskLeaseDuration(t *testing.T) {
+	if taskLeaseDuration != 5*time.Minute {
+		t.Fatalf("task lease must be five minutes, got %s", taskLeaseDuration)
+	}
+}
+
+func TestPublicCatalogHidesRepositoryDiagnostics(t *testing.T) {
+	items := publicCatalogImages([]catalogImage{{ID: "img", Name: "软件", ImageRef: "registry.example/private", ImageDigest: "sha256:" + strings.Repeat("a", 64), Versions: []imageVersion{{Tag: "v1", ImageDigest: "sha256:" + strings.Repeat("b", 64), LastError: "internal"}}}})
+	raw, err := json.Marshal(items)
+	if err != nil || strings.Contains(string(raw), "registry.example") || strings.Contains(string(raw), "sha256") || strings.Contains(string(raw), "internal") {
+		t.Fatalf("public catalog leaked diagnostics: %s, %v", raw, err)
 	}
 }
 

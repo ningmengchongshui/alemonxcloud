@@ -19,7 +19,19 @@ func catalog(c *gin.Context) {
 		internalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"images": images, "plans": plans})
+	c.JSON(http.StatusOK, gin.H{"images": publicCatalogImages(images), "plans": plans})
+}
+
+func publicCatalogImages(images []catalogImage) []publicCatalogImage {
+	publicImages := make([]publicCatalogImage, 0, len(images))
+	for _, image := range images {
+		versions := make([]publicImageVersion, 0, len(image.Versions))
+		for _, version := range image.Versions {
+			versions = append(versions, publicImageVersion{Tag: version.Tag})
+		}
+		publicImages = append(publicImages, publicCatalogImage{ID: image.ID, Name: image.Name, Versions: versions})
+	}
+	return publicImages
 }
 
 // manualPaymentDisabled retires the manual-transfer workflow. Purchases must
@@ -156,7 +168,7 @@ func instanceTasksHandler(c *gin.Context) {
 	if _, ok := ownedInstance(c); !ok {
 		return
 	}
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at FROM xcloud_tasks WHERE instance_id=? ORDER BY created_at DESC LIMIT 50`, c.Param("id"))
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT `+taskSelectFields+` FROM xcloud_tasks WHERE instance_id=? ORDER BY created_at DESC LIMIT 50`, c.Param("id"))
 	if err != nil {
 		internalError(c, err)
 		return
@@ -165,7 +177,7 @@ func instanceTasksHandler(c *gin.Context) {
 	items := []gin.H{}
 	for rows.Next() {
 		var t controlTask
-		if err := rows.Scan(&t.ID, &t.InstanceID, &t.Action, &t.IdempotencyKey, &t.Status, &t.Attempts, &t.LastError, &t.RunAfter, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := scanControlTask(rows, &t); err != nil {
 			internalError(c, err)
 			return
 		}
@@ -343,23 +355,50 @@ func adminSaveImageVersion(c *gin.Context) {
 }
 func adminPullImageVersion(c *gin.Context) {
 	versionID := c.Param("versionID")
-	var imageRef, tag, digest string
-	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT i.image_ref,v.version_tag,COALESCE(v.image_digest,'') FROM xcloud_image_versions v JOIN xcloud_images i ON i.id=v.image_id WHERE v.id=? AND v.image_id=?`, versionID, c.Param("id")).Scan(&imageRef, &tag, &digest)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"message": "镜像版本不存在"})
+	user := c.MustGet("user").(oidcUser)
+	if err := publishImageVersion(c.Request.Context(), c.Param("id"), versionID, user.ID); err != nil {
+		businessError(c, err)
 		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"message": "正在验证并上架版本"})
+}
+
+func adminPublishImageVersion(c *gin.Context) {
+	var body struct {
+		Tag string `json:"tag"`
+	}
+	if c.ShouldBindJSON(&body) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "版本号无效"})
+		return
+	}
+	item, err := saveImageVersion(c.Request.Context(), imageVersion{ImageID: c.Param("id"), Tag: body.Tag})
+	if err != nil {
+		businessError(c, err)
+		return
+	}
+	user := c.MustGet("user").(oidcUser)
+	if err := publishImageVersion(c.Request.Context(), item.ImageID, item.ID, user.ID); err != nil {
+		businessError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"version": item, "message": "正在验证并上架版本"})
+}
+
+func publishImageVersion(ctx context.Context, imageID, versionID, actorID string) error {
+	var imageRef, tag, digest string
+	err := instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,v.version_tag,COALESCE(v.image_digest,'') FROM xcloud_image_versions v JOIN xcloud_images i ON i.id=v.image_id WHERE v.id=? AND v.image_id=?`, versionID, imageID).Scan(&imageRef, &tag, &digest)
+	if err != nil {
+		return errors.New("软件版本不存在")
 	}
 	// Always resolve from the tag during publication. A stored digest is a
 	// previous immutable snapshot, not a substitute for a fresh verification.
 	image := deploymentImage(imageRef, tag, "")
-	if _, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_image_versions SET enabled=FALSE,version_status='syncing',last_error=NULL,updated_at=NOW() WHERE id=?`, versionID); err != nil {
-		internalError(c, err)
-		return
+	if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_image_versions SET enabled=FALSE,version_status='syncing',last_error=NULL,updated_at=NOW() WHERE id=?`, versionID); err != nil {
+		return err
 	}
-	user := c.MustGet("user").(oidcUser)
-	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image_version.pull", "image_version", versionID, map[string]any{"image": image})
+	_ = writeAudit(ctx, actorID, "catalog.image_version.publish", "image_version", versionID, map[string]any{"image": image})
 	go pullImageOnNodes(context.Background(), versionID, image)
-	c.JSON(http.StatusAccepted, gin.H{"message": "已提交节点同步与发布校验", "image": image})
+	return nil
 }
 func pullImageOnNodes(ctx context.Context, versionID, image string) {
 	nodes, err := enabledNodes(ctx)
@@ -615,6 +654,30 @@ func adminTasks(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, items)
 }
+
+func reconcileAllBandwidthHandler(c *gin.Context) {
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id FROM xcloud_instances WHERE status IN ('running','stopped','destroy_scheduled')`)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) != nil {
+			continue
+		}
+		task, e := scheduleInstanceTask(c.Request.Context(), id, "bandwidth", "system")
+		if e == nil {
+			_ = enqueuePersistedTask(c.Request.Context(), task)
+			count++
+		}
+	}
+	user := c.MustGet("user").(oidcUser)
+	_ = writeAudit(c.Request.Context(), user.ID, "bandwidth.reconcile", "instance", "all", map[string]any{"tasks": count})
+	c.JSON(http.StatusAccepted, gin.H{"tasks": count})
+}
 func adminAuditLogs(c *gin.Context) {
 	items, err := listAuditLogs(c.Request.Context(), 200)
 	if err != nil {
@@ -632,7 +695,7 @@ func adminMetricsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, value)
 }
 func retryTask(c *gin.Context) {
-	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_tasks SET status=?,run_after=NOW(),last_error=NULL,updated_at=NOW() WHERE id=? AND status=?`, taskPending, c.Param("id"), taskFailed)
+	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_tasks SET status=?,run_after=NOW(),last_error=NULL,claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,updated_at=NOW() WHERE id=? AND status=?`, taskPending, c.Param("id"), taskFailed)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -678,6 +741,10 @@ func queueInstanceAction(c *gin.Context) {
 		queueImmediateDestroy(c, item, user.ID)
 		return
 	}
+	if action == "retry-deploy" {
+		queueDeploymentRetry(c, item, user.ID)
+		return
+	}
 	if action != "start" && action != "stop" && action != "restart" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的实例操作"})
 		return
@@ -697,6 +764,51 @@ func queueInstanceAction(c *gin.Context) {
 	}
 	c.JSON(http.StatusAccepted, gin.H{"task": task})
 }
+
+func queueDeploymentRetry(c *gin.Context, item instance, actorID string) {
+	if item.Status != "deployment_failed" {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例当前不可重试部署"})
+		return
+	}
+	var nodeID string
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(node_id,'') FROM xcloud_instances WHERE id=? AND owner_id=? AND status='deployment_failed'`, item.ID, item.OwnerID).Scan(&nodeID); err != nil {
+		businessError(c, err)
+		return
+	}
+	n, err := nodeByID(c.Request.Context(), nodeID)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "实例节点不可用，暂不能重试部署"})
+		return
+	}
+	// Remove stale runtime resources but preserve the instance data directory.
+	if err := nodeRequest(c.Request.Context(), n, httpMethodPost, "/container/"+item.ContainerName+"/destroy", nil, nil); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "无法清理上次部署残留，请稍后重试"})
+		return
+	}
+	runtime := "unknown"
+	changed, err := transitionInstance(c.Request.Context(), instanceDB, item.ID, []string{"deployment_failed"}, "deploying", &runtime, "")
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if !changed {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例状态已变化，请刷新后重试"})
+		return
+	}
+	task, err := scheduleInstanceTask(c.Request.Context(), item.ID, "create", actorID)
+	if err != nil {
+		_, _ = transitionInstance(c.Request.Context(), instanceDB, item.ID, []string{"deploying"}, "deployment_failed", nil, "")
+		businessError(c, err)
+		return
+	}
+	_ = writeAudit(c.Request.Context(), actorID, "instance.deployment_retry", "instance", item.ID, map[string]any{"taskId": task.ID})
+	if err := enqueuePersistedTask(c.Request.Context(), task); err != nil {
+		c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "重试任务已记录，等待队列恢复"})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"task": task})
+}
+
 func queueDeleteInstance(c *gin.Context) {
 	c.Params = append(c.Params, gin.Param{Key: "action", Value: "destroy"})
 	queueInstanceAction(c)
@@ -717,12 +829,12 @@ func scheduleManualDestroy(c *gin.Context, item instance, actorID string) {
 		return
 	}
 	destroyAt := time.Now().AddDate(0, 0, 7)
-	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET status='destroy_scheduled',runtime_status=?,destroy_reason='manual',destroy_at=?,destroyed_at=NULL,purge_at=NULL WHERE id=? AND owner_id=? AND status IN ('running','stopped')`, runtimeStatus, destroyAt, item.ID, item.OwnerID)
+	changed, err := transitionInstance(c.Request.Context(), instanceDB, item.ID, []string{"running", "stopped"}, "destroy_scheduled", &runtimeStatus, "destroy_reason='manual',destroy_at=?,destroyed_at=NULL,purge_at=NULL", destroyAt)
 	if err != nil {
 		internalError(c, err)
 		return
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	if !changed {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例状态已变化，请刷新后重试"})
 		return
 	}
@@ -752,12 +864,12 @@ func cancelManualDestroy(c *gin.Context, item instance, actorID string) {
 	if runtimeStatus != "running" && runtimeStatus != "stopped" {
 		runtimeStatus = "stopped"
 	}
-	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET status=?,runtime_status=?,destroy_at=NULL,destroy_reason=NULL WHERE id=? AND owner_id=? AND status='destroy_scheduled' AND destroy_reason='manual'`, runtimeStatus, runtimeStatus, item.ID, item.OwnerID)
+	changed, err := transitionInstance(c.Request.Context(), instanceDB, item.ID, []string{"destroy_scheduled"}, runtimeStatus, &runtimeStatus, "destroy_at=NULL,destroy_reason=NULL")
 	if err != nil {
 		internalError(c, err)
 		return
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	if !changed {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例状态已变化，请刷新后重试"})
 		return
 	}

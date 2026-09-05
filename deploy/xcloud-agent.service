@@ -1,5 +1,5 @@
 [Unit]
-Description=AlemonX Cloud bare-metal agent
+Description=ALemonX Cloud bare-metal agent
 After=docker.service network-online.target
 Requires=docker.service
 

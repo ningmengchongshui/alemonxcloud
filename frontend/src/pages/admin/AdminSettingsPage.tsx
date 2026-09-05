@@ -61,7 +61,7 @@ export function AdminSettingsPage() {
               className={inputClass}
               value={name}
               onChange={event => setName(event.target.value)}
-              placeholder="例如：AlemonX 售前咨询群"
+              placeholder="例如：ALemonX 售前咨询群"
               data-autofocus
             />
           </label>

@@ -12,9 +12,11 @@ services:
       MYSQL_PASSWORD: xcloud-test-only
       MYSQL_ROOT_PASSWORD: root-test-only
     ports:
-      - "13306:3306"
+      - "23306:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot-test-only"]
+      # localhost may use MySQL's temporary Unix-socket bootstrap server;
+      # force TCP so --wait only succeeds after the final server is listening.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot-test-only"]
       interval: 3s
       timeout: 3s
       retries: 30
@@ -22,14 +24,13 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "16379:6379"
+      - "26379:6379"
     networks: [xcloud_integration]
   rabbitmq:
     image: rabbitmq:4-management-alpine
     ports:
-      - "15672:15672"
-      - "15673:15672"
-      - "15682:5672"
+      - "25673:15672"
+      - "25682:5672"
     networks: [xcloud_integration]
   agent:
     build:

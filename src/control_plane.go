@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -26,6 +28,67 @@ const (
 	taskDone    = "succeeded"
 	taskFailed  = "failed"
 )
+
+const taskLeaseDuration = 5 * time.Minute
+
+// instanceStateExecutor is shared by *sql.DB and *sql.Tx so lifecycle
+// transitions remain conditional even while a caller owns a larger business
+// transaction (purchase, renewal, or refund).
+type instanceStateExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+var errInstanceStateConflict = errors.New("实例状态已变化")
+
+func canTransitionInstance(from, to string) bool {
+	if from == to {
+		return true
+	}
+	allowed := map[string]map[string]bool{
+		"deploying":         {"running": true, "deployment_failed": true},
+		"deployment_failed": {"deploying": true},
+		"running":           {"stopped": true, "destroy_scheduled": true},
+		"stopped":           {"running": true, "destroy_scheduled": true},
+		"destroy_scheduled": {"running": true, "stopped": true, "destroyed": true},
+		"destroyed":         {"purged": true},
+	}
+	return allowed[from][to]
+}
+
+// transitionInstance is the sole writer for xcloud_instances.status after an
+// instance has been created. It validates every expected edge before issuing a
+// conditional update, so a stale task cannot overwrite a renewal, cancellation
+// or a newer lifecycle operation.
+func transitionInstance(ctx context.Context, executor instanceStateExecutor, instanceID string, expected []string, next string, runtimeStatus *string, extraSet string, extraArgs ...any) (bool, error) {
+	if len(expected) == 0 {
+		return false, errors.New("缺少实例当前状态")
+	}
+	for _, current := range expected {
+		if !canTransitionInstance(current, next) {
+			return false, fmt.Errorf("非法实例状态转换: %s -> %s", current, next)
+		}
+	}
+	sets, args := []string{"status=?"}, []any{next}
+	if runtimeStatus != nil {
+		sets = append(sets, "runtime_status=?")
+		args = append(args, *runtimeStatus)
+	}
+	if strings.TrimSpace(extraSet) != "" {
+		sets = append(sets, extraSet)
+		args = append(args, extraArgs...)
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(expected)), ",")
+	args = append(args, instanceID)
+	for _, current := range expected {
+		args = append(args, current)
+	}
+	result, err := executor.ExecContext(ctx, "UPDATE xcloud_instances SET "+strings.Join(sets, ",")+" WHERE id=? AND status IN ("+placeholders+")", args...)
+	if err != nil {
+		return false, err
+	}
+	affected, _ := result.RowsAffected()
+	return affected == 1, nil
+}
 
 type catalogImage struct {
 	ID          string         `json:"id"`
@@ -48,16 +111,25 @@ type imageVersion struct {
 	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
 }
+type publicImageVersion struct {
+	Tag string `json:"tag"`
+}
+type publicCatalogImage struct {
+	ID       string               `json:"id"`
+	Name     string               `json:"name"`
+	Versions []publicImageVersion `json:"versions"`
+}
 
 type plan struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	CPU        float64   `json:"cpu"`
-	MemoryMB   int       `json:"memoryMB"`
-	MonthlyFen int       `json:"monthlyPriceFen"`
-	Enabled    bool      `json:"enabled"`
-	SortOrder  int       `json:"sortOrder"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	CPU           float64   `json:"cpu"`
+	MemoryMB      int       `json:"memoryMB"`
+	BandwidthMbps int       `json:"bandwidthMbps"`
+	MonthlyFen    int       `json:"monthlyPriceFen"`
+	Enabled       bool      `json:"enabled"`
+	SortOrder     int       `json:"sortOrder"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 type node struct {
@@ -80,6 +152,9 @@ type node struct {
 	AgentCapabilities     []string   `json:"agentCapabilities,omitempty"`
 	AgentCompatibility    string     `json:"agentCompatibility,omitempty"`
 	AgentToken            string     `json:"agentToken,omitempty"`
+	OfflineInstanceCount  int        `json:"offlineInstanceCount,omitempty"`
+	PendingCleanupTasks   int        `json:"pendingCleanupTasks,omitempty"`
+	LastAgentError        string     `json:"lastAgentError,omitempty"`
 }
 
 const minimumAgentAPIVersion = 1
@@ -128,16 +203,19 @@ type order struct {
 }
 
 type controlTask struct {
-	ID             string    `json:"id"`
-	InstanceID     string    `json:"instanceId"`
-	Action         string    `json:"action"`
-	IdempotencyKey string    `json:"-"`
-	Status         string    `json:"status"`
-	LastError      string    `json:"lastError"`
-	Attempts       int       `json:"attempts"`
-	RunAfter       time.Time `json:"runAfter"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	ID             string     `json:"id"`
+	InstanceID     string     `json:"instanceId"`
+	Action         string     `json:"action"`
+	IdempotencyKey string     `json:"-"`
+	Status         string     `json:"status"`
+	LastError      string     `json:"lastError"`
+	Attempts       int        `json:"attempts"`
+	RunAfter       time.Time  `json:"runAfter"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	ClaimedAt      *time.Time `json:"claimedAt,omitempty"`
+	ClaimExpiresAt *time.Time `json:"claimExpiresAt,omitempty"`
+	WorkerID       string     `json:"workerId,omitempty"`
 }
 type auditLog struct {
 	ID         int64     `json:"id"`
@@ -166,7 +244,7 @@ func listCatalog(ctx context.Context, includeDisabled bool) ([]catalogImage, []p
 		return nil, nil, errors.New("开发模式未配置 MySQL")
 	}
 	imageSQL := `SELECT id,name,image_ref,COALESCE(image_digest,''),version,enabled,created_at FROM xcloud_images`
-	planSQL := `SELECT id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans`
+	planSQL := `SELECT id,name,cpu,memory_mb,bandwidth_mbps,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans`
 	if !includeDisabled {
 		imageSQL += ` WHERE enabled=TRUE`
 		planSQL += ` WHERE enabled=TRUE`
@@ -280,7 +358,7 @@ func scanPlans(ctx context.Context, statement string, args ...any) ([]plan, erro
 	items := []plan{}
 	for rows.Next() {
 		var item plan
-		if err := rows.Scan(&item.ID, &item.Name, &item.CPU, &item.MemoryMB, &item.MonthlyFen, &item.Enabled, &item.SortOrder, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.CPU, &item.MemoryMB, &item.BandwidthMbps, &item.MonthlyFen, &item.Enabled, &item.SortOrder, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -307,7 +385,10 @@ func saveImage(ctx context.Context, value catalogImage) error {
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		checkDuplicate = err == sql.ErrNoRows || strings.TrimSpace(currentRef) != value.ImageRef
+		if err == nil && strings.TrimSpace(currentRef) != value.ImageRef {
+			return errors.New("镜像仓库地址不可修改，请新建软件")
+		}
+		checkDuplicate = err == sql.ErrNoRows
 	}
 	if checkDuplicate {
 		var duplicate int
@@ -353,7 +434,10 @@ func savePlan(ctx context.Context, value plan) error {
 	if value.CreatedAt.IsZero() {
 		value.CreatedAt = time.Now()
 	}
-	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_plans (id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),cpu=VALUES(cpu),memory_mb=VALUES(memory_mb),monthly_price_fen=VALUES(monthly_price_fen),enabled=VALUES(enabled),sort_order=VALUES(sort_order)`, value.ID, value.Name, value.CPU, value.MemoryMB, value.MonthlyFen, value.Enabled, value.SortOrder, value.CreatedAt)
+	if value.BandwidthMbps < 1 || value.BandwidthMbps > 10000 {
+		return errors.New("套餐最高带宽应为 1 至 10000 Mbps")
+	}
+	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_plans (id,name,cpu,memory_mb,bandwidth_mbps,monthly_price_fen,enabled,sort_order,created_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),cpu=VALUES(cpu),memory_mb=VALUES(memory_mb),bandwidth_mbps=VALUES(bandwidth_mbps),monthly_price_fen=VALUES(monthly_price_fen),enabled=VALUES(enabled),sort_order=VALUES(sort_order)`, value.ID, value.Name, value.CPU, value.MemoryMB, value.BandwidthMbps, value.MonthlyFen, value.Enabled, value.SortOrder, value.CreatedAt)
 	return err
 }
 
@@ -471,7 +555,7 @@ func confirmOrder(ctx context.Context, id, actorID string) (controlTask, error) 
 	var o order
 	var p plan
 	var img catalogImage
-	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,o.amount_fen,o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.id=? FOR UPDATE`, id).Scan(&o.ID, &o.OwnerID, &o.PlanID, &o.ImageID, &o.AmountFen, &o.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt)
+	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,o.amount_fen,o.status,p.id,p.name,p.cpu,p.memory_mb,p.bandwidth_mbps,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.id=? FOR UPDATE`, id).Scan(&o.ID, &o.OwnerID, &o.PlanID, &o.ImageID, &o.AmountFen, &o.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.BandwidthMbps, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt)
 	if err != nil {
 		return controlTask{}, err
 	}
@@ -487,8 +571,15 @@ func confirmOrder(ctx context.Context, id, actorID string) (controlTask, error) 
 	}
 	if renewal.Valid && renewal.String != "" {
 		var currentExpiry sql.NullTime
-		if err = tx.QueryRowContext(ctx, `SELECT expires_at FROM xcloud_instances WHERE id=? AND owner_id=? FOR UPDATE`, renewal.String, o.OwnerID).Scan(&currentExpiry); err != nil {
+		var instanceStatus, runtimeStatus string
+		if err = tx.QueryRowContext(ctx, `SELECT expires_at,status,COALESCE(runtime_status,'stopped') FROM xcloud_instances WHERE id=? AND owner_id=? FOR UPDATE`, renewal.String, o.OwnerID).Scan(&currentExpiry, &instanceStatus, &runtimeStatus); err != nil {
 			return controlTask{}, errors.New("待续费实例不存在或已清理")
+		}
+		if instanceStatus != "running" && instanceStatus != "stopped" && instanceStatus != "destroy_scheduled" {
+			return controlTask{}, errors.New("待续费实例当前不可恢复")
+		}
+		if runtimeStatus != "running" && runtimeStatus != "stopped" {
+			runtimeStatus = "stopped"
 		}
 		now := time.Now()
 		base := now
@@ -500,8 +591,12 @@ func confirmOrder(ctx context.Context, id, actorID string) (controlTask, error) 
 			months = 1
 		}
 		expires := base.AddDate(0, months, 0)
-		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET status='deploying',expires_at=?,purge_at=NULL WHERE id=?`, expires, renewal.String); err != nil {
-			return controlTask{}, err
+		changed, transitionErr := transitionInstance(ctx, tx, renewal.String, []string{instanceStatus}, runtimeStatus, &runtimeStatus, "expires_at=?,purge_at=NULL,destroy_at=NULL,destroy_reason=NULL,destroyed_at=NULL", expires)
+		if transitionErr != nil {
+			return controlTask{}, transitionErr
+		}
+		if !changed {
+			return controlTask{}, errInstanceStateConflict
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET instance_id=?,status=?,service_starts_at=?,expires_at=?,updated_at=? WHERE id=?`, renewal.String, orderDeploy, base, expires, now, o.ID); err != nil {
 			return controlTask{}, err
@@ -537,7 +632,7 @@ func confirmOrder(ctx context.Context, id, actorID string) (controlTask, error) 
 		months = 1
 	}
 	expires := now.AddDate(0, months, 0)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, o.OwnerID, "AlemonX", img.ImageRef, img.Version, fmt.Sprintf("%g 核 / %d GB", p.CPU, p.MemoryMB/1024), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, n.ID, o.ID, route, expires); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,bandwidth_mbps,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, o.OwnerID, "AlemonX", img.ImageRef, img.Version, fmt.Sprintf("%g 核 / %d GB / 最高 %d Mbps", p.CPU, p.MemoryMB/1024, p.BandwidthMbps), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, p.BandwidthMbps, n.ID, o.ID, route, expires); err != nil {
 		return controlTask{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET instance_id=?,status=?,service_starts_at=?,expires_at=?,updated_at=? WHERE id=?`, instanceID, orderDeploy, now, expires, now, o.ID); err != nil {
@@ -614,14 +709,20 @@ func nodeHeartbeatTTL() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+const taskSelectFields = `id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at,claimed_at,claim_expires_at,COALESCE(worker_id,'')`
+
+func scanControlTask(scanner interface{ Scan(...any) error }, task *controlTask) error {
+	return scanner.Scan(&task.ID, &task.InstanceID, &task.Action, &task.IdempotencyKey, &task.Status, &task.Attempts, &task.LastError, &task.RunAfter, &task.CreatedAt, &task.UpdatedAt, &task.ClaimedAt, &task.ClaimExpiresAt, &task.WorkerID)
+}
+
 func loadTask(ctx context.Context, id string) (controlTask, error) {
 	var task controlTask
-	err := instanceDB.QueryRowContext(ctx, `SELECT id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at FROM xcloud_tasks WHERE id=?`, id).Scan(&task.ID, &task.InstanceID, &task.Action, &task.IdempotencyKey, &task.Status, &task.Attempts, &task.LastError, &task.RunAfter, &task.CreatedAt, &task.UpdatedAt)
+	err := scanControlTask(instanceDB.QueryRowContext(ctx, `SELECT `+taskSelectFields+` FROM xcloud_tasks WHERE id=?`, id), &task)
 	return task, err
 }
 
 func pendingTasks(ctx context.Context, limit int) ([]controlTask, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at FROM xcloud_tasks WHERE status=? AND run_after<=NOW() ORDER BY created_at LIMIT ?`, taskPending, limit)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT `+taskSelectFields+` FROM xcloud_tasks WHERE status=? AND run_after<=NOW() ORDER BY created_at LIMIT ?`, taskPending, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -629,7 +730,7 @@ func pendingTasks(ctx context.Context, limit int) ([]controlTask, error) {
 	items := []controlTask{}
 	for rows.Next() {
 		var t controlTask
-		if err := rows.Scan(&t.ID, &t.InstanceID, &t.Action, &t.IdempotencyKey, &t.Status, &t.Attempts, &t.LastError, &t.RunAfter, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := scanControlTask(rows, &t); err != nil {
 			return nil, err
 		}
 		items = append(items, t)
@@ -638,7 +739,7 @@ func pendingTasks(ctx context.Context, limit int) ([]controlTask, error) {
 }
 
 func listTasks(ctx context.Context, limit int) ([]controlTask, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at FROM xcloud_tasks ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT `+taskSelectFields+` FROM xcloud_tasks ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +747,7 @@ func listTasks(ctx context.Context, limit int) ([]controlTask, error) {
 	items := []controlTask{}
 	for rows.Next() {
 		var t controlTask
-		if err := rows.Scan(&t.ID, &t.InstanceID, &t.Action, &t.IdempotencyKey, &t.Status, &t.Attempts, &t.LastError, &t.RunAfter, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := scanControlTask(rows, &t); err != nil {
 			return nil, err
 		}
 		items = append(items, t)
@@ -670,8 +771,17 @@ func listAuditLogs(ctx context.Context, limit int) ([]auditLog, error) {
 	return items, rows.Err()
 }
 
+func taskWorkerID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return fmt.Sprintf("xcloud-server:%d", os.Getpid())
+	}
+	return fmt.Sprintf("xcloud-server@%s:%d", host, os.Getpid())
+}
+
 func claimTask(ctx context.Context, id string) (bool, error) {
-	result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,attempts=attempts+1,updated_at=NOW() WHERE id=? AND status=?`, taskRunning, id, taskPending)
+	now := time.Now()
+	result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,attempts=attempts+1,claimed_at=?,claim_expires_at=?,worker_id=?,updated_at=? WHERE id=? AND status=?`, taskRunning, now, now.Add(taskLeaseDuration), taskWorkerID(), now, id, taskPending)
 	if err != nil {
 		return false, err
 	}
@@ -681,28 +791,77 @@ func claimTask(ctx context.Context, id string) (bool, error) {
 	}
 	return affected == 1, nil
 }
-func finishTask(ctx context.Context, task controlTask, err error) error {
+
+// finishTask only accepts the consumer that still owns an unexpired lease.
+// A recovered task may be executing in a late, crashed worker; that worker
+// must never be able to mark the replacement attempt as complete or failed.
+func finishTask(ctx context.Context, task controlTask, err error) (bool, error) {
+	workerID := task.WorkerID
+	if workerID == "" {
+		return false, errors.New("任务缺少消费者租约")
+	}
 	if err == nil {
-		_, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=NULL,finished_at=NOW(),updated_at=NOW() WHERE id=?`, taskDone, task.ID)
-		if e == nil {
-			appendTaskEvent(ctx, task.ID, "succeeded", "任务执行成功")
+		result, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=NULL,finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND claim_expires_at>NOW()`, taskDone, task.ID, taskRunning, workerID)
+		if e != nil {
+			return false, e
 		}
-		return e
+		if affected, _ := result.RowsAffected(); affected == 1 {
+			appendTaskEvent(ctx, task.ID, "succeeded", "任务执行成功")
+			return true, nil
+		}
+		return false, nil
 	}
 	message := truncateError(err.Error())
 	if task.Attempts >= 3 {
-		_, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,finished_at=NOW(),updated_at=NOW() WHERE id=?`, taskFailed, message, task.ID)
-		if e == nil {
-			appendTaskEvent(ctx, task.ID, "dead_letter", message)
+		result, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND claim_expires_at>NOW()`, taskFailed, message, task.ID, taskRunning, workerID)
+		if e != nil {
+			return false, e
 		}
-		return e
+		if affected, _ := result.RowsAffected(); affected == 1 {
+			appendTaskEvent(ctx, task.ID, "dead_letter", message)
+			return true, nil
+		}
+		return false, nil
 	}
 	delay := time.Duration(task.Attempts*task.Attempts) * time.Minute
-	_, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,run_after=?,updated_at=NOW() WHERE id=?`, taskPending, message, time.Now().Add(delay), task.ID)
-	if e == nil {
-		appendTaskEvent(ctx, task.ID, "retry", message)
+	result, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,run_after=?,claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND claim_expires_at>NOW()`, taskPending, message, time.Now().Add(delay), task.ID, taskRunning, workerID)
+	if e != nil {
+		return false, e
 	}
-	return e
+	if affected, _ := result.RowsAffected(); affected == 1 {
+		appendTaskEvent(ctx, task.ID, "retry", message)
+		return true, nil
+	}
+	return false, nil
+}
+
+// failDeployment marks the business resources failed after the create task has
+// exhausted its retries. Keeping this transition next to task finalization
+// prevents a paid instance from remaining in deploying forever while still
+// consuming node capacity.
+func failDeployment(ctx context.Context, task controlTask, cause error) {
+	if task.Action == "bandwidth" {
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='failed',bandwidth_last_error=? WHERE id=?`, truncateError(cause.Error()), task.InstanceID)
+		return
+	}
+	if task.Action != "create" || task.Attempts < 3 {
+		return
+	}
+	runtime := "unknown"
+	changed, err := transitionInstance(ctx, instanceDB, task.InstanceID, []string{"deploying"}, "deployment_failed", &runtime, "")
+	if err != nil {
+		log.Printf("mark deployment failed %s: %v", task.InstanceID, err)
+		return
+	}
+	if !changed {
+		return
+	}
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status=?`, "deployment_failed", task.InstanceID, orderDeploy)
+	var ownerID string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT owner_id FROM xcloud_instances WHERE id=?`, task.InstanceID).Scan(&ownerID); err == nil {
+		_ = createNotification(ctx, ownerID, "deployment_failed", "实例部署失败", "实例连续部署失败，资源已释放，请重试部署或联系客服处理。", map[string]any{"instanceId": task.InstanceID, "taskId": task.ID, "error": truncateError(cause.Error())})
+	}
+	_ = writeAudit(ctx, "system", "instance.deployment_failed", "instance", task.InstanceID, map[string]any{"taskId": task.ID, "error": truncateError(cause.Error())})
 }
 func truncateError(value string) string {
 	value = strings.TrimSpace(value)
@@ -727,8 +886,8 @@ func executeTask(ctx context.Context, task controlTask) error {
 	switch task.Action {
 	case "create":
 		var cpu float64
-		var memoryMB int
-		err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB)
+		var memoryMB, bandwidthMbps int
+		err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb,bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB, &bandwidthMbps)
 		if err != nil {
 			return err
 		}
@@ -738,25 +897,40 @@ func executeTask(ctx context.Context, task controlTask) error {
 			return err
 		}
 		image := deploymentImage(imageRef, selectedVersion, digest)
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": image, "cpu": cpu, "memoryMB": memoryMB, "route": route}, nil)
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": image, "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, nil)
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='running' WHERE id=?`, item.ID)
-			if err == nil {
+			runtime := "running"
+			changed, transitionErr := transitionInstance(ctx, instanceDB, item.ID, []string{"deploying"}, "running", &runtime, "")
+			if transitionErr != nil {
+				err = transitionErr
+			} else if changed {
 				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status=?`, orderActive, item.ID, orderDeploy)
 			}
 		}
 	case "start":
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, nil)
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=CASE WHEN status='destroy_scheduled' THEN status ELSE 'running' END,runtime_status='running' WHERE id=?`, item.ID)
-			if err == nil {
+			runtime := "running"
+			next := "running"
+			if item.Status == "destroy_scheduled" {
+				next = item.Status
+			}
+			changed, transitionErr := transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
+			if transitionErr != nil {
+				err = transitionErr
+			} else if changed {
 				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status=?`, orderActive, item.ID, orderDeploy)
 			}
 		}
 	case "stop":
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=CASE WHEN status='destroy_scheduled' THEN status ELSE 'stopped' END,runtime_status='stopped' WHERE id=?`, item.ID)
+			runtime := "stopped"
+			next := "stopped"
+			if item.Status == "destroy_scheduled" {
+				next = item.Status
+			}
+			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
 		}
 	case "restart":
 		// The Agent deliberately exposes only the primitive lifecycle calls.  A
@@ -767,25 +941,78 @@ func executeTask(ctx context.Context, task controlTask) error {
 			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, nil)
 		}
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=CASE WHEN status='destroy_scheduled' THEN status ELSE 'running' END,runtime_status='running' WHERE id=?`, item.ID)
+			runtime := "running"
+			next := "running"
+			if item.Status == "destroy_scheduled" {
+				next = item.Status
+			}
+			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
+		}
+	case "bandwidth":
+		var mbps int
+		err = instanceDB.QueryRowContext(ctx, `SELECT bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&mbps)
+		if err == nil {
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/bandwidth", map[string]any{"bandwidthMbps": mbps}, nil)
+		}
+		if err == nil {
+			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='applied',bandwidth_applied_at=NOW(),bandwidth_last_error=NULL WHERE id=?`, item.ID)
+		}
+		if err == nil {
+			runtime := "running"
+			next := "running"
+			if item.Status == "destroy_scheduled" {
+				next = item.Status
+			}
+			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
 		}
 	case "destroy":
 		err = executeDestroyTask(ctx, task, item.ID, item.ContainerName, n)
 	case "purge":
-		err = nodeRequest(ctx, n, httpMethodDelete, "/container/"+item.ContainerName+"?purge=true", nil, nil)
-		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='purged',archived_at=NOW() WHERE id=? AND status='destroyed'`, item.ID)
-			if err == nil {
-				var ownerID string
-				if e := instanceDB.QueryRowContext(ctx, `SELECT owner_id FROM xcloud_instances WHERE id=?`, item.ID).Scan(&ownerID); e == nil {
-					_ = createNotification(ctx, ownerID, "instance_purged", "实例数据已物理清除", "实例容器和数据已按保留规则完成物理清除。", map[string]any{"instanceId": item.ID})
-				}
-			}
-		}
+		err = executePurgeTask(ctx, item.ID, item.ContainerName, n)
 	default:
 		return errors.New("未知任务动作")
 	}
 	return err
+}
+
+func executePurgeTask(ctx context.Context, instanceID, containerName string, n node) error {
+	tx, err := beginSerializableTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var purgeAt sql.NullTime
+	var activeOrders int
+	if err := tx.QueryRowContext(ctx, `SELECT purge_at FROM xcloud_instances WHERE id=? AND status='destroyed' FOR UPDATE`, instanceID).Scan(&purgeAt); err != nil {
+		return err
+	}
+	if !purgeAt.Valid || purgeAt.Time.After(time.Now()) {
+		return nil
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_orders WHERE instance_id=? AND status=? AND expires_at>NOW()`, instanceID, orderActive).Scan(&activeOrders); err != nil {
+		return err
+	}
+	if activeOrders > 0 {
+		return errors.New("实例存在有效订单，不能清理数据")
+	}
+	if err := nodeRequest(ctx, n, httpMethodDelete, "/container/"+containerName+"?purge=true", nil, nil); err != nil {
+		return err
+	}
+	changed, err := transitionInstance(ctx, tx, instanceID, []string{"destroyed"}, "purged", nil, "archived_at=NOW(),purge_at=purge_at")
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return errors.New("数据清理计划已变化")
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	var ownerID string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT owner_id FROM xcloud_instances WHERE id=?`, instanceID).Scan(&ownerID); err == nil {
+		_ = createNotification(ctx, ownerID, "instance_purged", "实例数据已物理清除", "实例容器和数据已按保留规则完成物理清除。", map[string]any{"instanceId": instanceID})
+	}
+	return nil
 }
 
 // executeDestroyTask locks the destruction plan for the whole Agent call. A
@@ -810,11 +1037,12 @@ func executeDestroyTask(ctx context.Context, task controlTask, instanceID, conta
 	if err := nodeRequest(ctx, n, httpMethodPost, "/container/"+containerName+"/destroy", nil, nil); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE xcloud_instances SET status='destroyed',runtime_status='stopped',destroyed_at=NOW(),purge_at=DATE_ADD(NOW(), INTERVAL 30 DAY),retention_days=30 WHERE id=? AND status='destroy_scheduled' AND destroy_at=?`, instanceID, destroyAt.Time)
+	runtime := "stopped"
+	changed, err := transitionInstance(ctx, tx, instanceID, []string{"destroy_scheduled"}, "destroyed", &runtime, "destroyed_at=NOW(),purge_at=DATE_ADD(NOW(), INTERVAL 30 DAY),retention_days=30,destroy_at=destroy_at")
 	if err != nil {
 		return err
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	if !changed {
 		return errors.New("销毁计划已变化")
 	}
 	if err := tx.Commit(); err != nil {
@@ -874,10 +1102,9 @@ func scheduleLifecycle(ctx context.Context) {
 		for rows.Next() {
 			var id, runtimeStatus string
 			if rows.Scan(&id, &runtimeStatus) == nil {
-				result, updateErr := instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='destroy_scheduled',runtime_status=?,destroy_reason='expired',destroy_at=DATE_ADD(expires_at, INTERVAL 7 DAY),purge_at=NULL WHERE id=? AND status IN ('running','stopped')`, runtimeStatus, id)
+				changed, updateErr := transitionInstance(ctx, instanceDB, id, []string{"running", "stopped"}, "destroy_scheduled", &runtimeStatus, "destroy_reason='expired',destroy_at=DATE_ADD(expires_at, INTERVAL 7 DAY),purge_at=NULL")
 				if updateErr == nil {
-					affected, _ := result.RowsAffected()
-					if affected != 1 {
+					if !changed {
 						continue
 					}
 					_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status IN (?,?)`, orderExpired, id, orderActive, orderDeploy)
@@ -950,7 +1177,7 @@ func scheduleLifecycleTask(ctx context.Context, instanceID, action string, at ti
 		return controlTask{}, err
 	}
 	if affected, _ := result.RowsAffected(); affected == 0 {
-		if err := instanceDB.QueryRowContext(ctx, `SELECT id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at FROM xcloud_tasks WHERE idempotency_key=?`, key).Scan(&t.ID, &t.InstanceID, &t.Action, &t.IdempotencyKey, &t.Status, &t.Attempts, &t.LastError, &t.RunAfter, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := scanControlTask(instanceDB.QueryRowContext(ctx, `SELECT `+taskSelectFields+` FROM xcloud_tasks WHERE idempotency_key=?`, key), &t); err != nil {
 			return controlTask{}, err
 		}
 		return t, nil
@@ -994,7 +1221,7 @@ func notifyRetentionReminders(ctx context.Context) {
 }
 
 func listNodesWithUsage(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(n.last_agent_error,''),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('destroy_scheduled','destroyed') THEN 1 ELSE 0 END),0),COALESCE((SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances ti ON ti.id=t.instance_id WHERE ti.node_id=n.id AND t.action IN ('destroy','purge') AND t.status IN ('pending','running')),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -1003,7 +1230,7 @@ func listNodesWithUsage(ctx context.Context) ([]node, error) {
 	for rows.Next() {
 		var item node
 		var capabilities []byte
-		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.DockerVersion, &item.DiskAvailableBytes, &item.ManagedContainerCount, &item.AgentVersion, &item.AgentAPIVersion, &capabilities, &item.CPUReserved, &item.MemoryReservedMB); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.DockerVersion, &item.DiskAvailableBytes, &item.ManagedContainerCount, &item.AgentVersion, &item.AgentAPIVersion, &capabilities, &item.LastAgentError, &item.CPUReserved, &item.MemoryReservedMB, &item.OfflineInstanceCount, &item.PendingCleanupTasks); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(capabilities, &item.AgentCapabilities)
@@ -1061,7 +1288,7 @@ func adminMetrics(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var failures, pending, openTickets, urgentTickets int
+	var failures, pending, openTickets, urgentTickets, deploymentFailed, runtimeMissing, destroyBlocked, offlineInstances, leaseRecoveries int
 	if err = instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE status=?`, taskFailed).Scan(&failures); err != nil {
 		return nil, err
 	}
@@ -1074,5 +1301,21 @@ func adminMetrics(ctx context.Context) (map[string]any, error) {
 	if err = instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tickets WHERE status<>? AND priority=?`, ticketClosed, "urgent").Scan(&urgentTickets); err != nil {
 		return nil, err
 	}
-	return map[string]any{"nodes": nodes, "taskFailures": failures, "taskBacklog": pending, "openTickets": openTickets, "urgentTickets": urgentTickets}, nil
+	queries := []struct {
+		query string
+		dest  *int
+		args  []any
+	}{
+		{query: `SELECT COUNT(*) FROM xcloud_instances WHERE status='deployment_failed'`, dest: &deploymentFailed},
+		{query: `SELECT COUNT(*) FROM xcloud_instances WHERE runtime_status='missing'`, dest: &runtimeMissing},
+		{query: `SELECT COUNT(*) FROM xcloud_instances WHERE status='destroy_scheduled' AND destroy_at<=NOW()`, dest: &destroyBlocked},
+		{query: `SELECT COUNT(*) FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('destroy_scheduled','destroyed') AND (n.enabled=FALSE OR n.last_heartbeat_at IS NULL OR n.last_heartbeat_at<?)`, dest: &offlineInstances, args: []any{time.Now().Add(-nodeHeartbeatTTL())}},
+		{query: `SELECT COUNT(*) FROM xcloud_task_events WHERE event_type='lease_recovered' AND created_at>=NOW()-INTERVAL 24 HOUR`, dest: &leaseRecoveries},
+	}
+	for _, item := range queries {
+		if err = instanceDB.QueryRowContext(ctx, item.query, item.args...).Scan(item.dest); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"nodes": nodes, "taskFailures": failures, "taskBacklog": pending, "openTickets": openTickets, "urgentTickets": urgentTickets, "deploymentFailed": deploymentFailed, "runtimeMissing": runtimeMissing, "destroyBlocked": destroyBlocked, "offlineInstances": offlineInstances, "leaseRecoveries24h": leaseRecoveries}, nil
 }

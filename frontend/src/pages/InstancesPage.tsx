@@ -22,6 +22,7 @@ type InstanceAction =
   | 'destroy-now'
   | 'cancel-destroy'
   | 'archive'
+  | 'retry-deploy'
 
 function stateFor(status: string) {
   const value = status.toLowerCase()
@@ -35,7 +36,7 @@ function stateFor(status: string) {
     return { label: '待销毁', tone: 'pending' as const }
   if (value === 'destroyed')
     return { label: '已销毁', tone: 'neutral' as const }
-  if (['failed', 'error'].includes(value))
+  if (['failed', 'error', 'deployment_failed'].includes(value))
     return { label: '需要处理', tone: 'danger' as const }
   return { label: status || '状态同步中', tone: 'neutral' as const }
 }
@@ -55,6 +56,8 @@ function actionCopy(action: InstanceAction) {
         ]
       : action === 'cancel-destroy'
         ? ['取消销毁计划', '实例会继续保持当前运行状态。', '取消销毁计划']
+        : action === 'retry-deploy'
+          ? ['重试部署', '将重新创建实例运行资源，确定继续吗？', '重试部署']
         : action === 'archive'
           ? [
               '从列表移除',
@@ -156,13 +159,17 @@ export function InstancesPage({
       ) : (
         <div className="grid gap-4">
           {sorted.map(item => {
-            const state = stateFor(item.status)
             const lifecycle = item.status.toLowerCase()
             const runtime = item.runtimeStatus?.toLowerCase() || lifecycle
+            const state =
+              runtime === 'missing'
+                ? { label: '资源异常', tone: 'danger' as const }
+                : stateFor(item.status)
             const canOperate = ![
               'deploying',
               'creating',
               'pending',
+              'deployment_failed',
               'destroyed',
               'purged'
             ].includes(lifecycle)
@@ -205,6 +212,7 @@ export function InstancesPage({
                     <b className="mt-0.5 block text-xs text-slate-700 dark:text-slate-100">
                       {item.spec}
                     </b>
+					{item.bandwidthMbps ? <span className="mt-1 block text-[10px] text-slate-500 dark:text-slate-300">最高共享 {item.bandwidthMbps} Mbps</span> : null}
                   </div>
                 </div>
                 {lifecycle === 'destroy_scheduled' && (
@@ -330,6 +338,17 @@ export function InstancesPage({
                         }
                       >
                         从列表移除
+                      </Button>
+                    )}
+                    {lifecycle === 'deployment_failed' && (
+                      <Button
+                        tone="secondary"
+                        disabled={operating}
+                        onClick={() =>
+                          setPending({ id: item.id, action: 'retry-deploy' })
+                        }
+                      >
+                        重试部署
                       </Button>
                     )}
                   </div>

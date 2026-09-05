@@ -39,12 +39,12 @@ export function LoginPage({
             专为 ALEMONX 构建
           </p>
           <h1 className="mb-5 text-[clamp(43px,4.9vw,74px)] leading-[1.08] font-bold tracking-[-.05em]">
-            让 AlemonX，
+            让 ALemonX，
             <br />
             <span className="text-emerald-300">快速上线，稳定运行。</span>
           </h1>
           <p className="max-w-xl text-[15px] leading-7 text-slate-300">
-            选择镜像和算力，部署与运行交给 AlemonX Cloud。
+            选择镜像和算力，部署与运行交给 ALemonX Cloud。
           </p>
           <div
             className="mt-12 grid grid-cols-3 gap-2.5"

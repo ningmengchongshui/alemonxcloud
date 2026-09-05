@@ -4,6 +4,7 @@ package cloud
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"sync"
@@ -78,6 +79,49 @@ func TestIntegrationConcurrentRefundCreditsOnce(t *testing.T) {
 	}
 	if refunds != 1 || balance <= 0 {
 		t.Fatalf("refund ledger inconsistent: count=%d balance=%d", refunds, balance)
+	}
+}
+
+func TestIntegrationLifecycleTransitionAndLeaseRecovery(t *testing.T) {
+	setupIntegrationDB(t)
+	ctx := context.Background()
+	suffix := newID("lifecycle")
+	ownerID, instanceID, taskID := "user_"+suffix, "ins_"+suffix, "task_"+suffix
+	now := time.Now().UTC().Truncate(time.Second)
+	defer func() {
+		_, _ = instanceDB.Exec(`DELETE FROM xcloud_task_events WHERE task_id=?`, taskID)
+		_, _ = instanceDB.Exec(`DELETE FROM xcloud_audit_logs WHERE target_id=?`, taskID)
+		_, _ = instanceDB.Exec(`DELETE FROM xcloud_tasks WHERE id=?`, taskID)
+		_, _ = instanceDB.Exec(`DELETE FROM xcloud_instances WHERE id=?`, instanceID)
+	}()
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, "lifecycle", "example/test", "v1", "1 核 / 1 GB", "running", "https://example.test", "xcloud-lifecycle", now, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	runtime := "stopped"
+	changed, err := transitionInstance(ctx, instanceDB, instanceID, []string{"running"}, "stopped", &runtime, "")
+	if err != nil || !changed {
+		t.Fatalf("transition running -> stopped: changed=%v err=%v", changed, err)
+	}
+	changed, err = transitionInstance(ctx, instanceDB, instanceID, []string{"running"}, "destroy_scheduled", &runtime, "")
+	if err != nil || changed {
+		t.Fatalf("stale transition must not overwrite newer state: changed=%v err=%v", changed, err)
+	}
+	if _, err = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,claimed_at,claim_expires_at,worker_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, taskID, instanceID, "start", "lease:"+taskID, taskRunning, 1, now, now, now, now.Add(-10*time.Minute), now.Add(-time.Minute), "crashed-worker"); err != nil {
+		t.Fatal(err)
+	}
+	recoverExpiredTaskLeases(ctx)
+	var status string
+	var claimedAt, expiresAt sql.NullTime
+	var workerID sql.NullString
+	if err = instanceDB.QueryRowContext(ctx, `SELECT status,claimed_at,claim_expires_at,worker_id FROM xcloud_tasks WHERE id=?`, taskID).Scan(&status, &claimedAt, &expiresAt, &workerID); err != nil {
+		t.Fatal(err)
+	}
+	if status != taskPending || claimedAt.Valid || expiresAt.Valid || workerID.Valid {
+		t.Fatalf("expired lease was not safely recovered: status=%s claimed=%v expires=%v worker=%v", status, claimedAt.Valid, expiresAt.Valid, workerID.Valid)
+	}
+	var events int
+	if err = instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_task_events WHERE task_id=? AND event_type='lease_recovered'`, taskID).Scan(&events); err != nil || events != 1 {
+		t.Fatalf("lease recovery event: count=%d err=%v", events, err)
 	}
 }
 

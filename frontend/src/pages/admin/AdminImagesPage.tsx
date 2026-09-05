@@ -4,6 +4,7 @@ import { ImageSourceEditor } from '@/components/ImageSourceEditor'
 import {
   useGetAdminCatalogQuery,
   usePullAdminImageVersionMutation,
+  usePublishAdminImageVersionMutation,
   useSaveAdminImageMutation,
   useSaveAdminImageVersionMutation
 } from '@/services/cloudApi'
@@ -14,6 +15,8 @@ export function AdminImagesPage() {
   const catalog = useGetAdminCatalogQuery()
   const [saveImage] = useSaveAdminImageMutation()
   const [targetID, setTargetID] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState<CatalogImage | null>(null)
+  const [softwareName, setSoftwareName] = useState('')
   const [versionsFor, setVersionsFor] = useState<CatalogImage | null>(null)
   const [tag, setTag] = useState('latest')
   const [versionError, setVersionError] = useState('')
@@ -21,6 +24,8 @@ export function AdminImagesPage() {
     useSaveAdminImageVersionMutation()
   const [pullVersion, { isLoading: pulling }] =
     usePullAdminImageVersionMutation()
+  const [publishVersion, { isLoading: publishing }] =
+    usePublishAdminImageVersionMutation()
   const target = catalog.data?.images.find(image => image.id === targetID)
   const currentVersions = versionsFor
     ? (catalog.data?.images.find(image => image.id === versionsFor.id)
@@ -35,8 +40,8 @@ export function AdminImagesPage() {
     <section className="page super-page">
       <PageHeader
         eyebrow="镜像管理"
-        title="镜像来源"
-        description="只登记可信镜像地址和可用版本；用户仅能从这里配置的来源创建服务。"
+        title="软件与版本"
+        description="配置可信软件和可购买版本；用户只会看到软件名称与版本号。"
         actions={
           <Button
             tone="secondary"
@@ -54,9 +59,9 @@ export function AdminImagesPage() {
         <table>
           <thead>
             <tr>
-              <th>镜像名称</th>
-              <th>镜像地址</th>
-              <th>可售版本</th>
+              <th>软件名称</th>
+              <th>镜像仓库</th>
+              <th>可购买版本</th>
               <th>状态</th>
               <th />
             </tr>
@@ -82,7 +87,16 @@ export function AdminImagesPage() {
                     className="text-button"
                     onClick={() => setTargetID(image.id)}
                   >
-                    {image.enabled ? '下架' : '启用'}
+                    {image.enabled ? '下架软件' : '启用软件'}
+                  </button>
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      setRenaming(image)
+                      setSoftwareName(image.name)
+                    }}
+                  >
+                    修改名称
                   </button>
                   <button
                     className="text-button"
@@ -102,18 +116,52 @@ export function AdminImagesPage() {
       </section>
       {target && (
         <ActionDialog
-          title={`${target.enabled ? '下架' : '启用'}镜像来源`}
-          description={`确定${target.enabled ? '下架' : '启用'} ${target.name} 吗？`}
+          title={`${target.enabled ? '下架' : '启用'}软件`}
+          description={`确定${target.enabled ? '下架' : '启用'}软件 ${target.name} 吗？`}
           confirmLabel="确认操作"
           danger={target.enabled}
           onCancel={() => setTargetID(null)}
           onConfirm={() => void toggle()}
         />
       )}
+      {renaming && (
+        <Dialog
+          title="修改软件名称"
+          description="仅修改用户和运营端显示名称，不会改变镜像仓库或已部署实例。"
+          onClose={() => setRenaming(null)}
+        >
+          <div className="space-y-4">
+            <label>
+              软件名称
+              <input
+                value={softwareName}
+                onChange={event => setSoftwareName(event.target.value)}
+                data-autofocus
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button tone="secondary" onClick={() => setRenaming(null)}>
+                取消
+              </Button>
+              <Button
+                disabled={!softwareName.trim()}
+                onClick={() =>
+                  void saveImage({ ...renaming, name: softwareName.trim() })
+                    .unwrap()
+                    .then(() => setRenaming(null))
+                    .catch(() => setVersionError('软件名称保存失败'))
+                }
+              >
+                保存名称
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+      )}
       {versionsFor && (
         <Dialog
           title={`${versionsFor.name} · 版本管理`}
-          description="版本先作为草稿同步至健康节点；只有摘要一致的版本才会发布给用户。"
+          description="填写版本号后点击“验证并上架”。系统会在健康节点校验一致性，成功后用户才可购买。"
           onClose={() => setVersionsFor(null)}
         >
           <div className="space-y-4">
@@ -125,17 +173,15 @@ export function AdminImagesPage() {
                 >
                   <span>
                     <b>{version.tag}</b>
-                    {version.imageDigest ? (
-                      <small className="ml-2 text-slate-500">
-                        {version.imageDigest.slice(0, 18)}…
-                      </small>
-                    ) : null}
+                    <small className="ml-2 text-slate-500">
+                      {version.tag === 'latest' ? '非固定版本' : '推荐固定版本'}
+                    </small>
                   </span>
                   <div className="flex gap-2">
                     <span>
                       {version.status === 'ready'
                         ? version.enabled
-                          ? '已发布'
+                          ? '可购买'
                           : '已下架'
                         : version.status === 'syncing'
                           ? '同步中'
@@ -163,7 +209,7 @@ export function AdminImagesPage() {
                       disabled={version.status === 'syncing'}
                       onClick={() => void pullVersion(version)}
                     >
-                      同步并发布
+                      重新验证
                     </Button>
                   </div>
                   {version.lastError ? (
@@ -171,16 +217,20 @@ export function AdminImagesPage() {
                       {version.lastError}
                     </p>
                   ) : null}
+                  <details className="w-full text-xs text-slate-500 dark:text-slate-300">
+                    <summary>技术详情</summary>
+                    <p className="mb-0 mt-2 break-all">Digest：{version.imageDigest || '尚未生成'}</p>
+                  </details>
                 </div>
               ))}
             </div>
             <div className="grid gap-3">
               <label>
-                版本标签
+                版本号
                 <input
                   value={tag}
                   onChange={event => setTag(event.target.value)}
-                  placeholder="v1.2.0 或 latest"
+                  placeholder="例如 v2.4.1；latest 为非固定版本"
                 />
               </label>
             </div>
@@ -190,26 +240,23 @@ export function AdminImagesPage() {
                 关闭
               </Button>
               <Button
-                loading={savingVersion}
+                loading={publishing}
                 onClick={() =>
-                  void saveVersion({
-                    id: '',
-                    imageId: versionsFor.id,
-                    tag,
-                    imageDigest: '',
-                    enabled: false,
-                    status: 'draft'
-                  })
+                  void publishVersion({ imageId: versionsFor.id, tag })
                     .unwrap()
                     .then(() => {
                       setTag('')
                     })
                     .catch(error =>
-                      setVersionError(error?.data?.message ?? '保存版本失败')
+                        setVersionError(
+                          typeof error?.data?.message === 'string'
+                            ? error.data.message
+                            : '验证并上架未完成'
+                        )
                     )
                 }
               >
-                新增草稿版本
+                验证并上架
               </Button>
             </div>
           </div>

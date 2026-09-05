@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -15,6 +16,7 @@ func startControlLoops() {
 		defer ticker.Stop()
 		for range ticker.C {
 			scheduleLifecycle(context.Background())
+			recoverExpiredTaskLeases(context.Background())
 			recoverPendingTasks()
 			syncNodeHeartbeat(context.Background())
 			syncInstanceStates(context.Background())
@@ -22,6 +24,7 @@ func startControlLoops() {
 	}()
 	syncNodeHeartbeat(context.Background())
 	syncInstanceStates(context.Background())
+	recoverExpiredTaskLeases(context.Background())
 }
 func enabledNodes(ctx context.Context) ([]node, error) {
 	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND last_heartbeat_at>=?`, time.Now().Add(-nodeHeartbeatTTL()))
@@ -83,25 +86,39 @@ func syncNodeHeartbeat(ctx context.Context) {
 			MemoryTotalMB         int      `json:"memoryTotalMB"`
 			DiskAvailableBytes    int64    `json:"diskAvailableBytes"`
 			ManagedContainerCount int      `json:"managedContainerCount"`
+			BandwidthToolsReady   bool     `json:"bandwidthToolsReady"`
 		}
 		probe, cancel := context.WithTimeout(ctx, 8*time.Second)
 		err := nodeRequest(probe, n, "GET", "/container/status", nil, &s)
 		cancel()
 		if err != nil {
 			log.Printf("node %s heartbeat: %v", n.ID, err)
+			_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_nodes SET last_agent_error=?,updated_at=NOW() WHERE id=?`, truncateError(err.Error()), n.ID)
 			continue
 		}
+		if !s.BandwidthToolsReady {
+			s.Capabilities = removeAgentCapability(s.Capabilities, "network.bandwidth.v1")
+		}
 		capabilities, _ := json.Marshal(s.Capabilities)
-		query := `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
+		query := `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),last_agent_error=NULL,docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
 		args := []any{s.DockerVersion, s.AgentVersion, s.APIVersion, string(capabilities), s.DiskAvailableBytes, s.ManagedContainerCount, n.ID}
 		if s.CPUTotal > 0 && s.MemoryTotalMB >= 256 {
-			query = `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),cpu_detected=?,memory_detected_mb=?,docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
+			query = `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),last_agent_error=NULL,cpu_detected=?,memory_detected_mb=?,docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
 			args = []any{s.CPUTotal, s.MemoryTotalMB, s.DockerVersion, s.AgentVersion, s.APIVersion, string(capabilities), s.DiskAvailableBytes, s.ManagedContainerCount, n.ID}
 		}
 		if _, err := instanceDB.ExecContext(ctx, query, args...); err != nil {
 			log.Printf("save node %s heartbeat: %v", n.ID, err)
 		}
 	}
+}
+func removeAgentCapability(values []string, excluded string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != excluded {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 func syncInstanceStates(ctx context.Context) {
 	if instanceDB == nil {
@@ -126,6 +143,15 @@ func syncInstanceStates(ctx context.Context) {
 		err := nodeRequest(probe, n, "GET", "/container/"+name+"/status", nil, &body)
 		cancel()
 		if err != nil {
+			if strings.Contains(err.Error(), "返回 404") {
+				// A missing container is a runtime fault, not permission to alter the
+				// paid lifecycle. Keep data and the destruction plan intact.
+				if result, updateErr := instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET runtime_status='missing' WHERE id=? AND status=? AND COALESCE(runtime_status,'')<>'missing'`, id, stored); updateErr != nil {
+					log.Printf("mark missing instance %s: %v", id, updateErr)
+				} else if affected, _ := result.RowsAffected(); affected == 1 {
+					_ = writeAudit(ctx, "system", "instance.runtime_missing", "instance", id, map[string]any{"nodeId": n.ID})
+				}
+			}
 			continue
 		}
 		next := stored
@@ -142,7 +168,7 @@ func syncInstanceStates(ctx context.Context) {
 			}
 		}
 		if next != stored || nextRuntime != runtimeStatus {
-			if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=?,runtime_status=? WHERE id=?`, next, nextRuntime, id); err != nil {
+			if _, err := transitionInstance(ctx, instanceDB, id, []string{stored}, next, &nextRuntime, ""); err != nil {
 				log.Printf("sync instance %s: %v", id, err)
 			}
 		}
