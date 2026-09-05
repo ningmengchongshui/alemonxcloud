@@ -328,7 +328,11 @@ export function OrdersPage({
             trackConsoleEvent('renew_order', 'me', 'orders', {
               result: 'started'
             })
-            void renewOrder({ id: renewing.id, months: value, couponCode: renewCoupon || undefined })
+            void renewOrder({
+              id: renewing.id,
+              months: value,
+              couponCode: renewCoupon || undefined
+            })
               .unwrap()
               .then(() => {
                 trackConsoleEvent('renew_order', 'me', 'orders', {

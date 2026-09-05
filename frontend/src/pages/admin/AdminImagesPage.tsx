@@ -23,7 +23,8 @@ export function AdminImagesPage() {
     usePullAdminImageVersionMutation()
   const target = catalog.data?.images.find(image => image.id === targetID)
   const currentVersions = versionsFor
-    ? catalog.data?.images.find(image => image.id === versionsFor.id)?.versions ?? versionsFor.versions
+    ? (catalog.data?.images.find(image => image.id === versionsFor.id)
+        ?.versions ?? versionsFor.versions)
     : []
   async function toggle() {
     if (!target) return

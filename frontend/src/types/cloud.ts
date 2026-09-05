@@ -98,11 +98,61 @@ export interface Order {
   imageName: string
   imageVersion: string
 }
-export interface PriceCandidate { id: string; kind: 'new_user' | 'campaign' | 'coupon'; name: string; discountAmountFen: number; payableAmountFen: number; isDefault: boolean }
-export interface PriceQuote { listAmountFen: number; discountAmountFen: number; amountFen: number; selectedId?: string; candidates: PriceCandidate[] }
-export interface Promotion { id: string; name: string; kind: 'new_user' | 'campaign'; scope: 'purchase' | 'renewal' | 'both'; discountType: 'fixed' | 'percent'; discountValue: number; minAmountFen: number; maxDiscountFen: number; planIDs: string[]; imageIDs: string[]; monthValues: string[]; startsAt?: string; endsAt?: string; totalLimit: number; perUserLimit: number; usedCount: number; enabled: boolean; createdAt: string }
-export interface Coupon { id: string; promotionId: string; codeMask: string; mode: 'single' | 'general'; enabled: boolean; totalLimit: number; perUserLimit: number; usedCount: number; createdAt: string }
-export interface CouponRedemption { id: string; promotionId: string; couponId?: string; ownerId: string; orderId: string; discountAmountFen: number; createdAt: string }
+export interface PriceCandidate {
+  id: string
+  kind: 'new_user' | 'campaign' | 'coupon'
+  name: string
+  discountAmountFen: number
+  payableAmountFen: number
+  isDefault: boolean
+}
+export interface PriceQuote {
+  listAmountFen: number
+  discountAmountFen: number
+  amountFen: number
+  selectedId?: string
+  candidates: PriceCandidate[]
+}
+export interface Promotion {
+  id: string
+  name: string
+  kind: 'new_user' | 'campaign'
+  scope: 'purchase' | 'renewal' | 'both'
+  discountType: 'fixed' | 'percent'
+  discountValue: number
+  minAmountFen: number
+  maxDiscountFen: number
+  planIDs: string[]
+  imageIDs: string[]
+  monthValues: string[]
+  startsAt?: string
+  endsAt?: string
+  totalLimit: number
+  perUserLimit: number
+  usedCount: number
+  enabled: boolean
+  createdAt: string
+}
+export interface Coupon {
+  id: string
+  promotionId: string
+  codeMask: string
+  mode: 'single' | 'general'
+  enabled: boolean
+  totalLimit: number
+  perUserLimit: number
+  usedCount: number
+  createdAt: string
+}
+export interface CouponRedemption {
+  id: string
+  promotionId: string
+  couponId?: string
+  ownerId: string
+  orderId: string
+  discountAmountFen: number
+  createdAt: string
+}
 export interface Node {
   id: string
   name: string

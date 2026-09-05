@@ -91,7 +91,10 @@ export function Shell({
         { key: 'nodes', icon: '◌', label: '节点管理' }
       ]
     },
-    { label: '营销运营', items: [{ key: 'promotions', icon: '✦', label: '营销与优惠' }] },
+    {
+      label: '营销运营',
+      items: [{ key: 'promotions', icon: '✦', label: '营销与优惠' }]
+    },
     {
       label: '账户与合规',
       items: [
