@@ -16,10 +16,14 @@ import type { SuperPage } from '@/types/cloud'
 // Route-level dispatcher: each page owns its own query and mutation lifecycle.
 export function AdminPage({
   page,
-  onOpenWalletHistory
+  onOpenWalletHistory,
+  onCreatePromotion,
+  onEditPromotion
 }: {
   page: SuperPage
   onOpenWalletHistory?: (user: { id: string }) => void
+  onCreatePromotion?: () => void
+  onEditPromotion?: (id: string) => void
 }) {
   if (page === 'catalog') return <AdminCatalogPage />
   if (page === 'images') return <AdminImagesPage />
@@ -27,7 +31,13 @@ export function AdminPage({
   if (page === 'orders') return <AdminOrdersPage />
   if (page === 'tasks') return <AdminTasksPage />
   if (page === 'tickets') return <AdminTicketsPage />
-  if (page === 'promotions') return <AdminPromotionsPage />
+  if (page === 'promotions')
+    return (
+      <AdminPromotionsPage
+        onCreate={onCreatePromotion}
+        onEdit={onEditPromotion}
+      />
+    )
   if (page === 'settings') return <AdminSettingsPage />
   if (page === 'users')
     return <AdminUsersPage onOpenWalletHistory={onOpenWalletHistory} />

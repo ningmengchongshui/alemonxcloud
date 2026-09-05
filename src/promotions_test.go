@@ -27,8 +27,17 @@ func TestCouponCodeNormalizationAndHash(t *testing.T) {
 }
 
 func TestPromotionValidation(t *testing.T) {
-	if err := validPromotion(promotion{Name: "新人", Kind: "new_user", Scope: "purchase", DiscountType: "fixed", DiscountValue: 1}); err != nil {
+	if err := validPromotion(promotion{Name: "新人", Kind: "newcomer", Scope: "purchase", DiscountType: "fixed", DiscountValue: 1}); err != nil {
 		t.Fatal(err)
+	}
+	if err := validPromotion(promotion{Name: "套餐首购", Kind: "first_plan_purchase", Scope: "purchase", PlanIDs: []string{"plan-a"}, DiscountType: "fixed", DiscountValue: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validPromotion(promotion{Name: "缺套餐", Kind: "first_plan_purchase", Scope: "purchase", DiscountType: "fixed", DiscountValue: 1}); err == nil {
+		t.Fatal("expected first-plan promotion without plans to fail")
+	}
+	if err := validPromotion(promotion{Name: "新人续费", Kind: "newcomer", Scope: "renewal", DiscountType: "fixed", DiscountValue: 1}); err == nil {
+		t.Fatal("expected newcomer renewal promotion to fail")
 	}
 	if err := validPromotion(promotion{Name: "bad", Kind: "campaign", Scope: "both", DiscountType: "percent", DiscountValue: 10001}); err == nil {
 		t.Fatal("expected invalid percentage")

@@ -44,7 +44,9 @@ export function WalletPage() {
               {walletLoading ? (
                 '—'
               ) : (
-                <XCoinAmount value={((wallet?.balanceFen ?? 0) / 100).toFixed(2)} />
+                <XCoinAmount
+                  value={((wallet?.balanceFen ?? 0) / 100).toFixed(2)}
+                />
               )}
             </strong>
           </p>

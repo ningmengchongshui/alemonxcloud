@@ -506,7 +506,11 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	appendTaskEvent(ctx, t.ID, "queued", "钱包扣款后等待部署")
 	_ = createNotification(ctx, ownerID, "purchase", "购买已提交", fmt.Sprintf("已扣除 %.2f XCoin，正在部署。", float64(amount)/100), map[string]any{"orderId": o.ID, "instanceId": instanceID, "taskId": t.ID})
 	if quote.DiscountAmountFen > 0 {
-		_ = createNotification(ctx, ownerID, "promotion", "优惠已使用", fmt.Sprintf("本次订单已优惠 %.2f XCoin。", float64(quote.DiscountAmountFen)/100), map[string]any{"orderId": o.ID, "promotionId": quote.SelectedID})
+		title := "优惠已使用"
+		if selectedPromotion != nil {
+			title = promotionLabel(selectedPromotion.Kind) + "已使用"
+		}
+		_ = createNotification(ctx, ownerID, "promotion", title, fmt.Sprintf("本次订单已优惠 %.2f XCoin。", float64(quote.DiscountAmountFen)/100), map[string]any{"orderId": o.ID, "promotionId": quote.SelectedID})
 	}
 	return o, t, nil
 }
@@ -611,7 +615,11 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	}
 	_ = createNotification(ctx, ownerID, "renewal", "续费成功", fmt.Sprintf("已扣除 %.2f XCoin，服务有效期已延长。", float64(amount)/100), map[string]any{"orderId": item.ID, "instanceId": source.InstanceID})
 	if quote.DiscountAmountFen > 0 {
-		_ = createNotification(ctx, ownerID, "promotion", "续费优惠已使用", fmt.Sprintf("本次续费已优惠 %.2f XCoin。", float64(quote.DiscountAmountFen)/100), map[string]any{"orderId": item.ID, "promotionId": quote.SelectedID})
+		title := "续费优惠已使用"
+		if selectedPromotion != nil {
+			title = promotionLabel(selectedPromotion.Kind) + "已使用"
+		}
+		_ = createNotification(ctx, ownerID, "promotion", title, fmt.Sprintf("本次续费已优惠 %.2f XCoin。", float64(quote.DiscountAmountFen)/100), map[string]any{"orderId": item.ID, "promotionId": quote.SelectedID})
 	}
 	return item, task, nil
 }

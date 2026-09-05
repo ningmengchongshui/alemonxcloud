@@ -21,6 +21,7 @@ import { UserOverviewPage } from './pages/UserOverviewPage'
 import { LoginPage } from './pages/LoginPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { AdminPage } from './pages/AdminPage'
+import { AdminPromotionEditor } from './pages/admin/AdminPromotionEditor'
 import type { Page, SuperPage } from '@/types/cloud'
 
 const userPaths = new Set([
@@ -95,6 +96,16 @@ function instanceLogID(path: string) {
 }
 function ticketID(path: string) {
   const match = path.match(/^\/me\/tickets\/([^/]+)$/)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+}
+function promotionEditorID(path: string) {
+  if (path === '/super/promotions/new') return ''
+  const match = path.match(/^\/super\/promotions\/([^/]+)\/edit$/)
   if (!match) return null
   try {
     return decodeURIComponent(match[1])
@@ -215,7 +226,8 @@ export default function App() {
   }
   const walletUserID = walletHistoryUserID(path)
   const superPage = superPageFor(path)
-  if (superPage || walletUserID) {
+  const promotionEditor = promotionEditorID(path)
+  if (superPage || walletUserID || promotionEditor !== null) {
     if (!session.user.isAdmin) {
       navigate('/me', true)
       return null
@@ -224,12 +236,17 @@ export default function App() {
       <Shell
         user={session.user}
         area="super"
-        superPage={superPage ?? 'users'}
+        superPage={superPage ?? 'promotions'}
         onSuperPageChange={next => navigate(superPaths[next])}
         onGoToMe={() => navigate('/me')}
         onLogout={signOut}
       >
-        {walletUserID ? (
+        {promotionEditor !== null ? (
+          <AdminPromotionEditor
+            promotionID={promotionEditor || undefined}
+            onBack={() => navigate('/super/promotions')}
+          />
+        ) : walletUserID ? (
           <WalletHistoryPage
             userID={walletUserID}
             onBack={() => navigate('/super/users')}
@@ -237,6 +254,10 @@ export default function App() {
         ) : (
           <AdminPage
             page={superPage!}
+            onCreatePromotion={() => navigate('/super/promotions/new')}
+            onEditPromotion={id =>
+              navigate(`/super/promotions/${encodeURIComponent(id)}/edit`)
+            }
             onOpenWalletHistory={user =>
               navigate(`/super/users/${encodeURIComponent(user.id)}/wallet`)
             }

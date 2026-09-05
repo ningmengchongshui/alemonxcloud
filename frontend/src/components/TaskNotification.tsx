@@ -7,14 +7,16 @@ import { clearWatchedTask } from '@/store/uiSlice'
 import type { Task } from '@/types/cloud'
 
 function taskLabel(action: string) {
-  return ({
-    create: '创建服务',
-    start: '启动',
-    stop: '关机',
-    restart: '重启',
-    delete: '删除',
-    deploy: '部署'
-  }[action] ?? '资源操作')
+  return (
+    {
+      create: '创建服务',
+      start: '启动',
+      stop: '关机',
+      restart: '重启',
+      delete: '删除',
+      deploy: '部署'
+    }[action] ?? '资源操作'
+  )
 }
 
 export function TaskNotification() {
@@ -27,7 +29,8 @@ export function TaskNotification() {
   })
 
   useEffect(() => {
-    if (!data || (data.status !== 'succeeded' && data.status !== 'failed')) return
+    if (!data || (data.status !== 'succeeded' && data.status !== 'failed'))
+      return
     setResult(data)
     dispatch(clearWatchedTask())
   }, [data, dispatch])
@@ -63,7 +66,9 @@ export function TaskNotification() {
             {failed ? `${action}未完成` : `${action}已完成`}
           </h2>
           <p className="mb-0 mt-1 text-xs leading-5 text-slate-500 dark:text-slate-300">
-            {failed ? result.lastError || '任务未能完成，请稍后重试。' : '服务状态已更新。'}
+            {failed
+              ? result.lastError || '任务未能完成，请稍后重试。'
+              : '服务状态已更新。'}
           </p>
         </div>
         <button

@@ -110,8 +110,10 @@ export interface Order {
 }
 export interface PriceCandidate {
   id: string
-  kind: 'new_user' | 'campaign' | 'coupon'
+  kind: 'newcomer' | 'first_plan_purchase' | 'campaign' | 'coupon'
   name: string
+  label: string
+  eligibilityReason?: string
   discountAmountFen: number
   payableAmountFen: number
   isDefault: boolean
@@ -127,7 +129,7 @@ export interface PriceQuote {
 export interface Promotion {
   id: string
   name: string
-  kind: 'new_user' | 'campaign'
+  kind: 'newcomer' | 'first_plan_purchase' | 'campaign'
   scope: 'purchase' | 'renewal' | 'both'
   discountType: 'fixed' | 'percent'
   discountValue: number

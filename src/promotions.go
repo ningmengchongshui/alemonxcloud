@@ -37,6 +37,8 @@ type priceCandidate struct {
 	CouponCode                          string `json:"-"`
 	DiscountAmountFen, PayableAmountFen int
 	IsDefault                           bool
+	Label                               string `json:"label"`
+	EligibilityReason                   string `json:"eligibilityReason,omitempty"`
 }
 type priceQuote struct {
 	ListAmountFen     int              `json:"listAmountFen"`
@@ -66,14 +68,17 @@ func validPromotion(v promotion) error {
 	if v.Name == "" || len(v.Name) > 128 {
 		return errors.New("活动名称长度应为 1 至 128")
 	}
-	if v.Kind != "new_user" && v.Kind != "campaign" {
+	if v.Kind != "campaign" && v.Kind != "newcomer" && v.Kind != "first_plan_purchase" {
 		return errors.New("活动类型无效")
 	}
 	if v.Scope != "purchase" && v.Scope != "renewal" && v.Scope != "both" {
 		return errors.New("适用范围无效")
 	}
-	if v.Kind == "new_user" && v.Scope != "purchase" {
-		return errors.New("新人优惠只能适用于新购")
+	if (v.Kind == "newcomer" || v.Kind == "first_plan_purchase") && v.Scope != "purchase" {
+		return errors.New("新人专属和套餐新购优惠只能适用于新购")
+	}
+	if v.Kind == "first_plan_purchase" && len(v.PlanIDs) == 0 {
+		return errors.New("套餐新购优惠必须至少选择一个套餐")
 	}
 	if v.DiscountType != "fixed" && v.DiscountType != "percent" {
 		return errors.New("优惠类型无效")
@@ -121,7 +126,7 @@ func promotionMatches(v promotion, ownerID, scope, planID, imageID string, month
 			return false, nil
 		}
 	}
-	if v.Kind == "new_user" {
+	if v.Kind == "newcomer" {
 		var count int
 		q := instanceDB.QueryRowContext
 		if tx != nil {
@@ -134,7 +139,33 @@ func promotionMatches(v promotion, ownerID, scope, planID, imageID string, month
 			return false, nil
 		}
 	}
+	if v.Kind == "first_plan_purchase" {
+		var count int
+		q := instanceDB.QueryRowContext
+		if tx != nil {
+			q = tx.QueryRowContext
+		}
+		if err := q(context.Background(), `SELECT COUNT(*) FROM xcloud_orders WHERE owner_id=? AND plan_id=? AND payment_source='wallet' AND status NOT IN ('cancelled','rejected')`, ownerID, planID).Scan(&count); err != nil {
+			return false, err
+		}
+		if count > 0 {
+			return false, nil
+		}
+	}
 	return true, nil
+}
+
+func promotionLabel(kind string) string {
+	switch kind {
+	case "newcomer":
+		return "新人专属"
+	case "first_plan_purchase":
+		return "套餐新购优惠"
+	case "coupon":
+		return "已领取代金券"
+	default:
+		return "活动优惠"
+	}
 }
 func promotionDiscount(v promotion, list int) int {
 	d := v.DiscountValue
@@ -185,7 +216,7 @@ func consumePromotionTx(ctx context.Context, tx *sql.Tx, ownerID, orderID string
 			}
 		}
 	}
-	snap, _ := json.Marshal(map[string]any{"id": p.ID, "name": p.Name, "kind": p.Kind, "discountType": p.DiscountType, "discountValue": p.DiscountValue, "discountAmountFen": quote.DiscountAmountFen, "couponMask": func() string {
+	snap, _ := json.Marshal(map[string]any{"id": p.ID, "name": p.Name, "kind": p.Kind, "label": promotionLabel(p.Kind), "discountType": p.DiscountType, "discountValue": p.DiscountValue, "discountAmountFen": quote.DiscountAmountFen, "couponMask": func() string {
 		if cp != nil {
 			return cp.CodeMask
 		}
@@ -203,7 +234,18 @@ func consumePromotionTx(ctx context.Context, tx *sql.Tx, ownerID, orderID string
 	return e
 }
 func activePromotions(ctx context.Context, tx *sql.Tx, lock bool) ([]promotion, error) {
-	q := `SELECT id,name,kind,scope,discount_type,discount_value,min_amount_fen,max_discount_fen,COALESCE(plan_ids,JSON_ARRAY()),COALESCE(image_ids,JSON_ARRAY()),COALESCE(month_values,JSON_ARRAY()),starts_at,ends_at,total_limit,per_user_limit,used_count,enabled,created_by,created_at,updated_at FROM xcloud_promotions WHERE enabled=TRUE`
+	return loadPromotions(ctx, tx, lock, true)
+}
+
+func allPromotions(ctx context.Context) ([]promotion, error) {
+	return loadPromotions(ctx, nil, false, false)
+}
+
+func loadPromotions(ctx context.Context, tx *sql.Tx, lock, enabledOnly bool) ([]promotion, error) {
+	q := `SELECT id,name,kind,scope,discount_type,discount_value,min_amount_fen,max_discount_fen,COALESCE(plan_ids,JSON_ARRAY()),COALESCE(image_ids,JSON_ARRAY()),COALESCE(month_values,JSON_ARRAY()),starts_at,ends_at,total_limit,per_user_limit,used_count,enabled,created_by,created_at,updated_at FROM xcloud_promotions`
+	if enabledOnly {
+		q += " WHERE enabled=TRUE"
+	}
 	if lock {
 		q += " FOR UPDATE"
 	}
@@ -268,7 +310,7 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 			continue
 		}
 		d := promotionDiscount(values[i], list)
-		candidates = append(candidates, priceCandidate{ID: values[i].ID, Kind: values[i].Kind, Name: values[i].Name, DiscountAmountFen: d, PayableAmountFen: list - d})
+		candidates = append(candidates, priceCandidate{ID: values[i].ID, Kind: values[i].Kind, Name: values[i].Name, Label: promotionLabel(values[i].Kind), EligibilityReason: "当前订单符合使用条件", DiscountAmountFen: d, PayableAmountFen: list - d})
 		if selectedID == values[i].ID {
 			selectedPromo = &values[i]
 		}
@@ -296,7 +338,7 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 		if !ok || !cp.Enabled || (cp.TotalLimit > 0 && cp.UsedCount >= cp.TotalLimit) {
 			continue
 		}
-		candidates = append(candidates, priceCandidate{ID: claim.ID, Kind: "coupon", Name: p.Name + " · 已领取", DiscountAmountFen: promotionDiscount(p, list), PayableAmountFen: list - promotionDiscount(p, list)})
+		candidates = append(candidates, priceCandidate{ID: claim.ID, Kind: "coupon", Name: p.Name + " · 已领取", Label: promotionLabel("coupon"), EligibilityReason: "已领取至优惠券包", DiscountAmountFen: promotionDiscount(p, list), PayableAmountFen: list - promotionDiscount(p, list)})
 	}
 	if couponCode != "" {
 		var cp coupon
@@ -336,7 +378,7 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 			}
 		}
 		d := promotionDiscount(p, list)
-		candidates = append(candidates, priceCandidate{ID: cp.ID, Kind: "coupon", Name: p.Name, DiscountAmountFen: d, PayableAmountFen: list - d})
+		candidates = append(candidates, priceCandidate{ID: cp.ID, Kind: "coupon", Name: p.Name, Label: promotionLabel("coupon"), EligibilityReason: "券码有效", DiscountAmountFen: d, PayableAmountFen: list - d})
 		couponPromotion = &p
 		enteredCoupon = &cp
 	}

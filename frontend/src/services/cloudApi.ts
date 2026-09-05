@@ -244,11 +244,18 @@ export const cloudApi = createApi({
       providesTags: ['Promotions', 'Admin']
     }),
     saveAdminPromotion: builder.mutation<Promotion, Promotion>({
-      query: body => ({
-        url: body.id ? `/admin/promotions/${body.id}` : '/admin/promotions',
-        method: body.id ? 'PUT' : 'POST',
-        body
-      }),
+      query: promotion => {
+        const {
+          createdAt: _createdAt,
+          usedCount: _usedCount,
+          ...body
+        } = promotion
+        return {
+          url: body.id ? `/admin/promotions/${body.id}` : '/admin/promotions',
+          method: body.id ? 'PUT' : 'POST',
+          body
+        }
+      },
       invalidatesTags: ['Promotions', 'Admin']
     }),
     getAdminCoupons: builder.query<Coupon[], void>({

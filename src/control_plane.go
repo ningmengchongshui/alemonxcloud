@@ -401,11 +401,15 @@ func scanOrders(ctx context.Context, statement string, args ...any) ([]order, er
 	items := []order{}
 	for rows.Next() {
 		var v order
-		var snapshot []byte
+		// JSON is nullable for historical orders. sql.NullString accepts both a
+		// driver []byte and NULL, whereas json.RawMessage cannot scan NULL.
+		var snapshot sql.NullString
 		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.ListAmountFen, &v.DiscountAmountFen, &snapshot, &v.Status, &v.PaymentNote, &v.ServiceStartsAt, &v.ExpiresAt, &v.RefundedAt, &v.RefundAmountFen, &v.RefundWalletEntryID, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion); err != nil {
 			return nil, err
 		}
-		v.PromotionSnapshot = snapshot
+		if snapshot.Valid {
+			v.PromotionSnapshot = json.RawMessage(snapshot.String)
+		}
 		items = append(items, v)
 	}
 	return items, rows.Err()

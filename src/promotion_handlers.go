@@ -3,6 +3,7 @@ package cloud
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -78,8 +79,12 @@ func claimPromotionHandler(c *gin.Context) {
 		businessError(c, errors.New("当前活动暂无可领取代金券"))
 		return
 	}
-	var count, limit int
-	if err = tx.QueryRowContext(c.Request.Context(), `SELECT COUNT(*),total_limit FROM xcloud_coupon_claims JOIN xcloud_coupons ON xcloud_coupons.id=xcloud_coupon_claims.coupon_id WHERE coupon_id=? FOR UPDATE`, couponID).Scan(&count, &limit); err != nil {
+	var limit, count int
+	if err = tx.QueryRowContext(c.Request.Context(), `SELECT total_limit FROM xcloud_coupons WHERE id=? FOR UPDATE`, couponID).Scan(&limit); err != nil {
+		internalError(c, err)
+		return
+	}
+	if err = tx.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_coupon_claims WHERE coupon_id=?`, couponID).Scan(&count); err != nil {
 		internalError(c, err)
 		return
 	}
@@ -129,7 +134,7 @@ func quoteRenewHandler(c *gin.Context) {
 	c.JSON(200, q)
 }
 func adminPromotions(c *gin.Context) {
-	values, err := activePromotions(c, nil, false)
+	values, err := allPromotions(c)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -137,8 +142,19 @@ func adminPromotions(c *gin.Context) {
 	c.JSON(200, values)
 }
 func adminSavePromotion(c *gin.Context) {
+	// Timestamps and usage counters are server-owned. In particular, an empty
+	// createdAt from a new-form must never be parsed as a client time value.
+	var raw map[string]json.RawMessage
+	if c.ShouldBindJSON(&raw) != nil {
+		c.JSON(400, gin.H{"message": "活动参数无效"})
+		return
+	}
+	delete(raw, "createdAt")
+	delete(raw, "updatedAt")
+	delete(raw, "usedCount")
+	payload, err := json.Marshal(raw)
 	var v promotion
-	if c.ShouldBindJSON(&v) != nil {
+	if err != nil || json.Unmarshal(payload, &v) != nil {
 		c.JSON(400, gin.H{"message": "活动参数无效"})
 		return
 	}
@@ -157,11 +173,11 @@ func adminSavePromotion(c *gin.Context) {
 		v.CreatedAt = now
 	}
 	v.UpdatedAt = now
-	if _, err := instanceDB.ExecContext(c, `INSERT INTO xcloud_promotions (id,name,kind,scope,discount_type,discount_value,min_amount_fen,max_discount_fen,plan_ids,image_ids,month_values,starts_at,ends_at,total_limit,per_user_limit,used_count,enabled,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),scope=VALUES(scope),discount_type=VALUES(discount_type),discount_value=VALUES(discount_value),min_amount_fen=VALUES(min_amount_fen),max_discount_fen=VALUES(max_discount_fen),plan_ids=VALUES(plan_ids),image_ids=VALUES(image_ids),month_values=VALUES(month_values),starts_at=VALUES(starts_at),ends_at=VALUES(ends_at),total_limit=VALUES(total_limit),per_user_limit=VALUES(per_user_limit),enabled=VALUES(enabled),updated_at=VALUES(updated_at)`, v.ID, strings.TrimSpace(v.Name), v.Kind, v.Scope, v.DiscountType, v.DiscountValue, v.MinAmountFen, v.MaxDiscountFen, jsonStringSlice(v.PlanIDs), jsonStringSlice(v.ImageIDs), jsonStringSlice(v.MonthValues), v.StartsAt, v.EndsAt, v.TotalLimit, v.PerUserLimit, 0, v.Enabled, v.CreatedBy, v.CreatedAt, v.UpdatedAt); err != nil {
+	if _, err := instanceDB.ExecContext(c, `INSERT INTO xcloud_promotions (id,name,kind,scope,discount_type,discount_value,min_amount_fen,max_discount_fen,plan_ids,image_ids,month_values,starts_at,ends_at,total_limit,per_user_limit,used_count,enabled,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),kind=VALUES(kind),scope=VALUES(scope),discount_type=VALUES(discount_type),discount_value=VALUES(discount_value),min_amount_fen=VALUES(min_amount_fen),max_discount_fen=VALUES(max_discount_fen),plan_ids=VALUES(plan_ids),image_ids=VALUES(image_ids),month_values=VALUES(month_values),starts_at=VALUES(starts_at),ends_at=VALUES(ends_at),total_limit=VALUES(total_limit),per_user_limit=VALUES(per_user_limit),enabled=VALUES(enabled),updated_at=VALUES(updated_at)`, v.ID, strings.TrimSpace(v.Name), v.Kind, v.Scope, v.DiscountType, v.DiscountValue, v.MinAmountFen, v.MaxDiscountFen, jsonStringSlice(v.PlanIDs), jsonStringSlice(v.ImageIDs), jsonStringSlice(v.MonthValues), v.StartsAt, v.EndsAt, v.TotalLimit, v.PerUserLimit, 0, v.Enabled, v.CreatedBy, v.CreatedAt, v.UpdatedAt); err != nil {
 		internalError(c, err)
 		return
 	}
-	_ = writeAudit(c, user.ID, "promotion.save", "promotion", v.ID, map[string]any{"kind": v.Kind, "enabled": v.Enabled})
+	_ = writeAudit(c, user.ID, "promotion.save", "promotion", v.ID, map[string]any{"kind": v.Kind, "label": promotionLabel(v.Kind), "enabled": v.Enabled})
 	c.JSON(200, v)
 }
 func adminCoupons(c *gin.Context) {
