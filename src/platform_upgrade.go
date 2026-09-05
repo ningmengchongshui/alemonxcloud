@@ -347,7 +347,7 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 			return node{}, err
 		}
 		_ = json.Unmarshal(capabilities, &n.AgentCapabilities)
-		if !n.supportsAgentCapability("network.bandwidth.v1") {
+		if !n.supportsAgentCapability("network.bandwidth.v1") || !n.supportsAgentCapability("network.bandwidth.status.v1") || !n.supportsAgentCapability("network.bandwidth.queue.v1") {
 			continue
 		}
 		candidates = append(candidates, n)
@@ -418,7 +418,9 @@ func nodeRequest(ctx context.Context, n node, method, path string, payload any, 
 		return fmt.Errorf("节点 %s 返回 %d", n.Name, resp.StatusCode)
 	}
 	if result != nil {
-		return json.NewDecoder(resp.Body).Decode(result)
+		if err := json.NewDecoder(resp.Body).Decode(result); err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
 	}
 	return nil
 }

@@ -22,9 +22,77 @@ func startControlLoops() {
 			syncInstanceStates(context.Background())
 		}
 	}()
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			reconcileBandwidthTasks(context.Background())
+		}
+	}()
 	syncNodeHeartbeat(context.Background())
 	syncInstanceStates(context.Background())
 	recoverExpiredTaskLeases(context.Background())
+	reconcileBandwidthTasks(context.Background())
+}
+
+// reconcileBandwidthTasks is intentionally limited to running instances on a
+// healthy node. A stopped container has no reliable veth to shape; its start
+// action reapplies bandwidth instead of generating a false failure task.
+func reconcileBandwidthTasks(ctx context.Context) {
+	if instanceDB == nil {
+		return
+	}
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,COALESCE(n.agent_capabilities,JSON_ARRAY())
+		FROM xcloud_instances i
+		JOIN xcloud_nodes n ON n.id=i.node_id
+		WHERE i.status IN ('running','destroy_scheduled')
+		  AND COALESCE(i.runtime_status,i.status)='running'
+		  AND COALESCE(i.bandwidth_status,'pending') IN ('pending','failed')
+		  AND n.enabled=TRUE AND n.last_heartbeat_at>=?`, time.Now().Add(-nodeHeartbeatTTL()))
+	if err != nil {
+		log.Printf("load bandwidth reconciliation: %v", err)
+		return
+	}
+	defer rows.Close()
+	instanceIDs := make([]string, 0)
+	for rows.Next() {
+		var instanceID string
+		var rawCapabilities []byte
+		if err := rows.Scan(&instanceID, &rawCapabilities); err != nil {
+			continue
+		}
+		var capabilities []string
+		_ = json.Unmarshal(rawCapabilities, &capabilities)
+		statusSupported := false
+		queueSupported := false
+		for _, capability := range capabilities {
+			if capability == "network.bandwidth.status.v1" {
+				statusSupported = true
+			}
+			if capability == "network.bandwidth.queue.v1" {
+				queueSupported = true
+			}
+		}
+		if statusSupported && queueSupported {
+			instanceIDs = append(instanceIDs, instanceID)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		log.Printf("close bandwidth reconciliation rows: %v", err)
+		return
+	}
+	for _, instanceID := range instanceIDs {
+		task, scheduled, err := scheduleBandwidthTask(ctx, instanceID, "system")
+		if err != nil {
+			log.Printf("schedule bandwidth reconciliation for %s: %v", instanceID, err)
+			continue
+		}
+		if scheduled {
+			if err := enqueuePersistedTask(ctx, task); err != nil {
+				log.Printf("enqueue bandwidth reconciliation for %s: %v", instanceID, err)
+			}
+		}
+	}
 }
 func enabledNodes(ctx context.Context) ([]node, error) {
 	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND last_heartbeat_at>=?`, time.Now().Add(-nodeHeartbeatTTL()))

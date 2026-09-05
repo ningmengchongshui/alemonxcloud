@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -690,20 +691,42 @@ func adminTasks(c *gin.Context) {
 }
 
 func reconcileAllBandwidthHandler(c *gin.Context) {
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id FROM xcloud_instances WHERE status IN ('running','stopped','destroy_scheduled')`)
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT i.id,COALESCE(n.agent_capabilities,JSON_ARRAY()) FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('running','destroy_scheduled') AND COALESCE(i.runtime_status,i.status)='running'`)
 	if err != nil {
 		internalError(c, err)
 		return
 	}
-	defer rows.Close()
-	count := 0
+	instanceIDs := make([]string, 0)
 	for rows.Next() {
 		var id string
-		if rows.Scan(&id) != nil {
+		var rawCapabilities []byte
+		if rows.Scan(&id, &rawCapabilities) != nil {
 			continue
 		}
-		task, e := scheduleInstanceTask(c.Request.Context(), id, "bandwidth", "system")
-		if e == nil {
+		var capabilities []string
+		_ = json.Unmarshal(rawCapabilities, &capabilities)
+		statusSupported := false
+		queueSupported := false
+		for _, capability := range capabilities {
+			if capability == "network.bandwidth.status.v1" {
+				statusSupported = true
+			}
+			if capability == "network.bandwidth.queue.v1" {
+				queueSupported = true
+			}
+		}
+		if statusSupported && queueSupported {
+			instanceIDs = append(instanceIDs, id)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		internalError(c, err)
+		return
+	}
+	count := 0
+	for _, id := range instanceIDs {
+		task, scheduled, e := scheduleBandwidthTask(c.Request.Context(), id, "system")
+		if e == nil && scheduled {
 			_ = enqueuePersistedTask(c.Request.Context(), task)
 			count++
 		}

@@ -876,6 +876,28 @@ func truncateError(value string) string {
 	return value
 }
 
+type agentLifecycleResult struct {
+	BandwidthApplied *bool  `json:"bandwidthApplied"`
+	BandwidthWarning string `json:"bandwidthWarning"`
+}
+
+// persistBandwidthOutcome deliberately never fails the lifecycle action. A
+// running instance is useful even if traffic control needs later remediation.
+func persistBandwidthOutcome(ctx context.Context, instanceID string, result agentLifecycleResult) {
+	if result.BandwidthApplied == nil {
+		return // An older Agent has no structured bandwidth result yet.
+	}
+	if *result.BandwidthApplied {
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='applied',bandwidth_applied_at=NOW(),bandwidth_last_error=NULL WHERE id=?`, instanceID)
+		return
+	}
+	warning := result.BandwidthWarning
+	if warning == "" {
+		warning = "节点未确认带宽规则已应用"
+	}
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='failed',bandwidth_last_error=? WHERE id=?`, truncateError(warning), instanceID)
+}
+
 func executeTask(ctx context.Context, task controlTask) error {
 	var item instance
 	var route string
@@ -902,8 +924,10 @@ func executeTask(ctx context.Context, task controlTask) error {
 			return err
 		}
 		image := deploymentImage(imageRef, selectedVersion, digest)
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": image, "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, nil)
+		var lifecycleResult agentLifecycleResult
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": image, "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, &lifecycleResult)
 		if err == nil {
+			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"
 			changed, transitionErr := transitionInstance(ctx, instanceDB, item.ID, []string{"deploying"}, "running", &runtime, "")
 			if transitionErr != nil {
@@ -913,8 +937,10 @@ func executeTask(ctx context.Context, task controlTask) error {
 			}
 		}
 	case "start":
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, nil)
+		var lifecycleResult agentLifecycleResult
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, &lifecycleResult)
 		if err == nil {
+			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"
 			next := "running"
 			if item.Status == "destroy_scheduled" {
@@ -943,7 +969,11 @@ func executeTask(ctx context.Context, task controlTask) error {
 		// Agent surface: stop must complete before start is attempted.
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
 		if err == nil {
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, nil)
+			var lifecycleResult agentLifecycleResult
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, &lifecycleResult)
+			if err == nil {
+				persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
+			}
 		}
 		if err == nil {
 			runtime := "running"
@@ -957,10 +987,11 @@ func executeTask(ctx context.Context, task controlTask) error {
 		var mbps int
 		err = instanceDB.QueryRowContext(ctx, `SELECT bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&mbps)
 		if err == nil {
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/bandwidth", map[string]any{"bandwidthMbps": mbps}, nil)
-		}
-		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='applied',bandwidth_applied_at=NOW(),bandwidth_last_error=NULL WHERE id=?`, item.ID)
+			var lifecycleResult agentLifecycleResult
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/bandwidth", map[string]any{"bandwidthMbps": mbps}, &lifecycleResult)
+			if err == nil {
+				persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
+			}
 		}
 		if err == nil {
 			runtime := "running"
@@ -991,7 +1022,11 @@ func executeTask(ctx context.Context, task controlTask) error {
 			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/destroy", nil, nil)
 		}
 		if err == nil {
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, nil)
+			var lifecycleResult agentLifecycleResult
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, &lifecycleResult)
+			if err == nil {
+				persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
+			}
 		}
 		if err == nil {
 			runtime := "running"
@@ -1123,6 +1158,42 @@ func scheduleInstanceTask(ctx context.Context, instanceID, action, actorID strin
 	_ = writeAudit(ctx, actorID, "instance."+action, "instance", instanceID, map[string]any{"taskId": t.ID})
 	appendTaskEvent(ctx, t.ID, "queued", "等待执行 "+action)
 	return t, nil
+}
+
+// scheduleBandwidthTask keeps a single active remediation task per instance.
+// Unlike user actions, it is invoked by the periodic reconciler and may run on
+// multiple control-plane processes, so the INSERT itself carries the guard.
+func scheduleBandwidthTask(ctx context.Context, instanceID, actorID string) (controlTask, bool, error) {
+	if instanceDB == nil {
+		return controlTask{}, false, errors.New("开发模式未配置 MySQL")
+	}
+	now := time.Now()
+	t := controlTask{
+		ID:             newID("task"),
+		InstanceID:     instanceID,
+		Action:         "bandwidth",
+		IdempotencyKey: "bandwidth:" + instanceID + ":" + now.UTC().Truncate(5*time.Minute).Format("200601021504"),
+		Status:         taskPending,
+		RunAfter:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	result, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at)
+		SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (
+			SELECT 1 FROM xcloud_tasks WHERE instance_id=? AND action='bandwidth' AND status IN ('pending','running')
+		)`, t.ID, t.InstanceID, t.Action, t.IdempotencyKey, t.Status, 0, t.RunAfter, now, now, instanceID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return controlTask{}, false, nil
+		}
+		return controlTask{}, false, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return controlTask{}, false, nil
+	}
+	_ = writeAudit(ctx, actorID, "bandwidth.reconcile", "instance", instanceID, map[string]any{"taskId": t.ID})
+	appendTaskEvent(ctx, t.ID, "queued", "等待执行 bandwidth")
+	return t, true, nil
 }
 
 func scheduleLifecycle(ctx context.Context) {

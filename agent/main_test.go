@@ -22,6 +22,8 @@ func TestAgentProtocolDeclaresStableExecutionCapabilities(t *testing.T) {
 		"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1",
 		"container.list.v1", "container.compose.v1", "container.destroy.v1", "image.pull.v1",
 		"image.inspect.v1", "image.list.v1", "route.proxy.v1", "node.resources.v1", "network.bandwidth.v1",
+		"network.bandwidth.status.v1",
+		"network.bandwidth.queue.v1",
 	}
 	declared := strings.Join(agentCapabilities, ",")
 	for _, capability := range required {
@@ -31,5 +33,15 @@ func TestAgentProtocolDeclaresStableExecutionCapabilities(t *testing.T) {
 	}
 	if AgentAPIVersion < 1 {
 		t.Fatal("Agent API version must be positive")
+	}
+}
+
+func TestBandwidthIFBNameIsStableAndFitsLinuxInterfaceLimit(t *testing.T) {
+	name := bandwidthIFBName("xcloud-0123456789abcdef0123456789abcdef")
+	if name != bandwidthIFBName("xcloud-0123456789abcdef0123456789abcdef") {
+		t.Fatal("IFB name must be stable")
+	}
+	if !strings.HasPrefix(name, "ifb-xc-") || len(name) > 15 {
+		t.Fatalf("unsafe IFB name %q", name)
 	}
 }

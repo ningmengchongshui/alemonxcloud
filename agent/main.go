@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,8 @@ var agentCapabilities = []string{
 	"route.proxy.v1",
 	"node.resources.v1",
 	"network.bandwidth.v1",
+	"network.bandwidth.status.v1",
+	"network.bandwidth.queue.v1",
 }
 
 const (
@@ -359,7 +362,7 @@ func createContainer(c *gin.Context) {
 	if _, err := docker(ctx, "inspect", input.Name); err == nil {
 		// A worker may retry after the Docker command succeeded but before its
 		// database acknowledgement. Treat the managed name as an idempotent key.
-		c.JSON(http.StatusOK, gin.H{"name": input.Name, "status": "existing"})
+		respondWithBandwidthStatus(c, http.StatusOK, input.Name, "existing", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
 		return
 	}
 	dataDir := env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances") + "/" + input.Name
@@ -377,12 +380,18 @@ func createContainer(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 创建容器失败"})
 		return
 	}
-	if err := applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps); err != nil {
-		_, _ = docker(ctx, "compose", "-f", composePath, "down", "--remove-orphans")
-		c.JSON(http.StatusBadGateway, gin.H{"message": "宿主机带宽限速规则加载失败"})
+	// Resource availability comes first. A transient traffic-control failure
+	// must never turn a successful deployment into a destroyed container.
+	respondWithBandwidthStatus(c, http.StatusCreated, input.Name, "running", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
+}
+
+func respondWithBandwidthStatus(c *gin.Context, code int, name, status string, err error) {
+	if err != nil {
+		log.Printf("bandwidth apply warning for %s: %v", name, err)
+		c.JSON(code, gin.H{"name": name, "status": status, "bandwidthApplied": false, "bandwidthWarning": "带宽规则暂未应用，实例保持运行并将自动重试"})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"name": input.Name, "status": "running", "composeFile": composePath})
+	c.JSON(code, gin.H{"name": name, "status": status, "bandwidthApplied": true})
 }
 
 func bandwidthToolsAvailable() bool {
@@ -392,6 +401,33 @@ func bandwidthToolsAvailable() bool {
 		}
 	}
 	return true
+}
+
+// bandwidthQueueReady actively verifies the kernel path used by production
+// instances. Checking only for tc/ip/nsenter binaries allowed nodes with a
+// missing IFB module or qdisc support to advertise a capability they could not
+// actually deliver.
+func bandwidthQueueReady(ctx context.Context) bool {
+	if !bandwidthToolsAvailable() {
+		return false
+	}
+	probe := "ifb-xc-probe"
+	_, _ = exec.CommandContext(ctx, "modprobe", "ifb").CombinedOutput()
+	if _, err := exec.CommandContext(ctx, "ip", "link", "add", probe, "type", "ifb").CombinedOutput(); err != nil {
+		return false
+	}
+	defer func() { _, _ = exec.CommandContext(ctx, "ip", "link", "del", "dev", probe).CombinedOutput() }()
+	if _, err := exec.CommandContext(ctx, "ip", "link", "set", "dev", probe, "up").CombinedOutput(); err != nil {
+		return false
+	}
+	if _, err := exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", probe, "root", "handle", "1:", "htb", "default", "10").CombinedOutput(); err != nil {
+		return false
+	}
+	if _, err := exec.CommandContext(ctx, "tc", "class", "replace", "dev", probe, "parent", "1:", "classid", "1:10", "htb", "rate", "1mbit", "ceil", "1mbit").CombinedOutput(); err != nil {
+		return false
+	}
+	_, err := exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", probe, "parent", "1:10", "handle", "10:", "fq_codel").CombinedOutput()
+	return err == nil
 }
 
 func hostVethForContainer(name string) (string, error) {
@@ -426,27 +462,81 @@ func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 		return err
 	}
 	rate := strconv.Itoa(mbps) + "mbit"
-	if _, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", host, "root", "tbf", "rate", rate, "burst", "256kbit", "latency", "400ms").CombinedOutput(); err != nil {
+	// A root qdisc on the host-side veth throttles host -> container traffic,
+	// i.e. package/image downloads made from inside the instance.  Plans limit
+	// service egress, not a user's ability to install dependencies. Remove the
+	// old two-way rule first so existing instances are corrected on reconcile.
+	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "root").CombinedOutput()
+	// Remove the legacy ingress police rule before installing clsact. Its packet
+	// drops were the source of intermittent package-install and WebSocket pain.
+	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "ingress").CombinedOutput()
+	ifb, err := ensureBandwidthIFB(ctx, name)
+	if err != nil {
 		return err
 	}
-	if _, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", host, "handle", "ffff:", "ingress").CombinedOutput(); err != nil {
+	if _, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", host, "clsact").CombinedOutput(); err != nil {
 		return err
 	}
-	_, err = exec.CommandContext(ctx, "tc", "filter", "replace", "dev", host, "parent", "ffff:", "protocol", "all", "u32", "match", "u32", "0", "0", "police", "rate", rate, "burst", "256kbit", "drop", "flowid", ":1").CombinedOutput()
+	// Redirect container egress into an IFB, where HTB enforces the plan rate
+	// and FQ-CoDel queues fairly across flows instead of dropping bursts.
+	if _, err = exec.CommandContext(ctx, "tc", "filter", "replace", "dev", host, "ingress", "protocol", "all", "pref", "10", "u32", "match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", ifb).CombinedOutput(); err != nil {
+		return err
+	}
+	if _, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", ifb, "root", "handle", "1:", "htb", "default", "10").CombinedOutput(); err != nil {
+		return err
+	}
+	if _, err = exec.CommandContext(ctx, "tc", "class", "replace", "dev", ifb, "parent", "1:", "classid", "1:10", "htb", "rate", rate, "ceil", rate).CombinedOutput(); err != nil {
+		return err
+	}
+	_, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", ifb, "parent", "1:10", "handle", "10:", "fq_codel").CombinedOutput()
 	return err
 }
 
+func bandwidthIFBName(containerName string) string {
+	// Linux interface names max out at 15 characters. The prefix makes the
+	// ownership obvious while the hash avoids collisions for long instance IDs.
+	digest := sha256.Sum256([]byte(containerName))
+	return fmt.Sprintf("ifb-xc-%x", digest[:5])
+}
+
+func ensureBandwidthIFB(ctx context.Context, containerName string) (string, error) {
+	ifb := bandwidthIFBName(containerName)
+	if _, err := exec.CommandContext(ctx, "ip", "link", "show", ifb).CombinedOutput(); err != nil {
+		// IFB is commonly a module. A failed modprobe is not fatal when it is
+		// built into the kernel, so attempt creation either way.
+		_, _ = exec.CommandContext(ctx, "modprobe", "ifb").CombinedOutput()
+		if output, createErr := exec.CommandContext(ctx, "ip", "link", "add", ifb, "type", "ifb").CombinedOutput(); createErr != nil {
+			return "", fmt.Errorf("创建 IFB 队列接口失败: %w: %s", createErr, strings.TrimSpace(string(output)))
+		}
+	}
+	if output, err := exec.CommandContext(ctx, "ip", "link", "set", "dev", ifb, "up").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("启用 IFB 队列接口失败: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return ifb, nil
+}
+
 func clearBandwidthLimit(ctx context.Context, name string) error {
+	ifb := bandwidthIFBName(name)
 	host, err := hostVethForContainer(name)
 	if err != nil {
+		// The container may already be gone after a crash or a retried destroy;
+		// its dedicated IFB still needs cleanup.
+		_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", ifb, "root").CombinedOutput()
+		_, _ = exec.CommandContext(ctx, "ip", "link", "del", "dev", ifb).CombinedOutput()
 		return nil
 	}
 	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "root").CombinedOutput()
 	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "ingress").CombinedOutput()
+	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "clsact").CombinedOutput()
+	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", ifb, "root").CombinedOutput()
+	_, _ = exec.CommandContext(ctx, "ip", "link", "del", "dev", ifb).CombinedOutput()
 	return nil
 }
 
 func applyContainerBandwidth(c *gin.Context) {
+	if _, ok := checkedName(c); !ok {
+		return
+	}
 	var input struct {
 		BandwidthMbps int `json:"bandwidthMbps"`
 	}
@@ -458,7 +548,7 @@ func applyContainerBandwidth(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "带宽规则加载失败"})
 		return
 	}
-	c.Status(http.StatusNoContent)
+	c.JSON(http.StatusOK, gin.H{"name": c.Param("name"), "bandwidthApplied": true})
 }
 
 func reconcileBandwidthLoop() {
@@ -710,12 +800,15 @@ func agentStatus(c *gin.Context) {
 			count++
 		}
 	}
-	toolsReady := bandwidthToolsAvailable()
+	queueCheck, queueCancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	toolsReady := bandwidthQueueReady(queueCheck)
+	queueCancel()
 	capabilities := make([]string, 0, len(agentCapabilities))
 	for _, capability := range agentCapabilities {
-		if capability != "network.bandwidth.v1" || toolsReady {
-			capabilities = append(capabilities, capability)
+		if !toolsReady && (capability == "network.bandwidth.v1" || capability == "network.bandwidth.status.v1" || capability == "network.bandwidth.queue.v1") {
+			continue
 		}
+		capabilities = append(capabilities, capability)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok", "agentVersion": Version, "apiVersion": AgentAPIVersion,
@@ -761,11 +854,11 @@ func containerAction(c *gin.Context, action string) {
 			// impossible to recover when a node temporarily lost tc/ip/nsenter or its
 			// veth could not be resolved. The periodic reconciler can retry later.
 			log.Printf("bandwidth restore warning for %s after %s: inspect=%v parse=%v mbps=%d", name, action, err, parseErr, mbps)
-			c.JSON(http.StatusOK, gin.H{"name": name, "status": action, "bandwidthWarning": "带宽规则恢复失败，已保留容器运行，系统将自动重试"})
+			respondWithBandwidthStatus(c, http.StatusOK, name, action, errors.New("带宽规则恢复失败"))
 			return
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"name": name, "status": action})
+	c.JSON(http.StatusOK, gin.H{"name": name, "status": action, "bandwidthApplied": true})
 }
 func checkedName(c *gin.Context) (string, bool) {
 	name := c.Param("name")
