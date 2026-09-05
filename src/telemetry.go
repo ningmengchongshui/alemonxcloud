@@ -63,7 +63,7 @@ func safeTelemetryText(value string) bool {
 		return true
 	}
 	for _, runeValue := range value {
-		if !(runeValue == '_' || runeValue >= 'a' && runeValue <= 'z' || runeValue >= 'A' && runeValue <= 'Z') {
+		if !(runeValue == '_' || runeValue == '-' || runeValue >= 'a' && runeValue <= 'z' || runeValue >= 'A' && runeValue <= 'Z') {
 			return false
 		}
 	}

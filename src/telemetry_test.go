@@ -16,7 +16,7 @@ func TestConsoleTelemetryValidation(t *testing.T) {
 	if allowedConsoleEvent("free_form_event") {
 		t.Fatal("unexpected event accepted")
 	}
-	for _, value := range []string{"retry_task", "all", "success", ""} {
+	for _, value := range []string{"retry_task", "destroy-now", "cancel-destroy", "all", "success", ""} {
 		if !safeTelemetryText(value) {
 			t.Fatalf("expected %q to be safe", value)
 		}
