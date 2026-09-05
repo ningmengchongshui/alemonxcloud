@@ -149,9 +149,7 @@ export function AdminBenefitsPage() {
       return
     }
     if (
-      editing.monthValues.some(
-        month => !subscriptionMonths.includes(month)
-      )
+      editing.monthValues.some(month => !subscriptionMonths.includes(month))
     ) {
       setMessage('限定月数只能选择 1、3、6 或 12 个月。')
       return
@@ -557,14 +555,14 @@ export function AdminBenefitsPage() {
                   </legend>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {subscriptionMonths.map(month => (
-                        <button
-                          key={month}
-                          type="button"
-                          onClick={() => toggleMonth(month)}
-                          className={`rounded-md border px-2.5 py-1.5 text-[11px] font-bold ${editing.monthValues.includes(month) ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 text-slate-600 hover:border-blue-300 dark:border-slate-600 dark:text-slate-200'}`}
-                        >
-                          {month} 月
-                        </button>
+                      <button
+                        key={month}
+                        type="button"
+                        onClick={() => toggleMonth(month)}
+                        className={`rounded-md border px-2.5 py-1.5 text-[11px] font-bold ${editing.monthValues.includes(month) ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 text-slate-600 hover:border-blue-300 dark:border-slate-600 dark:text-slate-200'}`}
+                      >
+                        {month} 月
+                      </button>
                     ))}
                   </div>
                 </fieldset>
