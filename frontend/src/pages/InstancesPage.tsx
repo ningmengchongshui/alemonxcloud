@@ -118,8 +118,7 @@ export function InstancesPage({
   const [renewalError, setRenewalError] = useState('')
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
-  const [quoteRenewal, { isLoading: renewalQuoting }] =
-    useQuoteRenewalMutation()
+  const [quoteRenewal] = useQuoteRenewalMutation()
   const dispatch = useDispatch()
   const sorted = [...instances].sort(
     (left, right) =>
@@ -298,7 +297,7 @@ export function InstancesPage({
                     >
                       版本 {item.version}
                       {item.containerName
-                        ? ` · 文件夹哈希 ${item.containerName}`
+                        ? ` · 域址 ${item.containerName}`
                         : ''}
                     </p>
                   </div>
@@ -507,14 +506,6 @@ export function InstancesPage({
             />
           </label>
           <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-            <Button
-              type="button"
-              tone="secondary"
-              loading={renewalQuoting}
-              onClick={() => refreshRenewQuote(renewing)}
-            >
-              试算续费优惠
-            </Button>
             {renewQuote && (
               <>
                 <p className="m-0">
