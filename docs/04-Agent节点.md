@@ -21,6 +21,11 @@ AGENT_ADDR=0.0.0.0:13092
 XCLOUD_AGENT_TOKEN=<本节点独立令牌>
 XCLOUD_DOCKER_NETWORK=xcloud_network
 XCLOUD_INSTANCE_DATA_ROOT=/var/lib/xcloud/instances
+# 每实例安装/下载方向的平滑上限；服务对外出口仍按套餐值限制。
+XCLOUD_INSTANCE_DOWNLOAD_MBPS=20
+# 节点上所有运行实例共享的下载预算，会按实例数自动公平切分。
+# 应设置为小于节点真实入口带宽的安全值。
+XCLOUD_NODE_DOWNLOAD_MBPS=20
 ```
 
 仅本地运行可使用 `./agent/xcloud-agent --serve`。
@@ -43,7 +48,7 @@ curl -H "Authorization: Bearer <本节点令牌>" http://127.0.0.1:13092/contain
 | 容器查询 | `GET /container`、`/:name/status`、`/:name/inspect`、`/:name/logs` | 托管容器清单、运行/健康、有限元数据、最近 200 行日志 |
 | 镜像管理 | `POST /container/pull`、`GET /container/images`、`GET /container/images/inspect?image=` | 预拉取、查看节点本地镜像和验证摘要 |
 | 实例访问 | 非控制路径 + `X-Route-Key` | 仅按受控路由键反代到受管容器，不公开宿主机端口 |
-| 带宽上限 | `network.bandwidth.v1`、`network.bandwidth.status.v1`、`network.bandwidth.queue.v1`、`POST /container/:name/bandwidth` | 限制实例对外服务出口，不限制容器下载；使用 IFB + HTB + FQ-CoDel 平滑排队，并返回规则是否已生效 |
+| 带宽上限 | `network.bandwidth.v1`、`network.bandwidth.status.v1`、`network.bandwidth.queue.v1`、`POST /container/:name/bandwidth` | 服务出口按套餐限速；安装下载按单实例上限与节点共享预算的较小值限速；两方向均使用 HTB + FQ-CoDel 平滑排队并返回规则状态 |
 
 控制面不会用“接口是否返回 404”来猜 Agent 是否需要更新。未声明某项能力的节点保留既有生命周期服务，但新功能会显示为不支持并跳过。例如镜像版本的“预拉取”只会调用声明 `image.pull.v1` 的节点。
 

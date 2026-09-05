@@ -45,3 +45,25 @@ func TestBandwidthIFBNameIsStableAndFitsLinuxInterfaceLimit(t *testing.T) {
 		t.Fatalf("unsafe IFB name %q", name)
 	}
 }
+
+func TestInstanceDownloadMbpsUsesSafeConfig(t *testing.T) {
+	t.Setenv("XCLOUD_INSTANCE_DOWNLOAD_MBPS", "48")
+	if got := instanceDownloadMbps(); got != 48 {
+		t.Fatalf("download limit = %d, want 48", got)
+	}
+	t.Setenv("XCLOUD_INSTANCE_DOWNLOAD_MBPS", "invalid")
+	if got := instanceDownloadMbps(); got != 20 {
+		t.Fatalf("invalid download limit = %d, want fallback 20", got)
+	}
+}
+
+func TestNodeDownloadBudgetMbpsUsesSafeConfig(t *testing.T) {
+	t.Setenv("XCLOUD_NODE_DOWNLOAD_MBPS", "120")
+	if got := nodeDownloadBudgetMbps(); got != 120 {
+		t.Fatalf("node download budget = %d, want 120", got)
+	}
+	t.Setenv("XCLOUD_NODE_DOWNLOAD_MBPS", "0")
+	if got := nodeDownloadBudgetMbps(); got != 20 {
+		t.Fatalf("invalid node budget = %d, want fallback 20", got)
+	}
+}

@@ -461,12 +461,14 @@ func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 	if err != nil {
 		return err
 	}
-	rate := strconv.Itoa(mbps) + "mbit"
-	// A root qdisc on the host-side veth throttles host -> container traffic,
-	// i.e. package/image downloads made from inside the instance.  Plans limit
-	// service egress, not a user's ability to install dependencies. Remove the
-	// old two-way rule first so existing instances are corrected on reconcile.
+	// The host-side veth root controls host -> container traffic (downloads and
+	// dependency installation). It has a separate, higher safety ceiling from
+	// the user-facing service egress plan: leaving it unlimited lets one install
+	// exhaust a node uplink, while tying it to a small plan makes installs fail.
 	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "root").CombinedOutput()
+	if err := applyQueuedRate(ctx, host, effectiveDownloadMbps(ctx)); err != nil {
+		return fmt.Errorf("应用安装下载带宽上限: %w", err)
+	}
 	// Remove the legacy ingress police rule before installing clsact. Its packet
 	// drops were the source of intermittent package-install and WebSocket pain.
 	_, _ = exec.CommandContext(ctx, "tc", "qdisc", "del", "dev", host, "ingress").CombinedOutput()
@@ -482,13 +484,64 @@ func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 	if _, err = exec.CommandContext(ctx, "tc", "filter", "replace", "dev", host, "ingress", "protocol", "all", "pref", "10", "u32", "match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", ifb).CombinedOutput(); err != nil {
 		return err
 	}
-	if _, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", ifb, "root", "handle", "1:", "htb", "default", "10").CombinedOutput(); err != nil {
+	return applyQueuedRate(ctx, ifb, mbps)
+}
+
+func instanceDownloadMbps() int {
+	const fallback = 20
+	value, err := strconv.Atoi(strings.TrimSpace(env("XCLOUD_INSTANCE_DOWNLOAD_MBPS", strconv.Itoa(fallback))))
+	if err != nil || value < 1 || value > 10000 {
+		return fallback
+	}
+	return value
+}
+
+func nodeDownloadBudgetMbps() int {
+	const fallback = 20
+	value, err := strconv.Atoi(strings.TrimSpace(env("XCLOUD_NODE_DOWNLOAD_MBPS", strconv.Itoa(fallback))))
+	if err != nil || value < 1 || value > 100000 {
+		return fallback
+	}
+	return value
+}
+
+// effectiveDownloadMbps divides the node's download budget among currently
+// running managed instances. This prevents several simultaneous dependency
+// installs from individually observing their per-instance ceiling and jointly
+// exhausting the physical uplink.
+func effectiveDownloadMbps(ctx context.Context) int {
+	output, err := docker(ctx, "ps", "--filter", "label=xcloud.managed=true", "--format", "{{.ID}}")
+	if err != nil {
+		return instanceDownloadMbps()
+	}
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	if count < 1 {
+		count = 1
+	}
+	share := nodeDownloadBudgetMbps() / count
+	if share < 1 {
+		share = 1
+	}
+	if share < instanceDownloadMbps() {
+		return share
+	}
+	return instanceDownloadMbps()
+}
+
+func applyQueuedRate(ctx context.Context, device string, mbps int) error {
+	rate := strconv.Itoa(mbps) + "mbit"
+	if _, err := exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", device, "root", "handle", "1:", "htb", "default", "10").CombinedOutput(); err != nil {
 		return err
 	}
-	if _, err = exec.CommandContext(ctx, "tc", "class", "replace", "dev", ifb, "parent", "1:", "classid", "1:10", "htb", "rate", rate, "ceil", rate).CombinedOutput(); err != nil {
+	if _, err := exec.CommandContext(ctx, "tc", "class", "replace", "dev", device, "parent", "1:", "classid", "1:10", "htb", "rate", rate, "ceil", rate).CombinedOutput(); err != nil {
 		return err
 	}
-	_, err = exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", ifb, "parent", "1:10", "handle", "10:", "fq_codel").CombinedOutput()
+	_, err := exec.CommandContext(ctx, "tc", "qdisc", "replace", "dev", device, "parent", "1:10", "handle", "10:", "fq_codel").CombinedOutput()
 	return err
 }
 
