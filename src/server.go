@@ -53,7 +53,9 @@ type instance struct {
 	ArchivedAt    *time.Time `json:"archivedAt,omitempty"`
 	IP            string     `json:"ip"`
 	CreatedAt     string     `json:"createdAt"`
-	ContainerName string     `json:"-"`
+	// ContainerName is also the basename of this instance's persisted data
+	// directory on its assigned node (for example xcloud-a1b2c3d4).
+	ContainerName string     `json:"containerName,omitempty"`
 	OwnerID       string     `json:"-"`
 }
 type oidcUser struct {

@@ -58,7 +58,7 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		}
 		return items, nil
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,image,version,spec,status,COALESCE(runtime_status,''),access_address,created_at,bandwidth_mbps,destroy_at,destroyed_at,purge_at,COALESCE(destroy_reason,''),archived_at FROM xcloud_instances WHERE owner_id=? AND archived_at IS NULL ORDER BY created_at DESC`, ownerID)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,image,version,spec,status,COALESCE(runtime_status,''),access_address,container_name,created_at,bandwidth_mbps,destroy_at,destroyed_at,purge_at,COALESCE(destroy_reason,''),archived_at FROM xcloud_instances WHERE owner_id=? AND archived_at IS NULL ORDER BY created_at DESC`, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 	for rows.Next() {
 		var item instance
 		var created time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &created, &item.BandwidthMbps, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.BandwidthMbps, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Format("2006-01-02 15:04")

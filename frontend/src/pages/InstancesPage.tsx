@@ -132,7 +132,8 @@ export function InstancesPage({
     const current = renewableOrderByInstance.get(order.instanceId)
     if (
       !current ||
-      new Date(order.createdAt).getTime() > new Date(current.createdAt).getTime()
+      new Date(order.createdAt).getTime() >
+        new Date(current.createdAt).getTime()
     )
       renewableOrderByInstance.set(order.instanceId, order)
   }
@@ -296,6 +297,9 @@ export function InstancesPage({
                       title={`${item.image}:${item.version}`}
                     >
                       版本 {item.version}
+                      {item.containerName
+                        ? ` · 文件夹哈希 ${item.containerName}`
+                        : ''}
                     </p>
                   </div>
                   <div className="shrink-0 rounded-lg bg-slate-50 px-3 py-2 text-right dark:bg-slate-900 max-[640px]:text-left">
@@ -305,11 +309,6 @@ export function InstancesPage({
                     <b className="mt-0.5 block text-xs text-slate-700 dark:text-slate-100">
                       {item.spec}
                     </b>
-                    {item.bandwidthMbps ? (
-                      <span className="mt-1 block text-[10px] text-slate-500 dark:text-slate-300">
-                        最高共享 {item.bandwidthMbps} Mbps
-                      </span>
-                    ) : null}
                   </div>
                 </div>
                 {lifecycle === 'destroy_scheduled' && (
@@ -328,7 +327,7 @@ export function InstancesPage({
                     <span>容器已销毁，数据预计于 {purgeDate} 物理清除。</span>
                   </div>
                 )}
-                <div className="mt-4 flex items-center justify-between gap-4 border-t border-slate-100 px-5 py-3.5 dark:border-slate-700 max-[760px]:items-start max-[760px]:flex-col">
+                <div className="flex items-center justify-between gap-4 border-t border-slate-100 px-5 py-3.5 dark:border-slate-700 max-[760px]:items-start max-[760px]:flex-col">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                     <span className="text-slate-500 dark:text-slate-300">
                       创建于 {new Date(item.createdAt).toLocaleString('zh-CN')}

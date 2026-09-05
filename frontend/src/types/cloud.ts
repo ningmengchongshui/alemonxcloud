@@ -41,6 +41,7 @@ export interface Instance {
   name: string
   image: string
   version: string
+  containerName?: string
   spec: string
   status: string
   runtimeStatus?: string
