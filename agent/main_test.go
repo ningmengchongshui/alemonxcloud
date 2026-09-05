@@ -16,3 +16,20 @@ func TestInstanceComposeCarriesPlanLimitsAndRuntimeTuning(t *testing.T) {
 		t.Fatal("user container must not publish host ports")
 	}
 }
+
+func TestAgentProtocolDeclaresStableExecutionCapabilities(t *testing.T) {
+	required := []string{
+		"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1",
+		"container.list.v1", "container.compose.v1", "image.pull.v1",
+		"image.inspect.v1", "image.list.v1", "route.proxy.v1", "node.resources.v1",
+	}
+	declared := strings.Join(agentCapabilities, ",")
+	for _, capability := range required {
+		if !strings.Contains(declared, capability) {
+			t.Fatalf("Agent status must declare %s", capability)
+		}
+	}
+	if AgentAPIVersion < 1 {
+		t.Fatal("Agent API version must be positive")
+	}
+}

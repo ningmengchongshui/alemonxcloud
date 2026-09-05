@@ -293,8 +293,10 @@ export function Dialog({
 }>) {
   const dialogRef = useRef<HTMLElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
+  const onCloseRef = useRef(onClose)
   const generatedID = useId()
   const titleID = labelledBy ?? generatedID
+  onCloseRef.current = onClose
   useEffect(() => {
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement
@@ -312,7 +314,7 @@ export function Dialog({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab' || !dialogRef.current) return
@@ -339,12 +341,12 @@ export function Dialog({
       document.removeEventListener('keydown', onKeyDown)
       previousFocusRef.current?.focus()
     }
-  }, [onClose])
+  }, [])
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm"
       onMouseDown={event => {
-        if (event.target === event.currentTarget) onClose()
+        if (event.target === event.currentTarget) onCloseRef.current()
       }}
     >
       <section
@@ -378,7 +380,7 @@ export function Dialog({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => onCloseRef.current()}
             className="grid size-8 place-items-center rounded-md border-0 bg-slate-100 text-lg text-slate-500 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200"
             aria-label="关闭对话框"
           >

@@ -36,6 +36,7 @@ export function ImageSourceEditor() {
         imageRef,
         imageDigest: '',
         version: 'latest',
+        versions: [],
         enabled: true
       }).unwrap()
       setName('')

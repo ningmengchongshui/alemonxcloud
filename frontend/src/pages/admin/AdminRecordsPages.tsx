@@ -165,7 +165,7 @@ export function AdminUsersPage({
         <input
           value={query}
           onChange={event => setQuery(event.target.value)}
-          placeholder="用户名、邮箱或 Auth 用户 ID"
+          placeholder="用户名、邮箱或ID"
         />
       </div>
       <div className="admin-table-wrap">

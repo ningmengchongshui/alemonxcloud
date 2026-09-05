@@ -1,13 +1,14 @@
 # Agent 节点
 
-Agent 运行在裸机上，负责 Docker 容器的创建、启停、状态、日志和删除。控制面不直接操作 Docker Socket。
+Agent 运行在裸机上，负责 Docker 容器、镜像、资源探测与实例路由。控制面不直接操作 Docker Socket。
+它是一个有版本的稳定执行面：控制面通过心跳获取 API 版本和能力清单，只有节点声明支持的扩展功能才会下发。
 
 ## 安装
 
 ```bash
 docker network create xcloud_network
 sudo install -d -m 0750 /var/lib/xcloud/instances
-make agent-build
+make agent-build VERSION=v1.0.0
 sudo ./agent/xcloud-agent
 systemctl status xcloud-agent
 ```
@@ -22,6 +23,37 @@ XCLOUD_INSTANCE_DATA_ROOT=/var/lib/xcloud/instances
 ```
 
 仅本地运行可使用 `./agent/xcloud-agent --serve`。
+
+检查已安装版本：
+
+```bash
+/opt/xcloud-agent/xcloud-agent --version
+curl -H "Authorization: Bearer <本节点令牌>" http://127.0.0.1:13092/container/status
+```
+
+## 稳定接口与能力协商
+
+所有控制接口均要求 `Authorization: Bearer <本节点令牌>`。`GET /container/status` 是心跳和协议协商入口，返回 `agentVersion`、`apiVersion` 与 `capabilities`。当前 API v1 一次性覆盖以下执行面能力：
+
+| 能力 | 接口 | 用途 |
+| --- | --- | --- |
+| 节点资源 | `GET /container/status` | Docker 版本、CPU、内存、磁盘、托管容器数量、协议能力 |
+| 容器生命周期 | `POST /container/create`、`/:name/start`、`/:name/stop`、`/:name/restart`、`DELETE /:name` | 创建、启停、重启、删除或清理数据 |
+| 容器查询 | `GET /container`、`/:name/status`、`/:name/inspect`、`/:name/logs` | 托管容器清单、运行/健康、有限元数据、最近 200 行日志 |
+| 镜像管理 | `POST /container/pull`、`GET /container/images`、`GET /container/images/inspect?image=` | 预拉取、查看节点本地镜像和验证摘要 |
+| 实例访问 | 非控制路径 + `X-Route-Key` | 仅按受控路由键反代到受管容器，不公开宿主机端口 |
+
+控制面不会用“接口是否返回 404”来猜 Agent 是否需要更新。未声明某项能力的节点保留既有生命周期服务，但新功能会显示为不支持并跳过。例如镜像版本的“预拉取”只会调用声明 `image.pull.v1` 的节点。
+
+## 升级策略
+
+Agent 不自动从控制面下载或替换二进制文件；这避免控制面被入侵后接管裸机。按以下方式滚动升级，每次只处理一台节点：
+
+1. 在可信构建机执行 `make agent-build VERSION=v1.x.y`，并校验发布包的校验和。
+2. 将二进制传到目标裸机，以 root 执行 `sudo ./xcloud-agent`。安装器会原子替换 `/opt/xcloud-agent/xcloud-agent` 并重启 systemd 服务。
+3. 在超级管理台刷新节点，确认显示“已兼容”、版本和能力清单已更新；然后再升级下一台。
+
+旧版 Agent 不会因控制面升级而停止基础实例；它会显示为“协议未知”。只有 API 主版本不兼容或需要其未声明的新能力时才需要升级，因此不必为每次控制面发布频繁更新 Agent。
 
 ## 实例 Compose 文件
 
@@ -46,4 +78,4 @@ Agent 使用该文件执行 `docker compose up -d`。配置包含套餐 CPU、�
 
 ## 节点登记
 
-在超级管理台填写 Agent 内网地址、独立令牌、CPU 和内存。保存前控制面会调用 `/container/status` 验证令牌。默认 90 秒无心跳的节点不参与新订单分配。
+在超级管理台填写 Agent 内网地址、独立令牌、CPU 和内存。保存前控制面会调用 `/container/status` 验证令牌、硬件与协议能力。默认 90 秒无心跳的节点不参与新订单分配。

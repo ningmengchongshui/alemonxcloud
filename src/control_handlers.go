@@ -292,6 +292,60 @@ func adminSaveImage(c *gin.Context) {
 	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image.save", "image", body.ID, map[string]any{"imageRef": body.ImageRef, "version": body.Version})
 	c.JSON(http.StatusOK, body)
 }
+func adminSaveImageVersion(c *gin.Context) {
+	var body imageVersion
+	if c.ShouldBindJSON(&body) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "镜像版本参数无效"})
+		return
+	}
+	body.ImageID = c.Param("id")
+	if versionID := c.Param("versionID"); versionID != "" {
+		body.ID = versionID
+	}
+	item, err := saveImageVersion(c.Request.Context(), body)
+	if err != nil {
+		businessError(c, err)
+		return
+	}
+	user := c.MustGet("user").(oidcUser)
+	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image_version.save", "image_version", item.ID, map[string]any{"imageId": item.ImageID, "tag": item.Tag})
+	c.JSON(http.StatusOK, item)
+}
+func adminPullImageVersion(c *gin.Context) {
+	versionID := c.Param("versionID")
+	var imageRef, tag, digest string
+	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT i.image_ref,v.version_tag,COALESCE(v.image_digest,'') FROM xcloud_image_versions v JOIN xcloud_images i ON i.id=v.image_id WHERE v.id=?`, versionID).Scan(&imageRef, &tag, &digest)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "镜像版本不存在"})
+		return
+	}
+	image := deploymentImage(imageRef, tag, digest)
+	user := c.MustGet("user").(oidcUser)
+	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image_version.pull", "image_version", versionID, map[string]any{"image": image})
+	go pullImageOnNodes(context.Background(), versionID, image)
+	c.JSON(http.StatusAccepted, gin.H{"message": "已提交节点预拉取", "image": image})
+}
+func pullImageOnNodes(ctx context.Context, versionID, image string) {
+	nodes, err := enabledNodes(ctx)
+	if err != nil {
+		return
+	}
+	for _, n := range nodes {
+		if !n.supportsAgentCapability("image.pull.v1") {
+			_, _ = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_image_version_pulls (image_version_id,node_id,status,last_error,updated_at) VALUES (?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE status=VALUES(status),last_error=VALUES(last_error),updated_at=NOW()`, versionID, n.ID, "unsupported", "Agent 尚未声明 image.pull.v1；请先完成 Agent 升级")
+			continue
+		}
+		_, _ = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_image_version_pulls (image_version_id,node_id,status,updated_at) VALUES (?,?,?,NOW()) ON DUPLICATE KEY UPDATE status=VALUES(status),last_error=NULL,updated_at=NOW()`, versionID, n.ID, "pulling")
+		probe, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		err := nodeRequest(probe, n, http.MethodPost, "/container/pull", map[string]any{"image": image}, nil)
+		cancel()
+		if err != nil {
+			_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_version_pulls SET status='failed',last_error=?,updated_at=NOW() WHERE image_version_id=? AND node_id=?`, truncateError(err.Error()), versionID, n.ID)
+			continue
+		}
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_image_version_pulls SET status='succeeded',last_error=NULL,pulled_at=NOW(),updated_at=NOW() WHERE image_version_id=? AND node_id=?`, versionID, n.ID)
+	}
+}
 func adminSavePlan(c *gin.Context) {
 	var body plan
 	if c.ShouldBindJSON(&body) != nil {
@@ -422,8 +476,11 @@ func adminSaveNode(c *gin.Context) {
 		probe.AgentToken = encrypted
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 		var status struct {
-			CPUTotal      float64 `json:"cpuTotal"`
-			MemoryTotalMB int     `json:"memoryTotalMB"`
+			CPUTotal      float64  `json:"cpuTotal"`
+			MemoryTotalMB int      `json:"memoryTotalMB"`
+			AgentVersion  string   `json:"agentVersion"`
+			APIVersion    int      `json:"apiVersion"`
+			Capabilities  []string `json:"capabilities"`
 		}
 		err = nodeRequest(ctx, probe, http.MethodGet, "/container/status", nil, &status)
 		cancel()
@@ -437,6 +494,10 @@ func adminSaveNode(c *gin.Context) {
 		}
 		body.CPUDetected = status.CPUTotal
 		body.MemoryDetectedMB = status.MemoryTotalMB
+		body.AgentVersion = status.AgentVersion
+		body.AgentAPIVersion = status.APIVersion
+		body.AgentCapabilities = status.Capabilities
+		body.AgentCompatibility = body.compatibility()
 		body.CPUTotal = 0
 		body.MemoryTotalMB = 0
 		body.Enabled = false
@@ -446,7 +507,7 @@ func adminSaveNode(c *gin.Context) {
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	_ = writeAudit(c.Request.Context(), user.ID, "node.save", "node", body.ID, map[string]any{"enabled": body.Enabled})
+	_ = writeAudit(c.Request.Context(), user.ID, "node.save", "node", body.ID, map[string]any{"enabled": body.Enabled, "agentVersion": body.AgentVersion, "agentApiVersion": body.AgentAPIVersion})
 	body.AgentToken = ""
 	c.JSON(http.StatusOK, body)
 }

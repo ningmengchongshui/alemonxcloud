@@ -31,6 +31,7 @@ const priorityLabels: Record<TicketPriority, string> = {
   urgent: '紧急'
 }
 const statusLabels = { open: '待受理', in_progress: '处理中', closed: '已关闭' }
+const fieldClass = 'mt-1.5 block w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white'
 const tone = (status: Ticket['status']) =>
   status === 'closed'
     ? 'neutral'
@@ -77,8 +78,9 @@ export function TicketsPage({
       setInstanceID('')
       setOrderID('')
       onSelect(ticket.id)
-    } catch (value: any) {
-      setError(value?.data?.message ?? '工单提交失败，请稍后重试')
+    } catch (value: unknown) {
+      const message = typeof value === 'object' && value !== null && 'data' in value && typeof value.data === 'object' && value.data !== null && 'message' in value.data && typeof value.data.message === 'string' ? value.data.message : '工单提交失败，请稍后重试'
+      setError(message)
     }
   }
   if (selected) return selected
@@ -141,15 +143,18 @@ export function TicketsPage({
       )}
       {creating && (
         <Dialog
-          eyebrow="支持中心"
           title="新建工单"
           description="请尽量提供可复现的信息，便于管理员快速处理。"
-          onClose={() => setCreating(false)}
+          onClose={() => { setCreating(false); setError('') }}
+          className="max-w-2xl"
         >
-          <div className="grid gap-3 text-xs">
-            <label>
+          <form className="space-y-4" onSubmit={event => { event.preventDefault(); void submit() }}>
+            <div className="grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
+            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100" htmlFor="ticket-category">
               问题分类
               <select
+                id="ticket-category"
+                className={fieldClass}
                 value={category}
                 onChange={event =>
                   setCategory(event.target.value as TicketCategory)
@@ -162,9 +167,11 @@ export function TicketsPage({
                 ))}
               </select>
             </label>
-            <label>
+            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100" htmlFor="ticket-priority">
               优先级
               <select
+                id="ticket-priority"
+                className={fieldClass}
                 value={priority}
                 onChange={event =>
                   setPriority(event.target.value as TicketPriority)
@@ -177,21 +184,28 @@ export function TicketsPage({
                 ))}
               </select>
             </label>
-            <label>
+            </div>
+            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100" htmlFor="ticket-subject">
               <span className="flex items-center justify-between">
                 <span>主题</span>
                 <small className="text-slate-400">{subject.length}/160</small>
               </span>
               <input
+                id="ticket-subject"
+                data-autofocus
+                className={fieldClass}
                 maxLength={160}
                 value={subject}
                 onChange={event => setSubject(event.target.value)}
                 placeholder="简要描述你遇到的问题"
               />
             </label>
-            <label>
+            <div className="grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
+            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100" htmlFor="ticket-instance">
               关联实例（可选）
               <select
+                id="ticket-instance"
+                className={fieldClass}
                 value={instanceID}
                 onChange={event => setInstanceID(event.target.value)}
               >
@@ -203,9 +217,11 @@ export function TicketsPage({
                 ))}
               </select>
             </label>
-            <label>
+            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100" htmlFor="ticket-order">
               关联订单（可选）
               <select
+                id="ticket-order"
+                className={fieldClass}
                 value={orderID}
                 onChange={event => setOrderID(event.target.value)}
               >
@@ -217,12 +233,15 @@ export function TicketsPage({
                 ))}
               </select>
             </label>
-            <label>
+            </div>
+            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100" htmlFor="ticket-body">
               <span className="flex items-center justify-between">
                 <span>问题描述</span>
                 <small className="text-slate-400">{body.length}/4000</small>
               </span>
               <textarea
+                id="ticket-body"
+                className={fieldClass}
                 rows={6}
                 maxLength={4000}
                 value={body}
@@ -232,18 +251,18 @@ export function TicketsPage({
             </label>
             {error && <Alert tone="error">{error}</Alert>}
             <div className="flex justify-end gap-2">
-              <Button tone="secondary" onClick={() => setCreating(false)}>
+              <Button type="button" tone="secondary" onClick={() => { setCreating(false); setError('') }}>
                 取消
               </Button>
               <Button
+                type="submit"
                 loading={saving}
                 disabled={!subject.trim() || !body.trim()}
-                onClick={() => void submit()}
               >
                 提交工单
               </Button>
             </div>
-          </div>
+          </form>
         </Dialog>
       )}
     </section>

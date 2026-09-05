@@ -57,6 +57,7 @@ export function CreateServicePage({
   onCreated: () => void
 }) {
   const [imageID, setImageID] = useState('')
+  const [imageVersion, setImageVersion] = useState('')
   const [imageRef, setImageRef] = useState('')
   const [planID, setPlanID] = useState('')
   const [months, setMonths] = useState(1)
@@ -64,18 +65,14 @@ export function CreateServicePage({
   const [purchase, { isLoading: saving }] = usePurchaseMutation()
   const { data: wallet } = useGetWalletQuery()
   const images = catalog?.images ?? []
-  const imageSources = Array.from(
-    new Map(
-      images.map(image => [
-        image.imageRef,
-        { imageRef: image.imageRef, name: image.name }
-      ])
-    ).values()
-  )
+  const imageSources = images
   const selectedRef = imageRef || imageSources[0]?.imageRef || ''
   const sourceImages = images.filter(image => image.imageRef === selectedRef)
   const selectedImageID = imageID || sourceImages[0]?.id || ''
   const selectedImage = images.find(image => image.id === selectedImageID)
+  const selectedVersion =
+    selectedImage?.versions.find(version => version.tag === imageVersion) ??
+    selectedImage?.versions[0]
   const plans = catalog?.plans ?? []
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
@@ -88,7 +85,7 @@ export function CreateServicePage({
     trackConsoleEvent('create_service', 'me', 'create', { result: 'started' })
     void purchase({
       imageId: selectedImage.id,
-      imageVersion: selectedImage.version || 'latest',
+      imageVersion: selectedVersion?.tag || 'latest',
       planId: selectedPlan.id,
       months
     })
@@ -159,6 +156,7 @@ export function CreateServicePage({
                       onClick={() => {
                         setImageRef(source.imageRef)
                         setImageID('')
+                        setImageVersion('')
                         setError('')
                       }}
                     >
@@ -176,15 +174,15 @@ export function CreateServicePage({
                   镜像版本
                   <select
                     id="image-version"
-                    value={selectedImageID}
+                    value={selectedVersion?.tag ?? ''}
                     onChange={event => {
-                      setImageID(event.target.value)
+                      setImageVersion(event.target.value)
                       setError('')
                     }}
                   >
-                    {sourceImages.map(image => (
-                      <option key={image.id} value={image.id}>
-                        {image.version || 'latest'}
+                    {(selectedImage?.versions ?? []).map(version => (
+                      <option key={version.id} value={version.tag}>
+                        {version.tag}
                       </option>
                     ))}
                   </select>

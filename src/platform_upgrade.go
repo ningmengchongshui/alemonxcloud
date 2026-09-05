@@ -447,6 +447,10 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	if !validImageTag(imageVersion) {
 		return order{}, controlTask{}, errors.New("镜像版本格式无效")
 	}
+	var selectedDigest string
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(image_digest,'') FROM xcloud_image_versions WHERE image_id=? AND version_tag=? AND enabled=TRUE FOR UPDATE`, imageID, imageVersion).Scan(&selectedDigest); err != nil {
+		return order{}, controlTask{}, errors.New("镜像版本不可购买")
+	}
 	var balance int
 	if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {
 		return order{}, controlTask{}, errors.New("请重新登录后再购买")
@@ -473,7 +477,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 		return order{}, controlTask{}, err
 	}
 	o := order{ID: orderID, OwnerID: ownerID, PlanID: p.ID, ImageID: img.ID, InstanceID: instanceID, AmountFen: amount, Status: orderDeploy, ServiceStartsAt: &now, ExpiresAt: &expires, CreatedAt: &now, UpdatedAt: &now, PlanName: p.Name, ImageName: img.Name, ImageVersion: imageVersion}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, orderDeploy, "wallet", entry.ID, n.ID, imageVersion, now, expires, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,selected_image_digest,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, orderDeploy, "wallet", entry.ID, n.ID, imageVersion, nullableString(selectedDigest), now, expires, now, now); err != nil {
 		return order{}, controlTask{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, img.Name, img.ImageRef, imageVersion, fmt.Sprintf("%g 核 / %d GB", p.CPU, p.MemoryMB/1024), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, n.ID, o.ID, route, expires); err != nil {

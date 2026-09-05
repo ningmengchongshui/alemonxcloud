@@ -28,11 +28,20 @@ const (
 )
 
 type catalogImage struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	ImageRef    string         `json:"imageRef"`
+	ImageDigest string         `json:"imageDigest"`
+	Version     string         `json:"version"`
+	Enabled     bool           `json:"enabled"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	Versions    []imageVersion `json:"versions,omitempty"`
+}
+type imageVersion struct {
 	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	ImageRef    string    `json:"imageRef"`
+	ImageID     string    `json:"imageId"`
+	Tag         string    `json:"tag"`
 	ImageDigest string    `json:"imageDigest"`
-	Version     string    `json:"version"`
 	Enabled     bool      `json:"enabled"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
@@ -63,7 +72,32 @@ type node struct {
 	DockerVersion         string     `json:"dockerVersion,omitempty"`
 	DiskAvailableBytes    int64      `json:"diskAvailableBytes,omitempty"`
 	ManagedContainerCount int        `json:"managedContainerCount,omitempty"`
+	AgentVersion          string     `json:"agentVersion,omitempty"`
+	AgentAPIVersion       int        `json:"agentApiVersion,omitempty"`
+	AgentCapabilities     []string   `json:"agentCapabilities,omitempty"`
+	AgentCompatibility    string     `json:"agentCompatibility,omitempty"`
 	AgentToken            string     `json:"agentToken,omitempty"`
+}
+
+const minimumAgentAPIVersion = 1
+
+func (n node) supportsAgentCapability(capability string) bool {
+	for _, value := range n.AgentCapabilities {
+		if value == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func (n node) compatibility() string {
+	if n.AgentAPIVersion == 0 {
+		return "legacy"
+	}
+	if n.AgentAPIVersion < minimumAgentAPIVersion {
+		return "outdated"
+	}
+	return "compatible"
 }
 
 type order struct {
@@ -134,8 +168,67 @@ func listCatalog(ctx context.Context, includeDisabled bool) ([]catalogImage, []p
 	if err != nil {
 		return nil, nil, err
 	}
+	for index := range images {
+		versions, versionErr := listImageVersions(ctx, images[index].ID, includeDisabled)
+		if versionErr != nil {
+			return nil, nil, versionErr
+		}
+		images[index].Versions = versions
+	}
 	plans, err := scanPlans(ctx, planSQL)
 	return images, plans, err
+}
+func listImageVersions(ctx context.Context, imageID string, includeDisabled bool) ([]imageVersion, error) {
+	statement := `SELECT id,image_id,version_tag,COALESCE(image_digest,''),enabled,created_at FROM xcloud_image_versions WHERE image_id=?`
+	if !includeDisabled {
+		statement += ` AND enabled=TRUE`
+	}
+	statement += ` ORDER BY created_at DESC,version_tag`
+	rows, err := instanceDB.QueryContext(ctx, statement, imageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []imageVersion{}
+	for rows.Next() {
+		var item imageVersion
+		if err := rows.Scan(&item.ID, &item.ImageID, &item.Tag, &item.ImageDigest, &item.Enabled, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+func saveImageVersion(ctx context.Context, value imageVersion) (imageVersion, error) {
+	value.Tag = strings.TrimSpace(value.Tag)
+	if !validImageTag(value.Tag) {
+		return imageVersion{}, errors.New("镜像版本格式无效")
+	}
+	value.ImageDigest = strings.ToLower(strings.TrimSpace(value.ImageDigest))
+	if value.ImageDigest != "" && !validImageDigest(value.ImageDigest) {
+		return imageVersion{}, errors.New("镜像摘要格式无效")
+	}
+	if value.ID == "" {
+		var existing string
+		err := instanceDB.QueryRowContext(ctx, `SELECT id FROM xcloud_image_versions WHERE image_id=? AND version_tag=?`, value.ImageID, value.Tag).Scan(&existing)
+		if err == nil {
+			value.ID = existing
+		} else if err == sql.ErrNoRows {
+			value.ID = newID("ver")
+		} else {
+			return imageVersion{}, err
+		}
+	}
+	now := time.Now()
+	if value.CreatedAt.IsZero() {
+		value.CreatedAt = now
+	}
+	var exists int
+	if err := instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_images WHERE id=?`, value.ImageID).Scan(&exists); err != nil || exists != 1 {
+		return imageVersion{}, errors.New("镜像来源不存在")
+	}
+	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_image_versions (id,image_id,version_tag,image_digest,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE version_tag=VALUES(version_tag),image_digest=VALUES(image_digest),enabled=VALUES(enabled),updated_at=VALUES(updated_at)`, value.ID, value.ImageID, value.Tag, nullableString(value.ImageDigest), value.Enabled, value.CreatedAt, now)
+	return value, err
 }
 
 func scanImages(ctx context.Context, statement string, args ...any) ([]catalogImage, error) {
@@ -217,6 +310,10 @@ func saveImage(ctx context.Context, value catalogImage) error {
 		return errors.New("镜像摘要格式无效")
 	}
 	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_images (id,name,image_ref,image_digest,version,enabled,created_at) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),image_ref=VALUES(image_ref),version=VALUES(version),enabled=VALUES(enabled)`, value.ID, value.Name, value.ImageRef, nullableString(value.ImageDigest), value.Version, value.Enabled, value.CreatedAt)
+	if err != nil || !isNew {
+		return err
+	}
+	_, err = instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_image_versions (id,image_id,version_tag,image_digest,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`, newID("ver"), value.ID, "latest", nullableString(value.ImageDigest), true, value.CreatedAt, time.Now())
 	return err
 }
 func nullableString(value string) any {
@@ -600,7 +697,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 			return err
 		}
 		var imageRef, digest, selectedVersion string
-		err = instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(i.image_digest,''),COALESCE(o.selected_image_version,i.version) FROM xcloud_orders o JOIN xcloud_images i ON i.id=o.image_id WHERE o.instance_id=? ORDER BY o.created_at DESC LIMIT 1`, item.ID).Scan(&imageRef, &digest, &selectedVersion)
+		err = instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(o.selected_image_digest,i.image_digest,''),COALESCE(o.selected_image_version,i.version) FROM xcloud_orders o JOIN xcloud_images i ON i.id=o.image_id WHERE o.instance_id=? ORDER BY o.created_at DESC LIMIT 1`, item.ID).Scan(&imageRef, &digest, &selectedVersion)
 		if err != nil {
 			return err
 		}
@@ -769,7 +866,7 @@ func notifyRetentionReminders(ctx context.Context) {
 }
 
 func listNodesWithUsage(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -777,9 +874,12 @@ func listNodesWithUsage(ctx context.Context) ([]node, error) {
 	items := []node{}
 	for rows.Next() {
 		var item node
-		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.CPUReserved, &item.MemoryReservedMB); err != nil {
+		var capabilities []byte
+		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.DockerVersion, &item.DiskAvailableBytes, &item.ManagedContainerCount, &item.AgentVersion, &item.AgentAPIVersion, &capabilities, &item.CPUReserved, &item.MemoryReservedMB); err != nil {
 			return nil, err
 		}
+		_ = json.Unmarshal(capabilities, &item.AgentCapabilities)
+		item.AgentCompatibility = item.compatibility()
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -820,7 +920,11 @@ func saveNode(ctx context.Context, value node) error {
 		}
 		cipherText = existing
 	}
-	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,agent_token_ciphertext,cpu_total,memory_total_mb,cpu_detected,memory_detected_mb,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE name=VALUES(name),agent_url=VALUES(agent_url),agent_token_ciphertext=VALUES(agent_token_ciphertext),cpu_total=VALUES(cpu_total),memory_total_mb=VALUES(memory_total_mb),cpu_detected=VALUES(cpu_detected),memory_detected_mb=VALUES(memory_detected_mb),enabled=VALUES(enabled),updated_at=NOW()`, value.ID, value.Name, value.AgentURL, cipherText, value.CPUTotal, value.MemoryTotalMB, value.CPUDetected, value.MemoryDetectedMB, value.Enabled)
+	capabilities, _ := json.Marshal(value.AgentCapabilities)
+	if len(value.AgentCapabilities) == 0 {
+		capabilities = []byte("[]")
+	}
+	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,agent_token_ciphertext,cpu_total,memory_total_mb,cpu_detected,memory_detected_mb,agent_version,agent_api_version,agent_capabilities,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE name=VALUES(name),agent_url=VALUES(agent_url),agent_token_ciphertext=VALUES(agent_token_ciphertext),cpu_total=VALUES(cpu_total),memory_total_mb=VALUES(memory_total_mb),cpu_detected=VALUES(cpu_detected),memory_detected_mb=VALUES(memory_detected_mb),agent_version=IF(VALUES(agent_version)='',agent_version,VALUES(agent_version)),agent_api_version=IF(VALUES(agent_api_version)=0,agent_api_version,VALUES(agent_api_version)),agent_capabilities=IF(COALESCE(JSON_LENGTH(VALUES(agent_capabilities)),0)=0,agent_capabilities,VALUES(agent_capabilities)),enabled=VALUES(enabled),updated_at=NOW()`, value.ID, value.Name, value.AgentURL, cipherText, value.CPUTotal, value.MemoryTotalMB, value.CPUDetected, value.MemoryDetectedMB, value.AgentVersion, value.AgentAPIVersion, string(capabilities), value.Enabled)
 	return err
 }
 

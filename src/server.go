@@ -138,6 +138,9 @@ func Run() {
 	router.GET("/api/admin/catalog", requireAdmin, adminCatalog)
 	router.POST("/api/admin/images", requireAdmin, adminSaveImage)
 	router.PUT("/api/admin/images/:id", requireAdmin, adminSaveImage)
+	router.POST("/api/admin/images/:id/versions", requireAdmin, adminSaveImageVersion)
+	router.PUT("/api/admin/images/:id/versions/:versionID", requireAdmin, adminSaveImageVersion)
+	router.POST("/api/admin/images/:id/versions/:versionID/pull", requireAdmin, adminPullImageVersion)
 	router.POST("/api/admin/plans", requireAdmin, adminSavePlan)
 	router.PUT("/api/admin/plans/:id", requireAdmin, adminSavePlan)
 	router.GET("/api/admin/orders", requireAdmin, adminOrders)
@@ -481,6 +484,11 @@ func requireAdmin(c *gin.Context) {
 	}
 	if !value.User.IsAdmin {
 		c.JSON(http.StatusForbidden, gin.H{"message": "需要平台管理员权限"})
+		c.Abort()
+		return
+	}
+	if instanceDB == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "平台数据服务尚未就绪，请配置 MYSQL_DSN 后重启服务"})
 		c.Abort()
 		return
 	}

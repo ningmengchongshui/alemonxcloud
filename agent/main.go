@@ -31,6 +31,26 @@ import (
 var safeContainerName = regexp.MustCompile(`^xcloud-[a-z0-9]{8,32}$`)
 var safeRouteKey = regexp.MustCompile(`^r[0-9a-f]{16}$`)
 
+// Version is injected by the release build.  The API version changes only for
+// backwards-incompatible protocol changes; individual additions are announced
+// through Capabilities instead, so the control plane can roll out safely.
+var Version = "dev"
+
+const AgentAPIVersion = 1
+
+var agentCapabilities = []string{
+	"container.lifecycle.v1",
+	"container.inspect.v1",
+	"container.logs.v1",
+	"container.list.v1",
+	"container.compose.v1",
+	"image.pull.v1",
+	"image.inspect.v1",
+	"image.list.v1",
+	"route.proxy.v1",
+	"node.resources.v1",
+}
+
 const (
 	agentServiceName = "xcloud-agent.service"
 	agentInstallDir  = "/opt/xcloud-agent"
@@ -48,7 +68,12 @@ type createRequest struct {
 
 func main() {
 	serve := flag.Bool("serve", false, "run the HTTP agent (used by systemd)")
+	showVersion := flag.Bool("version", false, "print Agent version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("xcloud-agent %s (api v%d)\n", Version, AgentAPIVersion)
+		return
+	}
 	if !*serve {
 		if err := installAndStartService(); err != nil {
 			log.Fatal(err)
@@ -75,10 +100,16 @@ func runServer() {
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	control := r.Group("/container", requireControlToken)
 	control.POST("/create", createContainer)
+	control.POST("/pull", pullImage)
 	control.GET("/status", agentStatus)
+	control.GET("", listContainers)
+	control.GET("/images", listImages)
+	control.GET("/images/inspect", inspectImage)
 	control.POST("/:name/start", startContainer)
 	control.POST("/:name/stop", stopContainer)
+	control.POST("/:name/restart", restartContainer)
 	control.GET("/:name/status", containerStatus)
+	control.GET("/:name/inspect", inspectContainer)
 	control.GET("/:name/logs", containerLogs)
 	control.DELETE("/:name", deleteContainer)
 	// Nginx 在请求中写入实例路由键；控制接口会先于该路由命中。
@@ -91,6 +122,72 @@ func runServer() {
 	if err := r.Run(address); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func pullImage(c *gin.Context) {
+	var input struct {
+		Image string `json:"image" binding:"required"`
+	}
+	if c.ShouldBindJSON(&input) != nil || !validManagedImage(input.Image) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "镜像参数无效"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
+	defer cancel()
+	if _, err := docker(ctx, "pull", input.Image); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "镜像拉取失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"image": input.Image, "status": "pulled"})
+}
+
+// listImages and inspectImage intentionally expose only Docker metadata. They
+// are control-token protected and give the control plane a stable way to
+// verify a selected image before a future deployment feature depends on it.
+func listImages(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	output, err := docker(ctx, "image", "ls", "--format", "{{.Repository}}:{{.Tag}}|{{.ID}}|{{.Size}}")
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "Docker 镜像列表不可用"})
+		return
+	}
+	items := make([]gin.H, 0)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 || parts[0] == "<none>:<none>" {
+			continue
+		}
+		items = append(items, gin.H{"image": parts[0], "id": parts[1], "size": parts[2]})
+	}
+	c.JSON(http.StatusOK, gin.H{"images": items})
+}
+
+func inspectImage(c *gin.Context) {
+	image := strings.TrimSpace(c.Query("image"))
+	if !validManagedImage(image) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "镜像参数无效"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	output, err := docker(ctx, "image", "inspect", "--format", "{{.Id}}|{{join .RepoDigests \",\"}}|{{.Size}}", image)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "镜像尚未拉取"})
+		return
+	}
+	parts := strings.SplitN(strings.TrimSpace(output), "|", 3)
+	result := gin.H{"image": image}
+	if len(parts) > 0 {
+		result["id"] = parts[0]
+	}
+	if len(parts) > 1 && parts[1] != "" {
+		result["repoDigests"] = strings.Split(parts[1], ",")
+	}
+	if len(parts) > 2 {
+		result["sizeBytes"] = parts[2]
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func installAndStartService() error {
@@ -287,8 +384,9 @@ func composeProject(route string) string    { return "xcloud-" + route }
 func yamlString(value string) string        { encoded, _ := json.Marshal(value); return string(encoded) }
 func envString(key, fallback string) string { return env(key, fallback) }
 
-func startContainer(c *gin.Context) { containerAction(c, "start") }
-func stopContainer(c *gin.Context)  { containerAction(c, "stop") }
+func startContainer(c *gin.Context)   { containerAction(c, "start") }
+func stopContainer(c *gin.Context)    { containerAction(c, "stop") }
+func restartContainer(c *gin.Context) { containerAction(c, "restart") }
 func deleteContainer(c *gin.Context) {
 	name, ok := checkedName(c)
 	if !ok {
@@ -345,6 +443,59 @@ func containerStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"name": name, "status": status, "health": health})
 }
 
+func inspectContainer(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	// Return lifecycle facts only. Environment variables and host mounts remain
+	// private to the node even for authenticated control-plane callers.
+	output, err := docker(ctx, "inspect", "--format", "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.Image}}|{{.Created}}|{{.RestartCount}}", name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "容器不存在"})
+		return
+	}
+	parts := strings.SplitN(strings.TrimSpace(output), "|", 5)
+	result := gin.H{"name": name}
+	if len(parts) > 0 {
+		result["status"] = parts[0]
+	}
+	if len(parts) > 1 {
+		result["health"] = parts[1]
+	}
+	if len(parts) > 2 {
+		result["imageID"] = parts[2]
+	}
+	if len(parts) > 3 {
+		result["createdAt"] = parts[3]
+	}
+	if len(parts) > 4 {
+		result["restartCount"] = parts[4]
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func listContainers(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	output, err := docker(ctx, "ps", "-a", "--filter", "label=xcloud.managed=true", "--format", "{{.Names}}|{{.Status}}|{{.Image}}|{{.Label \"xcloud.route\"}}")
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "Docker 容器列表不可用"})
+		return
+	}
+	items := make([]gin.H, 0)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) != 4 || !safeContainerName.MatchString(parts[0]) || !safeRouteKey.MatchString(parts[3]) {
+			continue
+		}
+		items = append(items, gin.H{"name": parts[0], "status": parts[1], "image": parts[2], "route": parts[3]})
+	}
+	c.JSON(http.StatusOK, gin.H{"containers": items})
+}
+
 func containerLogs(c *gin.Context) {
 	name, ok := checkedName(c)
 	if !ok {
@@ -392,7 +543,12 @@ func agentStatus(c *gin.Context) {
 			count++
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "dockerVersion": strings.TrimSpace(output), "cpuTotal": runtime.NumCPU(), "memoryTotalMB": hostMemoryMB(), "diskAvailableBytes": int64(stat.Bavail) * int64(stat.Bsize), "managedContainerCount": count})
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok", "agentVersion": Version, "apiVersion": AgentAPIVersion,
+		"capabilities": agentCapabilities, "dockerVersion": strings.TrimSpace(output),
+		"cpuTotal": runtime.NumCPU(), "memoryTotalMB": hostMemoryMB(),
+		"diskAvailableBytes": int64(stat.Bavail) * int64(stat.Bsize), "managedContainerCount": count,
+	})
 }
 
 func hostMemoryMB() int {

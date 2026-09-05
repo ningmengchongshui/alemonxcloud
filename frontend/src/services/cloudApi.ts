@@ -7,6 +7,7 @@ import type {
   CloudUser,
   CurrentUser,
   Instance,
+  ImageVersion,
   Node,
   Notification,
   Order,
@@ -279,6 +280,20 @@ export const cloudApi = createApi({
       }),
       invalidatesTags: ['Admin', 'Catalog']
     }),
+    saveAdminImageVersion: builder.mutation<ImageVersion, ImageVersion>({
+      query: body => ({
+        url: body.id
+          ? `/admin/images/${body.imageId}/versions/${body.id}`
+          : `/admin/images/${body.imageId}/versions`,
+        method: body.id ? 'PUT' : 'POST',
+        body
+      }),
+      invalidatesTags: ['Admin', 'Catalog']
+    }),
+    pullAdminImageVersion: builder.mutation<{ message: string }, ImageVersion>({
+      query: version => ({ url: `/admin/images/${version.imageId}/versions/${version.id}/pull`, method: 'POST' }),
+      invalidatesTags: ['Admin']
+    }),
     saveAdminPlan: builder.mutation<Plan, Plan>({
       query: body => ({
         url: body.id ? `/admin/plans/${body.id}` : '/admin/plans',
@@ -362,6 +377,8 @@ export const {
   useGetAdminWalletEntriesQuery,
   useAdjustAdminWalletMutation,
   useSaveAdminImageMutation,
+  useSaveAdminImageVersionMutation,
+  usePullAdminImageVersionMutation,
   useSaveAdminPlanMutation,
   useSaveAdminNodeMutation,
   useRetryTaskMutation,

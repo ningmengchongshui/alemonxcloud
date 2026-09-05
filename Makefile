@@ -1,5 +1,7 @@
 .PHONY: help dev build test format lint frontend-dev frontend-build agent-build agent-test docker-build docker-run integration-up test-integration integration-down
 
+VERSION ?= dev
+
 .DEFAULT_GOAL := help
 
 help: ## Show available commands
@@ -27,7 +29,7 @@ build-fe: ## Build the frontend into dist/
 	cd frontend && yarn build
 
 agent-build: ## Build the bare-metal systemd agent
-	cd agent && go build -o xcloud-agent .
+	cd agent && go build -ldflags "-X main.Version=$(VERSION)" -o xcloud-agent .
 
 agent-run: ## Build the bare-metal systemd agent
 	./agent/xcloud-agent --serve

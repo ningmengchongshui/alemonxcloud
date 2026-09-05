@@ -25,7 +25,7 @@
 
 ## 管理接口
 
-`/api/admin/catalog`、`orders`、`nodes`、`users`、`tasks`、`audit-logs`、`metrics` 提供管理查询；镜像、套餐、节点使用 `POST`/`PUT` 保存，任务使用 `retry`。镜像地址在数据库中唯一，已配置 digest 时部署必定使用 `image@sha256:...`。
+`/api/admin/catalog`、`orders`、`nodes`、`users`、`tasks`、`audit-logs`、`metrics` 提供管理查询；镜像、套餐、节点使用 `POST`/`PUT` 保存，任务使用 `retry`。镜像来源的可售版本由 `POST /api/admin/images/:id/versions` 和 `PUT /api/admin/images/:id/versions/:versionID` 管理；`POST /api/admin/images/:id/versions/:versionID/pull` 会向全部启用节点预拉取。镜像地址在数据库中唯一，已配置版本 digest 时部署必定使用 `image@sha256:...`。
 
 管理员通过 `/api/admin/tickets` 查询并按 `status`、`priority` 筛选工单；可读取详情、回复、标记处理中、关闭及调整优先级。所有工单操作都会写入审计日志。
 

@@ -55,6 +55,13 @@ export function AdminNodesPage() {
                   ? `Docker ${node.dockerVersion}`
                   : 'Docker 信息同步中'}
               </span>
+              <span>
+                {node.agentCompatibility === 'compatible'
+                  ? `Agent ${node.agentVersion ?? '未知'} · 已兼容`
+                  : node.agentCompatibility === 'outdated'
+                    ? `Agent ${node.agentVersion ?? '未知'} · 需要升级`
+                    : 'Agent 协议未知 · 建议升级'}
+              </span>
             </div>
             <div className="node-actions">
               <span>
@@ -64,6 +71,11 @@ export function AdminNodesPage() {
                     ? '等待心跳'
                     : '未启用'}
               </span>
+              {node.agentCompatibility !== 'compatible' && (
+                <span className="text-amber-700 dark:text-amber-200">
+                  镜像预拉取等扩展功能暂不下发
+                </span>
+              )}
               <NodeConfigButton node={node} />
             </div>
           </article>

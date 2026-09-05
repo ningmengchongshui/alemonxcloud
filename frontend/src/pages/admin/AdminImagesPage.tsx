@@ -3,14 +3,23 @@ import { ActionDialog } from '@/components/ActionDialog'
 import { ImageSourceEditor } from '@/components/ImageSourceEditor'
 import {
   useGetAdminCatalogQuery,
+  usePullAdminImageVersionMutation,
   useSaveAdminImageMutation
+  ,useSaveAdminImageVersionMutation
 } from '@/services/cloudApi'
-import { Button, PageHeader } from '@/components/ui'
+import { Alert, Button, Dialog, PageHeader } from '@/components/ui'
+import type { CatalogImage } from '@/types/cloud'
 
 export function AdminImagesPage() {
   const catalog = useGetAdminCatalogQuery()
   const [saveImage] = useSaveAdminImageMutation()
   const [targetID, setTargetID] = useState<string | null>(null)
+  const [versionsFor, setVersionsFor] = useState<CatalogImage | null>(null)
+  const [tag, setTag] = useState('latest')
+  const [digest, setDigest] = useState('')
+  const [versionError, setVersionError] = useState('')
+  const [saveVersion, { isLoading: savingVersion }] = useSaveAdminImageVersionMutation()
+  const [pullVersion, { isLoading: pulling }] = usePullAdminImageVersionMutation()
   const target = catalog.data?.images.find(image => image.id === targetID)
   async function toggle() {
     if (!target) return
@@ -42,7 +51,7 @@ export function AdminImagesPage() {
             <tr>
               <th>镜像名称</th>
               <th>镜像地址</th>
-              <th>默认版本</th>
+              <th>可售版本</th>
               <th>状态</th>
               <th />
             </tr>
@@ -56,7 +65,7 @@ export function AdminImagesPage() {
                 <td>
                   <code>{image.imageRef}</code>
                 </td>
-                <td>{image.version || 'latest'}</td>
+                <td>{image.versions.filter(version => version.enabled).map(version => version.tag).join('、') || '暂无'}</td>
                 <td>{image.enabled ? '可售' : '已下架'}</td>
                 <td>
                   <button
@@ -64,6 +73,9 @@ export function AdminImagesPage() {
                     onClick={() => setTargetID(image.id)}
                   >
                     {image.enabled ? '下架' : '启用'}
+                  </button>
+                  <button className="text-button" onClick={() => { setVersionsFor(image); setTag('latest'); setDigest(''); setVersionError('') }}>
+                    管理版本
                   </button>
                 </td>
               </tr>
@@ -80,6 +92,26 @@ export function AdminImagesPage() {
           onCancel={() => setTargetID(null)}
           onConfirm={() => void toggle()}
         />
+      )}
+      {versionsFor && (
+        <Dialog title={`${versionsFor.name} · 版本管理`} description="管理员定义用户可选版本；预拉取会分发至全部启用节点。" onClose={() => setVersionsFor(null)}>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              {versionsFor.versions.map(version => (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700" key={version.id}>
+                  <span><b>{version.tag}</b>{version.imageDigest ? <small className="ml-2 text-slate-500">{version.imageDigest.slice(0, 18)}…</small> : null}</span>
+                  <div className="flex gap-2"><span>{version.enabled ? '可售' : '已下架'}</span><Button tone="secondary" loading={pulling} onClick={() => void pullVersion(version)}>预拉取</Button></div>
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label>版本标签<input value={tag} onChange={event => setTag(event.target.value)} placeholder="v1.2.0 或 latest" /></label>
+              <label>镜像摘要（可选）<input value={digest} onChange={event => setDigest(event.target.value)} placeholder="sha256:..." /></label>
+            </div>
+            {versionError ? <Alert tone="error">{versionError}</Alert> : null}
+            <div className="flex justify-end gap-2"><Button tone="secondary" onClick={() => setVersionsFor(null)}>关闭</Button><Button loading={savingVersion} onClick={() => void saveVersion({ id: '', imageId: versionsFor.id, tag, imageDigest: digest, enabled: true }).unwrap().then(() => { setTag(''); setDigest('') }).catch(error => setVersionError(error?.data?.message ?? '保存版本失败'))}>新增版本</Button></div>
+          </div>
+        </Dialog>
       )}
     </section>
   )

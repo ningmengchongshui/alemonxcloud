@@ -49,6 +49,15 @@ export interface CatalogImage {
   imageDigest: string
   version: string
   enabled: boolean
+  versions: ImageVersion[]
+}
+export interface ImageVersion {
+  id: string
+  imageId: string
+  tag: string
+  imageDigest: string
+  enabled: boolean
+  createdAt?: string
 }
 export interface Plan {
   id: string
@@ -98,6 +107,10 @@ export interface Node {
   dockerVersion?: string
   diskAvailableBytes?: number
   managedContainerCount?: number
+  agentVersion?: string
+  agentApiVersion?: number
+  agentCapabilities?: string[]
+  agentCompatibility?: 'compatible' | 'legacy' | 'outdated'
 }
 export interface Task {
   id: string
