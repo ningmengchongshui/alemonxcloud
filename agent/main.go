@@ -41,9 +41,9 @@ type cachedRouteTarget struct {
 
 var routeTargetCache = struct {
 	sync.RWMutex
-	values   map[string]cachedRouteTarget
-	inflight map[string]chan struct{}
-}{values: map[string]cachedRouteTarget{}, inflight: map[string]chan struct{}{}}
+	values          map[string]cachedRouteTarget
+	refreshInFlight bool
+}{values: map[string]cachedRouteTarget{}}
 
 // Version is injected by the release build.  The API version changes only for
 // backwards-incompatible protocol changes; individual additions are announced
@@ -140,7 +140,12 @@ func runServer() {
 	// Docker bridge gateway.  Exposure is constrained by the host firewall;
 	// See docs/03-部署指南.md for the required allow rule.
 	address := env("AGENT_ADDR", "0.0.0.0:13092")
-	go reconcileBandwidthLoop()
+	if bandwidthShapingEnabled() {
+		go reconcileBandwidthLoop()
+	} else if strings.EqualFold(env("XCLOUD_CLEAR_LEGACY_TRAFFIC_CONTROL", "true"), "true") {
+		// Remove rules left by older releases once, outside all request paths.
+		go clearLegacyBandwidthRules()
+	}
 	refreshRouteTargetCache(context.Background())
 	go refreshRouteTargetCacheLoop()
 	log.Printf("xcloud agent listening on %s", address)
@@ -473,10 +478,10 @@ func hostVethForContainer(name string) (string, error) {
 
 func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 	if !bandwidthShapingEnabled() {
-		// Traffic shaping is opt-in. Clearing the old qdiscs during a rollout is
-		// essential: otherwise a new Agent binary would leave a broken legacy
-		// rule attached to an otherwise healthy instance.
-		return clearBandwidthLimit(ctx, name)
+		// Keep the Agent protocol stable for the control plane, but make the
+		// disabled mode a true no-op. In particular, do not run tc/nsenter from a
+		// deployment, start, restart, or update request.
+		return nil
 	}
 	if !bandwidthToolsAvailable() {
 		return errors.New("tc/ip/nsenter unavailable")
@@ -510,7 +515,11 @@ func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 }
 
 func bandwidthShapingEnabled() bool {
-	return strings.EqualFold(strings.TrimSpace(env("XCLOUD_ENABLE_BANDWIDTH_SHAPING", "false")), "true")
+	// This is a deliberate hard default-off switch. The former
+	// XCLOUD_ENABLE_BANDWIDTH_SHAPING setting is ignored so a stale node env
+	// file cannot silently re-enable traffic control after this rollout.
+	// Re-enabling later requires an explicit, reviewed opt-in.
+	return strings.EqualFold(strings.TrimSpace(env("XCLOUD_TRAFFIC_CONTROL_ENABLED", "false")), "true")
 }
 
 func burstBandwidthMbps(stableMbps int) int {
@@ -542,7 +551,7 @@ func bandwidthIFBName(containerName string) string {
 	// Linux interface names max out at 15 characters. The prefix makes the
 	// ownership obvious while the hash avoids collisions for long instance IDs.
 	digest := sha256.Sum256([]byte(containerName))
-	return fmt.Sprintf("ifb-xc-%x", digest[:5])
+	return fmt.Sprintf("ifb-xc-%x", digest[:4])
 }
 
 func ensureBandwidthIFB(ctx context.Context, containerName string) (string, error) {
@@ -603,6 +612,28 @@ func reconcileBandwidthLoop() {
 	defer ticker.Stop()
 	for range ticker.C {
 		reconcileBandwidth(context.Background())
+	}
+}
+
+// clearLegacyBandwidthRules is deliberately one-shot. It is used while the
+// new hard default-off switch is active, so rolling out this Agent removes
+// legacy shaping without adding work or failure modes to user traffic and
+// lifecycle requests.
+func clearLegacyBandwidthRules() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	output, err := docker(ctx, "ps", "--filter", "label=xcloud.managed=true", "--format", "{{.Names}}")
+	if err != nil {
+		log.Printf("list legacy bandwidth rules: %v", err)
+		return
+	}
+	for _, name := range strings.Fields(output) {
+		if !safeContainerName.MatchString(name) {
+			continue
+		}
+		if err := clearBandwidthLimit(ctx, name); err != nil {
+			log.Printf("clear legacy bandwidth rule %s: %v", name, err)
+		}
 	}
 }
 func reconcileBandwidth(ctx context.Context) {
@@ -928,7 +959,7 @@ func containerAction(c *gin.Context, action string) {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker 操作失败"})
 		return
 	}
-	if action == "start" || action == "restart" {
+	if bandwidthShapingEnabled() && (action == "start" || action == "restart") {
 		raw, err := docker(ctx, "inspect", "-f", "{{ index .Config.Labels \"xcloud.bandwidth_mbps\" }}", name)
 		mbps, parseErr := strconv.Atoi(strings.TrimSpace(raw))
 		if err != nil || parseErr != nil || mbps < 1 || applyBandwidthLimit(ctx, name, mbps) != nil {
@@ -962,7 +993,7 @@ func proxyContainer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "缺少实例路由信息"})
 		return
 	}
-	ip, err := resolveRouteTarget(c.Request.Context(), route)
+	ip, err := resolveRouteTarget(route)
 	if err != nil {
 		log.Printf("resolve instance route %s: %v", route, err)
 		c.JSON(http.StatusBadGateway, gin.H{"message": "实例网络暂不可用"})
@@ -985,7 +1016,7 @@ func proxyContainer(c *gin.Context) {
 	proxy.ServeHTTP(c.Writer, c.Request)
 }
 
-func resolveRouteTarget(ctx context.Context, route string) (string, error) {
+func resolveRouteTarget(route string) (string, error) {
 	now := time.Now()
 	routeTargetCache.RLock()
 	cached, ok := routeTargetCache.values[route]
@@ -994,81 +1025,31 @@ func resolveRouteTarget(ctx context.Context, route string) (string, error) {
 		return cached.ip, nil
 	}
 	if ok && cached.staleUntil.After(now) {
-		refreshRouteTargetInBackground(route)
+		refreshRouteTargetCacheInBackground()
 		return cached.ip, nil
 	}
-
-	routeTargetCache.Lock()
-	if cached, ok = routeTargetCache.values[route]; ok && cached.expiresAt.After(now) {
-		routeTargetCache.Unlock()
-		return cached.ip, nil
-	}
-	if wait, resolving := routeTargetCache.inflight[route]; resolving {
-		routeTargetCache.Unlock()
-		select {
-		case <-wait:
-			return resolveRouteTarget(ctx, route)
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-	}
-	wait := make(chan struct{})
-	routeTargetCache.inflight[route] = wait
-	routeTargetCache.Unlock()
-
-	ip, err := lookupRouteTarget(ctx, route)
-	finishRouteTargetLookup(route, wait, ip, err)
-	return ip, err
+	// A user request must never wait for Docker. The old cold-cache fallback
+	// performed docker ps + inspect here with a five-second timeout, matching
+	// the observed terminal and concurrent-request stalls. Lifecycle handlers
+	// populate this cache; a miss only schedules a background refresh.
+	refreshRouteTargetCacheInBackground()
+	return "", errors.New("实例路由正在同步")
 }
 
-func refreshRouteTargetInBackground(route string) {
+func refreshRouteTargetCacheInBackground() {
 	routeTargetCache.Lock()
-	if _, resolving := routeTargetCache.inflight[route]; resolving {
+	if routeTargetCache.refreshInFlight {
 		routeTargetCache.Unlock()
 		return
 	}
-	wait := make(chan struct{})
-	routeTargetCache.inflight[route] = wait
+	routeTargetCache.refreshInFlight = true
 	routeTargetCache.Unlock()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		ip, err := lookupRouteTarget(ctx, route)
-		finishRouteTargetLookup(route, wait, ip, err)
+		refreshRouteTargetCache(context.Background())
+		routeTargetCache.Lock()
+		routeTargetCache.refreshInFlight = false
+		routeTargetCache.Unlock()
 	}()
-}
-
-func lookupRouteTarget(ctx context.Context, route string) (string, error) {
-	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	output, err := docker(lookup, "ps", "--filter", "label=xcloud.managed=true", "--filter", "label=xcloud.route="+route, "--format", "{{.Names}}")
-	name := strings.TrimSpace(output)
-	if err == nil && !safeContainerName.MatchString(name) {
-		return "", errors.New("未找到运行中的实例")
-	}
-	if err != nil {
-		return "", err
-	}
-	output, err = docker(lookup, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name)
-	ip := strings.TrimSpace(output)
-	if err != nil {
-		return "", err
-	}
-	if net.ParseIP(ip) == nil {
-		return "", errors.New("实例网络不可用")
-	}
-	return ip, nil
-}
-
-func finishRouteTargetLookup(route string, wait chan struct{}, ip string, err error) {
-	routeTargetCache.Lock()
-	delete(routeTargetCache.inflight, route)
-	close(wait)
-	if err == nil {
-		now := time.Now()
-		routeTargetCache.values[route] = cachedRouteTarget{ip: ip, expiresAt: now.Add(time.Minute), staleUntil: now.Add(10 * time.Minute)}
-	}
-	routeTargetCache.Unlock()
 }
 
 func refreshRouteTargetCacheLoop() {

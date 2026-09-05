@@ -9,7 +9,7 @@ Agent 运行在裸机上，负责 Docker 容器、镜像、资源探测与实例
 docker network create xcloud_network
 sudo dnf install -y iproute util-linux # Debian/Ubuntu 使用 apt install iproute2 util-linux
 sudo chmod -R 777 /var/lib/xcloud/instances
-make agent-build VERSION=v1.0.5
+make agent-build VERSION=v1.0.8
 sudo ./agent/xcloud-agent
 systemctl status xcloud-agent
 ```
@@ -21,8 +21,10 @@ AGENT_ADDR=0.0.0.0:13092
 XCLOUD_AGENT_TOKEN=<本节点独立令牌>
 XCLOUD_DOCKER_NETWORK=xcloud_network
 XCLOUD_INSTANCE_DATA_ROOT=/var/lib/xcloud/instances
-# 默认不对用户流量进行整形。只有完成隔离压测后才可显式开启：
-# XCLOUD_ENABLE_BANDWIDTH_SHAPING=true
+# 默认完全关闭带宽整形；启动 Agent 后会一次性移除旧规则，随后不再执行 tc。
+# 旧的 XCLOUD_ENABLE_BANDWIDTH_SHAPING 已失效，不能意外重新开启限速。
+# 未来只有完成隔离压测并明确评审后，才可设置：
+# XCLOUD_TRAFFIC_CONTROL_ENABLED=true
 # XCLOUD_BANDWIDTH_BURST_MULTIPLIER=4
 ```
 

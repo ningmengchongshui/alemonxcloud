@@ -59,12 +59,16 @@ func TestBurstBandwidthBorrowsIdleCapacityWithinConfiguredLimit(t *testing.T) {
 }
 
 func TestBandwidthShapingIsOptIn(t *testing.T) {
-	t.Setenv("XCLOUD_ENABLE_BANDWIDTH_SHAPING", "")
+	t.Setenv("XCLOUD_TRAFFIC_CONTROL_ENABLED", "")
 	if bandwidthShapingEnabled() {
 		t.Fatal("bandwidth shaping must be disabled by default")
 	}
 	t.Setenv("XCLOUD_ENABLE_BANDWIDTH_SHAPING", "true")
+	if bandwidthShapingEnabled() {
+		t.Fatal("legacy enable setting must not override the hard default-off switch")
+	}
+	t.Setenv("XCLOUD_TRAFFIC_CONTROL_ENABLED", "true")
 	if !bandwidthShapingEnabled() {
-		t.Fatal("explicit bandwidth shaping opt-in was ignored")
+		t.Fatal("explicit traffic-control opt-in was ignored")
 	}
 }
