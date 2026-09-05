@@ -11,6 +11,10 @@ func TestPromotionDiscountHonorsPercentCapAndList(t *testing.T) {
 	if got := promotionDiscount(p, 999); got != 999 {
 		t.Fatalf("got %d, want 999", got)
 	}
+	p = promotion{DiscountType: "percent", DiscountValue: 9500}
+	if got := promotionDiscount(p, 1000); got != 50 {
+		t.Fatalf("95 折 should discount 50, got %d", got)
+	}
 }
 
 func TestCouponCodeNormalizationAndHash(t *testing.T) {

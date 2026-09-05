@@ -98,7 +98,8 @@ export const cloudApi = createApi({
         imageVersion: string
         months: number
         couponCode?: string
-        promotionId?: string
+        selectionId?: string
+        payFullPrice?: boolean
       }
     >({
       query: body => ({ url: '/purchases', method: 'POST', body }),
@@ -111,7 +112,8 @@ export const cloudApi = createApi({
         imageId: string
         months: number
         couponCode?: string
-        promotionId?: string
+        selectionId?: string
+        payFullPrice?: boolean
       }
     >({ query: body => ({ url: '/purchases/quote', method: 'POST', body }) }),
     getNotifications: builder.query<Notification[], void>({
@@ -176,7 +178,7 @@ export const cloudApi = createApi({
     }),
     renewOrder: builder.mutation<
       { order: Order; task?: Task },
-      { id: string; months: number; couponCode?: string; promotionId?: string }
+      { id: string; months: number; couponCode?: string; selectionId?: string; payFullPrice?: boolean }
     >({
       query: ({ id, months }) => ({
         url: `/orders/${id}/renew`,
@@ -187,7 +189,7 @@ export const cloudApi = createApi({
     }),
     quoteRenewal: builder.mutation<
       PriceQuote,
-      { id: string; months: number; couponCode?: string; promotionId?: string }
+      { id: string; months: number; couponCode?: string; selectionId?: string; payFullPrice?: boolean }
     >({
       query: ({ id, ...body }) => ({
         url: `/orders/${id}/renew/quote`,

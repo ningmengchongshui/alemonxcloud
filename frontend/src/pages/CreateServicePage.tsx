@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   useGetWalletQuery,
   usePurchaseMutation,
@@ -67,7 +67,8 @@ export function CreateServicePage({
   const [months, setMonths] = useState(1)
   const [error, setError] = useState('')
   const [couponCode, setCouponCode] = useState('')
-  const [promotionID, setPromotionID] = useState('')
+  const [selectionID, setSelectionID] = useState('')
+  const [payFullPrice, setPayFullPrice] = useState(false)
   const [quote, setQuote] = useState<PriceQuote | null>(null)
   const [purchase, { isLoading: saving }] = usePurchaseMutation()
   const [quotePurchase, { isLoading: quoting }] = useQuotePurchaseMutation()
@@ -85,7 +86,7 @@ export function CreateServicePage({
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
   const total = (selectedPlan?.monthlyPriceFen ?? 0) * months
-  function preview(selected = promotionID, code = couponCode) {
+  function preview(selected = selectionID, code = couponCode, fullPrice = payFullPrice) {
     if (!selectedImage || !selectedPlan) return
     setError('')
     void quotePurchase({
@@ -93,12 +94,14 @@ export function CreateServicePage({
       imageId: selectedImage.id,
       months,
       couponCode: code,
-      promotionId: selected
+      selectionId: selected,
+      payFullPrice: fullPrice
     })
       .unwrap()
       .then(value => {
         setQuote(value)
-        setPromotionID(value.selectedId ?? '')
+        setSelectionID(value.selectedId ?? '')
+        setPayFullPrice(Boolean(value.payFullPrice))
       })
       .catch(value =>
         setError(
@@ -108,6 +111,12 @@ export function CreateServicePage({
         )
       )
   }
+  useEffect(() => {
+    setQuote(null)
+    setSelectionID('')
+    setPayFullPrice(false)
+    if (selectedImage && selectedPlan) preview('', '', false)
+  }, [selectedImage?.id, selectedPlan?.id, months])
 
   function submit() {
     if (!selectedImage || !selectedPlan) return
@@ -120,7 +129,8 @@ export function CreateServicePage({
       planId: selectedPlan.id,
       months,
       couponCode: couponCode || undefined,
-      promotionId: promotionID || undefined
+      selectionId: selectionID || undefined,
+      payFullPrice
     })
       .unwrap()
       .then(() => {
@@ -323,7 +333,8 @@ export function CreateServicePage({
                 placeholder="输入券码后试算"
                 onChange={e => {
                   setCouponCode(e.target.value)
-                  setPromotionID('')
+                  setSelectionID('')
+                  setPayFullPrice(false)
                   setQuote(null)
                 }}
               />
@@ -344,13 +355,15 @@ export function CreateServicePage({
                 </p>
                 {quote.candidates.length > 1 && (
                   <select
-                    value={promotionID}
+                    value={payFullPrice ? '__full__' : selectionID}
                     onChange={e => {
-                      setPromotionID(e.target.value)
-                      preview(e.target.value, '')
+                      const full = e.target.value === '__full__'
+                      setPayFullPrice(full)
+                      setSelectionID(full ? '' : e.target.value)
+                      preview(full ? '' : e.target.value, couponCode, full)
                     }}
                   >
-                    <option value="">不使用优惠</option>
+                    <option value="__full__">不使用优惠，按原价购买</option>
                     {quote.candidates.map(item => (
                       <option key={item.id} value={item.id}>
                         {item.name} · 减{' '}

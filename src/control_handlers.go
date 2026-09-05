@@ -63,14 +63,15 @@ func purchaseHandler(c *gin.Context) {
 		ImageVersion string `json:"imageVersion"`
 		Months       int    `json:"months"`
 		CouponCode   string `json:"couponCode"`
-		PromotionID  string `json:"promotionId"`
+		SelectionID  string `json:"selectionId"`
+		PayFullPrice bool   `json:"payFullPrice"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "购买参数无效"})
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	item, task, err := purchaseWithWallet(c.Request.Context(), user.ID, body.PlanID, body.ImageID, body.ImageVersion, body.Months, body.CouponCode, body.PromotionID)
+	item, task, err := purchaseWithWallet(c.Request.Context(), user.ID, body.PlanID, body.ImageID, body.ImageVersion, body.Months, body.CouponCode, body.SelectionID, body.PayFullPrice)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -179,9 +180,10 @@ func submitPaymentHandler(c *gin.Context) {
 func renewOrderHandler(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	var body struct {
-		Months      int    `json:"months"`
-		CouponCode  string `json:"couponCode"`
-		PromotionID string `json:"promotionId"`
+		Months       int    `json:"months"`
+		CouponCode   string `json:"couponCode"`
+		SelectionID  string `json:"selectionId"`
+		PayFullPrice bool   `json:"payFullPrice"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "续费参数无效"})
@@ -210,16 +212,17 @@ func renewOrderHandler(c *gin.Context) {
 // (when necessary) restart task are committed as one transaction.
 func renewWithWalletHandler(c *gin.Context) {
 	var body struct {
-		Months      int    `json:"months"`
-		CouponCode  string `json:"couponCode"`
-		PromotionID string `json:"promotionId"`
+		Months       int    `json:"months"`
+		CouponCode   string `json:"couponCode"`
+		SelectionID  string `json:"selectionId"`
+		PayFullPrice bool   `json:"payFullPrice"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "续费参数无效"})
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months, body.CouponCode, body.PromotionID)
+	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months, body.CouponCode, body.SelectionID, body.PayFullPrice)
 	if err != nil {
 		businessError(c, err)
 		return

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Button, Dialog } from '@/components/ui'
 
 interface ActionDialogProps {
@@ -16,6 +17,7 @@ interface ActionDialogProps {
   onConfirm: () => void
   onCancel: () => void
   busy?: boolean
+  children?: ReactNode
 }
 
 export function ActionDialog({
@@ -34,6 +36,7 @@ export function ActionDialog({
   onConfirm,
   onCancel,
   busy
+  ,children
 }: ActionDialogProps) {
   return (
     <Dialog title={title} description={description} onClose={onCancel}>
@@ -64,6 +67,7 @@ export function ActionDialog({
           />
         </label>
       )}
+      {children}
       <div className="flex justify-end gap-2">
         <Button tone="secondary" onClick={onCancel}>
           取消

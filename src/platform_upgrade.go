@@ -418,7 +418,7 @@ func nodeRequest(ctx context.Context, n node, method, path string, payload any, 
 	return nil
 }
 
-func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVersion string, months int, couponCode, promotionID string) (order, controlTask, error) {
+func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVersion string, months int, couponCode, selectionID string, payFullPrice bool) (order, controlTask, error) {
 	if months < 1 || months > 24 {
 		return order{}, controlTask{}, errors.New("订阅周期应为 1 至 24 个月")
 	}
@@ -455,7 +455,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {
 		return order{}, controlTask{}, errors.New("请重新登录后再购买")
 	}
-	quote, selectedPromotion, selectedCoupon, err := quoteFor(ctx, ownerID, "purchase", p.ID, img.ID, months, p.MonthlyFen*months, couponCode, promotionID, tx)
+	quote, selectedPromotion, selectedCoupon, err := quoteFor(ctx, ownerID, "purchase", p.ID, img.ID, months, p.MonthlyFen*months, couponCode, selectionID, payFullPrice, tx)
 	if err != nil {
 		return order{}, controlTask{}, err
 	}
@@ -505,13 +505,16 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	}
 	appendTaskEvent(ctx, t.ID, "queued", "钱包扣款后等待部署")
 	_ = createNotification(ctx, ownerID, "purchase", "购买已提交", fmt.Sprintf("已扣除 %.2f XCoin，正在部署。", float64(amount)/100), map[string]any{"orderId": o.ID, "instanceId": instanceID, "taskId": t.ID})
+	if quote.DiscountAmountFen > 0 {
+		_ = createNotification(ctx, ownerID, "promotion", "优惠已使用", fmt.Sprintf("本次订单已优惠 %.2f XCoin。", float64(quote.DiscountAmountFen)/100), map[string]any{"orderId": o.ID, "promotionId": quote.SelectedID})
+	}
 	return o, t, nil
 }
 
 // renewWithWallet extends one existing instance.  It deliberately does not
 // reserve fresh capacity: the instance already owns its node reservation until
 // it is purged.  Expired instances are restarted only after the debit commits.
-func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months int, couponCode, promotionID string) (order, *controlTask, error) {
+func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months int, couponCode, selectionID string, payFullPrice bool) (order, *controlTask, error) {
 	if months < 1 || months > 24 {
 		return order{}, nil, errors.New("订阅周期应为 1 至 24 个月")
 	}
@@ -546,7 +549,7 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {
 		return order{}, nil, errors.New("请重新登录后再续费")
 	}
-	quote, selectedPromotion, selectedCoupon, err := quoteFor(ctx, ownerID, "renewal", p.ID, img.ID, months, p.MonthlyFen*months, couponCode, promotionID, tx)
+	quote, selectedPromotion, selectedCoupon, err := quoteFor(ctx, ownerID, "renewal", p.ID, img.ID, months, p.MonthlyFen*months, couponCode, selectionID, payFullPrice, tx)
 	if err != nil {
 		return order{}, nil, err
 	}
@@ -607,6 +610,9 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 		appendTaskEvent(ctx, task.ID, "queued", "钱包扣款后等待续费恢复")
 	}
 	_ = createNotification(ctx, ownerID, "renewal", "续费成功", fmt.Sprintf("已扣除 %.2f XCoin，服务有效期已延长。", float64(amount)/100), map[string]any{"orderId": item.ID, "instanceId": source.InstanceID})
+	if quote.DiscountAmountFen > 0 {
+		_ = createNotification(ctx, ownerID, "promotion", "续费优惠已使用", fmt.Sprintf("本次续费已优惠 %.2f XCoin。", float64(quote.DiscountAmountFen)/100), map[string]any{"orderId": item.ID, "promotionId": quote.SelectedID})
+	}
 	return item, task, nil
 }
 func validImageTag(value string) bool {

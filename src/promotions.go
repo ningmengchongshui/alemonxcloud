@@ -40,6 +40,7 @@ type priceQuote struct {
 	AmountFen         int              `json:"amountFen"`
 	Candidates        []priceCandidate `json:"candidates"`
 	SelectedID        string           `json:"selectedId,omitempty"`
+	PayFullPrice      bool             `json:"payFullPrice"`
 }
 
 func normalizeCouponCode(v string) string {
@@ -66,6 +67,9 @@ func validPromotion(v promotion) error {
 	}
 	if v.Scope != "purchase" && v.Scope != "renewal" && v.Scope != "both" {
 		return errors.New("适用范围无效")
+	}
+	if v.Kind == "new_user" && v.Scope != "purchase" {
+		return errors.New("新人优惠只能适用于新购")
 	}
 	if v.DiscountType != "fixed" && v.DiscountType != "percent" {
 		return errors.New("优惠类型无效")
@@ -131,7 +135,8 @@ func promotionMatches(v promotion, ownerID, scope, planID, imageID string, month
 func promotionDiscount(v promotion, list int) int {
 	d := v.DiscountValue
 	if v.DiscountType == "percent" {
-		d = int(math.Floor(float64(list) * float64(d) / 10000))
+		// percent is a payable rate: 9500 means the user pays 95% (95 折).
+		d = list - int(math.Floor(float64(list)*float64(d)/10000))
 	}
 	if v.MaxDiscountFen > 0 && d > v.MaxDiscountFen {
 		d = v.MaxDiscountFen
@@ -145,19 +150,23 @@ func consumePromotionTx(ctx context.Context, tx *sql.Tx, ownerID, orderID string
 	if quote.SelectedID == "" || p == nil {
 		return nil
 	}
-	if p.TotalLimit > 0 {
-		r, e := tx.ExecContext(ctx, `UPDATE xcloud_promotions SET used_count=used_count+1,updated_at=NOW() WHERE id=? AND used_count<?`, p.ID, p.TotalLimit)
-		if e != nil {
-			return e
-		}
-		n, _ := r.RowsAffected()
-		if n != 1 {
-			return errors.New("优惠名额已用完")
-		}
-	} else if _, e := tx.ExecContext(ctx, `UPDATE xcloud_promotions SET used_count=used_count+1,updated_at=NOW() WHERE id=?`, p.ID); e != nil {
+	r, e := tx.ExecContext(ctx, `UPDATE xcloud_promotions SET used_count=used_count+1,updated_at=NOW() WHERE id=? AND enabled=TRUE AND (starts_at IS NULL OR starts_at<=NOW()) AND (ends_at IS NULL OR ends_at>NOW()) AND (total_limit=0 OR used_count<total_limit)`, p.ID)
+	if e != nil {
 		return e
 	}
+	if n, _ := r.RowsAffected(); n != 1 {
+		return errors.New("优惠已失效或名额已用完")
+	}
 	if cp != nil {
+		if cp.PerUserLimit > 0 {
+			var used int
+			if e := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_coupon_redemptions WHERE coupon_id=? AND owner_id=? FOR UPDATE`, cp.ID, ownerID).Scan(&used); e != nil {
+				return e
+			}
+			if used >= cp.PerUserLimit {
+				return errors.New("该券已达到你的使用上限")
+			}
+		}
 		if cp.TotalLimit > 0 {
 			r, e := tx.ExecContext(ctx, `UPDATE xcloud_coupons SET used_count=used_count+1 WHERE id=? AND enabled=TRUE AND used_count<?`, cp.ID, cp.TotalLimit)
 			if e != nil {
@@ -179,7 +188,7 @@ func consumePromotionTx(ctx context.Context, tx *sql.Tx, ownerID, orderID string
 	if cp != nil {
 		couponID = cp.ID
 	}
-	_, e := tx.ExecContext(ctx, `INSERT INTO xcloud_coupon_redemptions (id,promotion_id,coupon_id,owner_id,order_id,discount_amount_fen,created_at) VALUES (?,?,?,?,?,?,NOW())`, newID("red"), p.ID, couponID, ownerID, orderID, quote.DiscountAmountFen)
+	_, e = tx.ExecContext(ctx, `INSERT INTO xcloud_coupon_redemptions (id,promotion_id,coupon_id,owner_id,order_id,discount_amount_fen,created_at) VALUES (?,?,?,?,?,?,NOW())`, newID("red"), p.ID, couponID, ownerID, orderID, quote.DiscountAmountFen)
 	if e != nil {
 		return e
 	}
@@ -187,7 +196,7 @@ func consumePromotionTx(ctx context.Context, tx *sql.Tx, ownerID, orderID string
 	return e
 }
 func activePromotions(ctx context.Context, tx *sql.Tx, lock bool) ([]promotion, error) {
-	q := `SELECT id,name,kind,scope,discount_type,discount_value,min_amount_fen,max_discount_fen,COALESCE(plan_ids,JSON_ARRAY()),COALESCE(image_ids,JSON_ARRAY()),COALESCE(month_values,JSON_ARRAY()),starts_at,ends_at,total_limit,per_user_limit,used_count,enabled,created_by,created_at,updated_at FROM xcloud_promotions`
+	q := `SELECT id,name,kind,scope,discount_type,discount_value,min_amount_fen,max_discount_fen,COALESCE(plan_ids,JSON_ARRAY()),COALESCE(image_ids,JSON_ARRAY()),COALESCE(month_values,JSON_ARRAY()),starts_at,ends_at,total_limit,per_user_limit,used_count,enabled,created_by,created_at,updated_at FROM xcloud_promotions WHERE enabled=TRUE`
 	if lock {
 		q += " FOR UPDATE"
 	}
@@ -216,8 +225,8 @@ func activePromotions(ctx context.Context, tx *sql.Tx, lock bool) ([]promotion, 
 	}
 	return out, rows.Err()
 }
-func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, months, list int, couponCode, selectedID string, tx *sql.Tx) (priceQuote, *promotion, *coupon, error) {
-	values, err := activePromotions(ctx, tx, tx != nil)
+func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, months, list int, couponCode, selectedID string, payFullPrice bool, tx *sql.Tx) (priceQuote, *promotion, *coupon, error) {
+	values, err := activePromotions(ctx, tx, false)
 	if err != nil {
 		return priceQuote{}, nil, nil, err
 	}
@@ -225,15 +234,14 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 	candidates := []priceCandidate{}
 	var selectedPromo *promotion
 	var selectedCoupon *coupon
+	var couponPromotion *promotion
+	var enteredCoupon *coupon
 	for i := range values {
 		ok, e := promotionMatches(values[i], ownerID, scope, planID, imageID, months, list, now, tx)
 		if e != nil {
 			return priceQuote{}, nil, nil, e
 		}
 		if !ok {
-			continue
-		}
-		if couponCode != "" {
 			continue
 		}
 		d := promotionDiscount(values[i], list)
@@ -266,10 +274,23 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 		if e != nil || !ok {
 			return priceQuote{}, nil, nil, errors.New("该券不适用于当前订单")
 		}
+		if cp.PerUserLimit > 0 {
+			var used int
+			qCount := instanceDB.QueryRowContext
+			if tx != nil {
+				qCount = tx.QueryRowContext
+			}
+			if err := qCount(ctx, `SELECT COUNT(*) FROM xcloud_coupon_redemptions WHERE coupon_id=? AND owner_id=?`, cp.ID, ownerID).Scan(&used); err != nil {
+				return priceQuote{}, nil, nil, err
+			}
+			if used >= cp.PerUserLimit {
+				return priceQuote{}, nil, nil, errors.New("该券已达到你的使用上限")
+			}
+		}
 		d := promotionDiscount(p, list)
 		candidates = append(candidates, priceCandidate{ID: cp.ID, Kind: "coupon", Name: p.Name, DiscountAmountFen: d, PayableAmountFen: list - d})
-		selectedPromo = &p
-		selectedCoupon = &cp
+		couponPromotion = &p
+		enteredCoupon = &cp
 	}
 	q := priceQuote{ListAmountFen: list, AmountFen: list, Candidates: candidates}
 	for i := range candidates {
@@ -278,7 +299,11 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 			q.SelectedID = candidates[i].ID
 		}
 	}
-	if selectedID != "" {
+	if payFullPrice {
+		q.SelectedID = ""
+		q.DiscountAmountFen = 0
+		q.PayFullPrice = true
+	} else if selectedID != "" {
 		found := false
 		for _, v := range candidates {
 			if v.ID == selectedID {
@@ -295,11 +320,16 @@ func quoteFor(ctx context.Context, ownerID, scope, planID, imageID string, month
 	for i := range q.Candidates {
 		q.Candidates[i].IsDefault = q.Candidates[i].ID == q.SelectedID
 	}
-	if selectedPromo == nil && q.SelectedID != "" {
+	selectedPromo, selectedCoupon = nil, nil
+	if q.SelectedID != "" {
 		for i := range values {
 			if values[i].ID == q.SelectedID {
 				selectedPromo = &values[i]
 			}
+		}
+		if enteredCoupon != nil && q.SelectedID == enteredCoupon.ID {
+			selectedPromo = couponPromotion
+			selectedCoupon = enteredCoupon
 		}
 	}
 	return q, selectedPromo, selectedCoupon, nil

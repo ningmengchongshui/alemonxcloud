@@ -12,11 +12,12 @@ import (
 
 func quotePurchaseHandler(c *gin.Context) {
 	var b struct {
-		PlanID      string `json:"planId"`
-		ImageID     string `json:"imageId"`
-		Months      int    `json:"months"`
-		CouponCode  string `json:"couponCode"`
-		PromotionID string `json:"promotionId"`
+		PlanID       string `json:"planId"`
+		ImageID      string `json:"imageId"`
+		Months       int    `json:"months"`
+		CouponCode   string `json:"couponCode"`
+		SelectionID  string `json:"selectionId"`
+		PayFullPrice bool   `json:"payFullPrice"`
 	}
 	if c.ShouldBindJSON(&b) != nil || b.Months < 1 || b.Months > 24 {
 		c.JSON(400, gin.H{"message": "报价参数无效"})
@@ -33,7 +34,7 @@ func quotePurchaseHandler(c *gin.Context) {
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	q, _, _, err := quoteFor(c, user.ID, "purchase", b.PlanID, b.ImageID, b.Months, monthly*b.Months, b.CouponCode, b.PromotionID, nil)
+	q, _, _, err := quoteFor(c, user.ID, "purchase", b.PlanID, b.ImageID, b.Months, monthly*b.Months, b.CouponCode, b.SelectionID, b.PayFullPrice, nil)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -42,9 +43,10 @@ func quotePurchaseHandler(c *gin.Context) {
 }
 func quoteRenewHandler(c *gin.Context) {
 	var b struct {
-		Months      int    `json:"months"`
-		CouponCode  string `json:"couponCode"`
-		PromotionID string `json:"promotionId"`
+		Months       int    `json:"months"`
+		CouponCode   string `json:"couponCode"`
+		SelectionID  string `json:"selectionId"`
+		PayFullPrice bool   `json:"payFullPrice"`
 	}
 	if c.ShouldBindJSON(&b) != nil || b.Months < 1 || b.Months > 24 {
 		c.JSON(400, gin.H{"message": "报价参数无效"})
@@ -57,7 +59,7 @@ func quoteRenewHandler(c *gin.Context) {
 		businessError(c, errors.New("订单不可续费"))
 		return
 	}
-	q, _, _, err := quoteFor(c, user.ID, "renewal", planID, imageID, b.Months, monthly*b.Months, b.CouponCode, b.PromotionID, nil)
+	q, _, _, err := quoteFor(c, user.ID, "renewal", planID, imageID, b.Months, monthly*b.Months, b.CouponCode, b.SelectionID, b.PayFullPrice, nil)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -165,7 +167,16 @@ func adminCreateCoupons(c *gin.Context) {
 	if b.PerUserLimit <= 0 {
 		b.PerUserLimit = 1
 	}
+	if b.Mode == "single" {
+		b.TotalLimit, b.PerUserLimit = 1, 1
+	}
 	user := c.MustGet("user").(oidcUser)
+	tx, err := beginSerializableTx(c.Request.Context())
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer tx.Rollback()
 	created := []gin.H{}
 	for i := 0; i < b.Count; i++ {
 		code := normalizeCouponCode(b.Code)
@@ -173,14 +184,21 @@ func adminCreateCoupons(c *gin.Context) {
 			code = freshCouponCode()
 		}
 		id := newID("cpn")
-		_, err := instanceDB.ExecContext(c, `INSERT INTO xcloud_coupons (id,promotion_id,code_hash,code_mask,mode,enabled,total_limit,per_user_limit,used_count,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())`, id, b.PromotionID, couponHash(code), couponMask(code), b.Mode, true, b.TotalLimit, b.PerUserLimit, 0, user.ID)
+		_, err = tx.ExecContext(c, `INSERT INTO xcloud_coupons (id,promotion_id,code_hash,code_mask,mode,enabled,total_limit,per_user_limit,used_count,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())`, id, b.PromotionID, couponHash(code), couponMask(code), b.Mode, true, b.TotalLimit, b.PerUserLimit, 0, user.ID)
 		if err != nil {
 			businessError(c, errors.New("券码重复，请重试"))
 			return
 		}
 		created = append(created, gin.H{"id": id, "code": code, "codeMask": couponMask(code)})
 	}
-	_ = writeAudit(c, user.ID, "coupon.create", "promotion", b.PromotionID, map[string]any{"count": b.Count, "mode": b.Mode})
+	if err := writeAuditTx(c, tx, user.ID, "coupon.create", "promotion", b.PromotionID, map[string]any{"count": b.Count, "mode": b.Mode}); err != nil {
+		internalError(c, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		internalError(c, err)
+		return
+	}
 	c.JSON(http.StatusCreated, gin.H{"coupons": created})
 }
 func adminCouponStatus(c *gin.Context) {

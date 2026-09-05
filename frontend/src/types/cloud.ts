@@ -111,6 +111,7 @@ export interface PriceQuote {
   discountAmountFen: number
   amountFen: number
   selectedId?: string
+  payFullPrice?: boolean
   candidates: PriceCandidate[]
 }
 export interface Promotion {
