@@ -515,7 +515,8 @@ export function OrdersPage({
               </dl>
               <p className="text-xs leading-5 text-slate-500 dark:text-slate-300">
                 本订单将扣减 {refundQuote.refundableDays} 个完整 24
-                小时服务期；后续续费订单会同步前移。实例停止后数据保留 30 天。
+                小时服务期；后续续费订单会同步前移。服务结束后将销毁容器资源，数据再保留
+                30 天。
               </p>
               <div className="flex justify-end gap-2">
                 <Button tone="secondary" onClick={() => setRefunding(null)}>

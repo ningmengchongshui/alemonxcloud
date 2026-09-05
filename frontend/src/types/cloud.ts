@@ -4,6 +4,7 @@ export type Page =
   | 'create'
   | 'orders'
   | 'wallet'
+  | 'offers'
   | 'notifications'
   | 'tickets'
 export type SuperPage =
@@ -17,6 +18,8 @@ export type SuperPage =
   | 'tickets'
   | 'audit'
   | 'promotions'
+  | 'coupons'
+  | 'redemptions'
   | 'settings'
 
 export interface CurrentUser {
@@ -40,6 +43,12 @@ export interface Instance {
   version: string
   spec: string
   status: string
+  runtimeStatus?: string
+  destroyAt?: string
+  destroyedAt?: string
+  purgeAt?: string
+  destroyReason?: 'refund' | 'expired' | 'manual' | 'legacy'
+  archivedAt?: string
   ip: string
   createdAt: string
 }
@@ -165,6 +174,37 @@ export interface CouponRedemption {
   orderId: string
   discountAmountFen: number
   createdAt: string
+}
+export interface CouponBatch {
+  id: string
+  name: string
+  status: 'active' | 'paused'
+  distributionMode: 'public' | 'targeted'
+  discountType: 'fixed' | 'percent'
+  discountValue: number
+  minAmountFen: number
+  maxDiscountFen: number
+  scope: 'purchase' | 'renewal' | 'both'
+  planIDs: string[]
+  imageIDs: string[]
+  monthValues: string[]
+  startsAt?: string
+  endsAt?: string
+  issueLimit: number
+  perUserLimit: number
+  issuedCount: number
+  createdAt: string
+}
+export interface UserCoupon {
+  id: string
+  batchId: string
+  ownerId: string
+  status: 'available' | 'used' | 'expired' | 'voided'
+  issueSource: 'public' | 'targeted' | 'legacy'
+  expiresAt?: string
+  usedAt?: string
+  createdAt: string
+  batch?: CouponBatch
 }
 export interface Node {
   id: string

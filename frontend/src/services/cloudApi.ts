@@ -24,7 +24,9 @@ import type {
   RechargeContact,
   Promotion,
   Coupon,
-  CouponRedemption
+  CouponRedemption,
+  CouponBatch,
+  UserCoupon
 } from '@/types/cloud'
 
 interface SessionResponse {
@@ -64,15 +66,22 @@ export const cloudApi = createApi({
       providesTags: ['Instances']
     }),
     instanceAction: builder.mutation<
-      { task: Task; message?: string },
-      { id: string; action: 'start' | 'stop' | 'restart' | 'delete' }
+      { task?: Task; message?: string; destroyAt?: string },
+      {
+        id: string
+        action:
+          | 'start'
+          | 'stop'
+          | 'restart'
+          | 'destroy'
+          | 'destroy-now'
+          | 'cancel-destroy'
+          | 'archive'
+      }
     >({
       query: ({ id, action }) => ({
-        url:
-          action === 'delete'
-            ? `/instances/${id}`
-            : `/instances/${id}/${action}`,
-        method: action === 'delete' ? 'DELETE' : 'POST'
+        url: `/instances/${id}/${action}`,
+        method: 'POST'
       }),
       invalidatesTags: ['Instances']
     }),
@@ -116,7 +125,6 @@ export const cloudApi = createApi({
         imageId: string
         imageVersion: string
         months: number
-        couponCode?: string
         selectionId?: string
         payFullPrice?: boolean
       }
@@ -130,7 +138,6 @@ export const cloudApi = createApi({
         planId: string
         imageId: string
         months: number
-        couponCode?: string
         selectionId?: string
         payFullPrice?: boolean
       }
@@ -142,6 +149,18 @@ export const cloudApi = createApi({
     claimPromotion: builder.mutation<void, string>({
       query: id => ({ url: `/promotions/${id}/claim`, method: 'POST' }),
       invalidatesTags: ['Promotions', 'Wallet']
+    }),
+    getPublicCouponBatches: builder.query<CouponBatch[], void>({
+      query: () => '/coupon-batches/public',
+      providesTags: ['Promotions']
+    }),
+    getMyCoupons: builder.query<UserCoupon[], void>({
+      query: () => '/my-coupons',
+      providesTags: ['Promotions']
+    }),
+    claimCouponBatch: builder.mutation<void, string>({
+      query: id => ({ url: `/coupon-batches/${id}/claim`, method: 'POST' }),
+      invalidatesTags: ['Promotions', 'Notifications']
     }),
     getNotifications: builder.query<Notification[], void>({
       query: () => '/notifications',
@@ -211,7 +230,6 @@ export const cloudApi = createApi({
       {
         id: string
         months: number
-        couponCode?: string
         selectionId?: string
         payFullPrice?: boolean
       }
@@ -228,7 +246,6 @@ export const cloudApi = createApi({
       {
         id: string
         months: number
-        couponCode?: string
         selectionId?: string
         payFullPrice?: boolean
       }
@@ -265,6 +282,47 @@ export const cloudApi = createApi({
     getAdminCouponRedemptions: builder.query<CouponRedemption[], void>({
       query: () => '/admin/coupon-redemptions',
       providesTags: ['Promotions', 'Admin']
+    }),
+    getAdminCouponBatches: builder.query<CouponBatch[], void>({
+      query: () => '/admin/coupon-batches',
+      providesTags: ['Promotions', 'Admin']
+    }),
+    saveAdminCouponBatch: builder.mutation<CouponBatch, CouponBatch>({
+      query: body => ({
+        url: body.id
+          ? `/admin/coupon-batches/${body.id}`
+          : '/admin/coupon-batches',
+        method: body.id ? 'PUT' : 'POST',
+        body
+      }),
+      invalidatesTags: ['Promotions', 'Admin']
+    }),
+    issueAdminCouponBatch: builder.mutation<
+      {
+        runId: string
+        items: Array<{ ownerId: string; status: string; reason?: string }>
+      },
+      { id: string; ownerIds: string[] }
+    >({
+      query: ({ id, ownerIds }) => ({
+        url: `/admin/coupon-batches/${id}/issue`,
+        method: 'POST',
+        body: { ownerIds }
+      }),
+      invalidatesTags: ['Promotions', 'Admin']
+    }),
+    voidAdminCouponBatch: builder.mutation<{ voidedCount: number }, string>({
+      query: id => ({
+        url: `/admin/coupon-batches/${id}/void-unused`,
+        method: 'POST'
+      }),
+      invalidatesTags: ['Promotions', 'Admin']
+    }),
+    searchAdminCouponUsers: builder.query<
+      Array<{ id: string; username: string; email: string }>,
+      string
+    >({
+      query: q => `/admin/coupon-users?q=${encodeURIComponent(q)}`
     }),
     createAdminCoupons: builder.mutation<
       { coupons: Array<{ id: string; code: string; codeMask: string }> },
@@ -486,6 +544,9 @@ export const {
   useQuotePurchaseMutation,
   useGetPromotionsQuery,
   useClaimPromotionMutation,
+  useGetPublicCouponBatchesQuery,
+  useGetMyCouponsQuery,
+  useClaimCouponBatchMutation,
   useGetNotificationsQuery,
   useReadNotificationMutation,
   useReadAllNotificationsMutation,
@@ -506,6 +567,11 @@ export const {
   useSaveAdminPromotionMutation,
   useGetAdminCouponsQuery,
   useGetAdminCouponRedemptionsQuery,
+  useGetAdminCouponBatchesQuery,
+  useSaveAdminCouponBatchMutation,
+  useIssueAdminCouponBatchMutation,
+  useVoidAdminCouponBatchMutation,
+  useSearchAdminCouponUsersQuery,
   useCreateAdminCouponsMutation,
   useUpdateAdminCouponStatusMutation,
   useGetAdminOrdersQuery,

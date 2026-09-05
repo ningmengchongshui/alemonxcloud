@@ -99,8 +99,8 @@ func validateRefundSegments(segments []refundSegment) error {
 		if !item.End.After(item.Start) {
 			return errors.New("订单服务期无效，请提交工单处理")
 		}
-		if index > 0 && item.Start.Before(segments[index-1].End) {
-			return errors.New("订单服务期存在重叠，请提交工单处理")
+		if index > 0 && !item.Start.Equal(segments[index-1].End) {
+			return errors.New("订单服务期未连续衔接，请提交工单处理")
 		}
 	}
 	return nil
@@ -216,7 +216,14 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 			return refundQuote{}, walletEntry{}, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET expires_at=?,purge_at=NULL,retention_days=? WHERE id=?`, quote.ServiceEndsAt, refundRetentionDays, instanceID); err != nil {
+	var runtimeStatus string
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(runtime_status,status) FROM xcloud_instances WHERE id=? FOR UPDATE`, instanceID).Scan(&runtimeStatus); err != nil {
+		return refundQuote{}, walletEntry{}, err
+	}
+	if runtimeStatus != "running" && runtimeStatus != "stopped" {
+		runtimeStatus = "stopped"
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET expires_at=?,status='destroy_scheduled',runtime_status=?,destroy_at=?,destroy_reason='refund',destroyed_at=NULL,purge_at=NULL,retention_days=? WHERE id=?`, quote.ServiceEndsAt, runtimeStatus, quote.ServiceEndsAt, refundRetentionDays, instanceID); err != nil {
 		return refundQuote{}, walletEntry{}, err
 	}
 	if err = writeAuditTx(ctx, tx, ownerID, "order.refund", "order", orderID, map[string]any{"refundAmountFen": quote.RefundAmountFen, "refundableDays": quote.RefundableDays, "serviceEndsAt": quote.ServiceEndsAt, "walletEntryId": entry.ID}); err != nil {
@@ -225,6 +232,6 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 	if err = tx.Commit(); err != nil {
 		return refundQuote{}, walletEntry{}, err
 	}
-	_ = createNotification(ctx, ownerID, "refund", "订单退款已到账", fmt.Sprintf("已退回 %.2f XCoin。服务将继续可用至 %s，停止后数据保留 30 天。", float64(entry.AmountFen)/100, quote.ServiceEndsAt.Format("2006-01-02 15:04")), map[string]any{"orderId": orderID, "walletEntryId": entry.ID, "serviceEndsAt": quote.ServiceEndsAt, "dataPurgeAt": quote.DataPurgeAt})
+	_ = createNotification(ctx, ownerID, "refund", "订单退款已到账", fmt.Sprintf("已退回 %.2f XCoin。服务将继续可用至 %s；届时销毁容器资源，数据再保留 30 天。", float64(entry.AmountFen)/100, quote.ServiceEndsAt.Format("2006-01-02 15:04")), map[string]any{"orderId": orderID, "walletEntryId": entry.ID, "serviceEndsAt": quote.ServiceEndsAt, "dataPurgeAt": quote.DataPurgeAt})
 	return quote, entry, nil
 }

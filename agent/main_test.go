@@ -20,7 +20,7 @@ func TestInstanceComposeCarriesPlanLimitsAndRuntimeTuning(t *testing.T) {
 func TestAgentProtocolDeclaresStableExecutionCapabilities(t *testing.T) {
 	required := []string{
 		"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1",
-		"container.list.v1", "container.compose.v1", "image.pull.v1",
+		"container.list.v1", "container.compose.v1", "container.destroy.v1", "image.pull.v1",
 		"image.inspect.v1", "image.list.v1", "route.proxy.v1", "node.resources.v1",
 	}
 	declared := strings.Join(agentCapabilities, ",")

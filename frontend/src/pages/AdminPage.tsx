@@ -4,6 +4,10 @@ import { AdminNodesPage } from '@/pages/admin/AdminNodesPage'
 import { AdminOverviewPage } from '@/pages/admin/AdminOverviewPage'
 import { AdminTicketsPage } from '@/pages/admin/AdminTicketsPage'
 import { AdminPromotionsPage } from '@/pages/admin/AdminPromotionsPage'
+import {
+  AdminCouponRedemptionsPage,
+  AdminCouponsPage
+} from '@/pages/admin/AdminPromotionOperations'
 import { AdminSettingsPage } from '@/pages/admin/AdminSettingsPage'
 import {
   AdminAuditPage,
@@ -31,6 +35,10 @@ export function AdminPage({
   if (page === 'orders') return <AdminOrdersPage />
   if (page === 'tasks') return <AdminTasksPage />
   if (page === 'tickets') return <AdminTicketsPage />
+  if (page === 'coupons')
+    return <AdminCouponsPage onBack={() => window.history.back()} />
+  if (page === 'redemptions')
+    return <AdminCouponRedemptionsPage onBack={() => window.history.back()} />
   if (page === 'promotions')
     return (
       <AdminPromotionsPage

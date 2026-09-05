@@ -14,23 +14,46 @@ import (
 )
 
 type promotion struct {
-	ID, Name, Kind, Scope, DiscountType                                              string
-	DiscountValue, MinAmountFen, MaxDiscountFen, TotalLimit, PerUserLimit, UsedCount int
-	PlanIDs, ImageIDs, MonthValues                                                   []string
-	StartsAt, EndsAt                                                                 *time.Time
-	Enabled                                                                          bool
-	CreatedBy                                                                        string
-	CreatedAt, UpdatedAt                                                             time.Time
+	ID             string     `json:"id"`
+	Name           string     `json:"name"`
+	Kind           string     `json:"kind"`
+	Scope          string     `json:"scope"`
+	DiscountType   string     `json:"discountType"`
+	DiscountValue  int        `json:"discountValue"`
+	MinAmountFen   int        `json:"minAmountFen"`
+	MaxDiscountFen int        `json:"maxDiscountFen"`
+	TotalLimit     int        `json:"totalLimit"`
+	PerUserLimit   int        `json:"perUserLimit"`
+	UsedCount      int        `json:"usedCount"`
+	PlanIDs        []string   `json:"planIDs"`
+	ImageIDs       []string   `json:"imageIDs"`
+	MonthValues    []string   `json:"monthValues"`
+	StartsAt       *time.Time `json:"startsAt,omitempty"`
+	EndsAt         *time.Time `json:"endsAt,omitempty"`
+	Enabled        bool       `json:"enabled"`
+	CreatedBy      string     `json:"createdBy,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt,omitempty"`
 }
 type coupon struct {
-	ID, PromotionID, CodeMask, Mode     string
-	Enabled                             bool
-	TotalLimit, PerUserLimit, UsedCount int
-	CreatedAt                           time.Time
+	ID           string    `json:"id"`
+	UserCouponID string    `json:"userCouponId,omitempty"`
+	PromotionID  string    `json:"promotionId"`
+	CodeMask     string    `json:"codeMask"`
+	Mode         string    `json:"mode"`
+	Enabled      bool      `json:"enabled"`
+	TotalLimit   int       `json:"totalLimit"`
+	PerUserLimit int       `json:"perUserLimit"`
+	UsedCount    int       `json:"usedCount"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 type couponClaim struct {
-	ID, OwnerID, PromotionID, CouponID, Status string
-	ClaimedAt                                  time.Time
+	ID          string    `json:"id"`
+	OwnerID     string    `json:"ownerId"`
+	PromotionID string    `json:"promotionId"`
+	CouponID    string    `json:"couponId"`
+	Status      string    `json:"status"`
+	ClaimedAt   time.Time `json:"claimedAt"`
 }
 type priceCandidate struct {
 	ID, Kind, Name                      string
@@ -184,6 +207,25 @@ func promotionDiscount(v promotion, list int) int {
 func consumePromotionTx(ctx context.Context, tx *sql.Tx, ownerID, orderID string, quote priceQuote, p *promotion, cp *coupon) error {
 	if quote.SelectedID == "" || p == nil {
 		return nil
+	}
+	if p.Kind == "coupon_batch" {
+		if cp == nil || cp.UserCouponID == "" {
+			return errors.New("用户代金券无效")
+		}
+		r, e := tx.ExecContext(ctx, `UPDATE xcloud_user_coupons SET status='used',used_at=NOW(),order_id=? WHERE id=? AND owner_id=? AND status='available' AND (expires_at IS NULL OR expires_at>NOW())`, orderID, cp.UserCouponID, ownerID)
+		if e != nil {
+			return e
+		}
+		if n, _ := r.RowsAffected(); n != 1 {
+			return errors.New("代金券已失效或已使用")
+		}
+		snap, _ := json.Marshal(map[string]any{"id": p.ID, "name": p.Name, "kind": "coupon", "label": "代金券", "discountType": p.DiscountType, "discountValue": p.DiscountValue, "discountAmountFen": quote.DiscountAmountFen, "userCouponId": cp.UserCouponID})
+		redemptionID := newID("red")
+		if _, e = tx.ExecContext(ctx, `INSERT INTO xcloud_coupon_redemptions (id,promotion_id,coupon_id,user_coupon_id,owner_id,order_id,discount_amount_fen,created_at) VALUES (?,?,?,?,?,?,?,NOW())`, redemptionID, p.ID, nil, cp.UserCouponID, ownerID, orderID, quote.DiscountAmountFen); e != nil {
+			return e
+		}
+		_, e = tx.ExecContext(ctx, `UPDATE xcloud_orders SET promotion_snapshot=?,coupon_redemption_id=? WHERE id=?`, snap, redemptionID, orderID)
+		return e
 	}
 	r, e := tx.ExecContext(ctx, `UPDATE xcloud_promotions SET used_count=used_count+1,updated_at=NOW() WHERE id=? AND enabled=TRUE AND (starts_at IS NULL OR starts_at<=NOW()) AND (ends_at IS NULL OR ends_at>NOW()) AND (total_limit=0 OR used_count<total_limit)`, p.ID)
 	if e != nil {

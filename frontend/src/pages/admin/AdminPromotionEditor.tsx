@@ -60,7 +60,11 @@ export function AdminPromotionEditor({
   useEffect(() => {
     if (promotionID && all.data) {
       const found = all.data.find(x => x.id === promotionID)
-      if (found) setValue(found)
+      if (found)
+        setValue({
+          ...found,
+          kind: found.kind === ('new_user' as never) ? 'newcomer' : found.kind
+        })
     }
   }, [promotionID, all.data])
   const special =

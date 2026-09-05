@@ -77,6 +77,7 @@ export function Shell({
       label: '账户中心',
       items: [
         { key: 'wallet', icon: '◈', label: '钱包与流水' },
+        { key: 'offers', icon: '✦', label: '优惠中心' },
         {
           key: 'notifications',
           icon: '●',
@@ -106,7 +107,11 @@ export function Shell({
     },
     {
       label: '营销运营',
-      items: [{ key: 'promotions', icon: '✦', label: '营销与优惠' }]
+      items: [
+        { key: 'promotions', icon: '✦', label: '活动管理' },
+        { key: 'coupons', icon: '▣', label: '代金券管理' },
+        { key: 'redemptions', icon: '◷', label: '优惠核销记录' }
+      ]
     },
     {
       label: '账户与合规',

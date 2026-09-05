@@ -68,3 +68,11 @@ func TestImmutableDigestAcceptsOnlyVerifiedRepoDigest(t *testing.T) {
 		t.Fatalf("unverified values must not be published, got %q", got)
 	}
 }
+
+func TestLifecycleTaskIdempotencyKeyUsesScheduledTime(t *testing.T) {
+	at := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)
+	key := lifecycleTaskKey("ins_abc", "destroy", at)
+	if !strings.Contains(key, "destroy:ins_abc:") || !strings.HasSuffix(key, "Z") {
+		t.Fatalf("invalid lifecycle key: %s", key)
+	}
+}

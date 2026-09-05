@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react'
 import { useDispatch } from 'react-redux'
 import {
   useGetWalletQuery,
-  useGetPromotionsQuery,
-  useClaimPromotionMutation,
   usePurchaseMutation,
   useQuotePurchaseMutation
 } from '@/services/cloudApi'
@@ -74,10 +72,8 @@ export function CreateServicePage({
   const [payFullPrice, setPayFullPrice] = useState(false)
   const [quote, setQuote] = useState<PriceQuote | null>(null)
   const [purchase, { isLoading: saving }] = usePurchaseMutation()
-  const [quotePurchase, { isLoading: quoting }] = useQuotePurchaseMutation()
+  const [quotePurchase] = useQuotePurchaseMutation()
   const { data: wallet } = useGetWalletQuery()
-  const { data: promotions = [] } = useGetPromotionsQuery()
-  const [claimPromotion] = useClaimPromotionMutation()
   const dispatch = useDispatch()
   const images = catalog?.images ?? []
   const imageSources = images
@@ -324,79 +320,53 @@ export function CreateServicePage({
             </div>
           </dl>
           <div className="summary-total">
-            <span>应付 XCoin</span>
+            <span>应付</span>
             <strong>
               {selectedPlan
                 ? `${((quote?.amountFen ?? total) / 100).toFixed(2)} XCoin`
                 : '—'}
             </strong>
           </div>
-          <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-            {promotions.length > 0 && (
-              <div className="grid gap-2">
-                <b>可领取活动券</b>
-                {promotions.map(item => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between gap-2"
-                  >
-                    <span>{item.name}</span>
-                    <Button
-                      tone="secondary"
-                      onClick={() =>
-                        void claimPromotion(item.id)
-                          .unwrap()
-                          .then(() => preview())
-                      }
-                    >
-                      领取
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <Button
-              tone="secondary"
-              loading={quoting}
-              disabled={!selectedImage || !selectedPlan}
-              onClick={() => preview()}
-            >
-              刷新可用优惠
-            </Button>
+          <div className="my-3 grid gap-2 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
             {quote && (
               <>
-                <p className="m-0 text-slate-500">
-                  原价 {(quote.listAmountFen / 100).toFixed(2)} XCoin，已优惠{' '}
-                  {(quote.discountAmountFen / 100).toFixed(2)} XCoin
-                </p>
-                {quote.candidates.length > 1 && (
-                  <select
-                    value={payFullPrice ? '__full__' : selectionID}
-                    onChange={e => {
-                      const full = e.target.value === '__full__'
-                      setPayFullPrice(full)
-                      setSelectionID(full ? '' : e.target.value)
-                      preview(full ? '' : e.target.value, full)
-                    }}
-                  >
-                    <option value="__full__">不使用优惠，按原价购买</option>
-                    {quote.candidates.map(item => (
-                      <option key={item.id} value={item.id}>
-                        {item.name} · 减{' '}
-                        {(item.discountAmountFen / 100).toFixed(2)} XCoin
-                      </option>
-                    ))}
-                  </select>
-                )}
+                <div className="flex flex-col  items-center justify-between">
+                  <div>
+                    余额：
+                    {wallet
+                      ? `${(wallet.balanceFen / 100).toFixed(2)} XCoin`
+                      : '同步中'}
+                  </div>
+
+                  <div>原价 {(quote.listAmountFen / 100).toFixed(2)} XCoin</div>
+                  <div>
+                    已优惠 {(quote.discountAmountFen / 100).toFixed(2)} XCoin
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  {quote.candidates.length > 1 && (
+                    <select
+                      value={payFullPrice ? '__full__' : selectionID}
+                      onChange={e => {
+                        const full = e.target.value === '__full__'
+                        setPayFullPrice(full)
+                        setSelectionID(full ? '' : e.target.value)
+                        preview(full ? '' : e.target.value, full)
+                      }}
+                    >
+                      <option value="__full__">不使用优惠，按原价购买</option>
+                      {quote.candidates.map(item => (
+                        <option key={item.id} value={item.id}>
+                          {item.name} · 减{' '}
+                          {(item.discountAmountFen / 100).toFixed(2)} XCoin
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               </>
             )}
           </div>
-          <p className="summary-note">
-            当前余额：
-            {wallet
-              ? `${(wallet.balanceFen / 100).toFixed(2)} XCoin`
-              : '同步中'}
-          </p>
           {error && <Alert tone="error">{error}</Alert>}
           <Button
             className="w-full"
@@ -404,12 +374,8 @@ export function CreateServicePage({
             disabled={!selectedImage || !selectedPlan}
             onClick={submit}
           >
-            使用 XCoin 直接购买
+            购买
           </Button>
-          <p className="summary-note">
-            系统按“余额校验 → 资源校验 → 扣款 →
-            部署”处理；任一步失败均不会扣款。
-          </p>
         </aside>
       </div>
     </section>

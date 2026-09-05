@@ -38,16 +38,22 @@ const oidcStateCookieName = "alemonx_oidc_state"
 const oidcVerifierCookieName = "alemonx_oidc_verifier"
 
 type instance struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Image         string `json:"image"`
-	Version       string `json:"version"`
-	Spec          string `json:"spec"`
-	Status        string `json:"status"`
-	IP            string `json:"ip"`
-	CreatedAt     string `json:"createdAt"`
-	ContainerName string `json:"-"`
-	OwnerID       string `json:"-"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Image         string     `json:"image"`
+	Version       string     `json:"version"`
+	Spec          string     `json:"spec"`
+	Status        string     `json:"status"`
+	RuntimeStatus string     `json:"runtimeStatus,omitempty"`
+	DestroyAt     *time.Time `json:"destroyAt,omitempty"`
+	DestroyedAt   *time.Time `json:"destroyedAt,omitempty"`
+	PurgeAt       *time.Time `json:"purgeAt,omitempty"`
+	DestroyReason string     `json:"destroyReason,omitempty"`
+	ArchivedAt    *time.Time `json:"archivedAt,omitempty"`
+	IP            string     `json:"ip"`
+	CreatedAt     string     `json:"createdAt"`
+	ContainerName string     `json:"-"`
+	OwnerID       string     `json:"-"`
 }
 type oidcUser struct {
 	ID          string   `json:"id"`
@@ -124,6 +130,9 @@ func Run() {
 	router.GET("/api/promotions", requireSession, publicPromotionsHandler)
 	router.GET("/api/coupons/backpack", requireSession, couponBackpackHandler)
 	router.POST("/api/promotions/:id/claim", requireSession, claimPromotionHandler)
+	router.GET("/api/coupon-batches/public", requireSession, publicCouponBatchesHandler)
+	router.POST("/api/coupon-batches/:id/claim", requireSession, claimCouponBatchHandler)
+	router.GET("/api/my-coupons", requireSession, myCouponsHandler)
 	router.GET("/api/notifications", requireSession, notificationsHandler)
 	router.POST("/api/telemetry/console-events", requireSession, consoleTelemetryHandler)
 	router.POST("/api/notifications/read-all", requireSession, readAllNotificationsHandler)
@@ -161,6 +170,12 @@ func Run() {
 	router.POST("/api/admin/coupons", requireAdmin, adminCreateCoupons)
 	router.POST("/api/admin/coupons/:id/status", requireAdmin, adminCouponStatus)
 	router.GET("/api/admin/coupon-redemptions", requireAdmin, adminRedemptions)
+	router.GET("/api/admin/coupon-batches", requireAdmin, adminCouponBatches)
+	router.POST("/api/admin/coupon-batches", requireAdmin, adminSaveCouponBatch)
+	router.PUT("/api/admin/coupon-batches/:id", requireAdmin, adminSaveCouponBatch)
+	router.POST("/api/admin/coupon-batches/:id/issue", requireAdmin, adminIssueCouponBatch)
+	router.POST("/api/admin/coupon-batches/:id/void-unused", requireAdmin, adminVoidCouponBatch)
+	router.GET("/api/admin/coupon-users", requireAdmin, adminCouponUserSearch)
 	router.GET("/api/admin/tickets", requireAdmin, adminTicketsHandler)
 	router.GET("/api/admin/tickets/:id", requireAdmin, adminTicketDetailHandler)
 	router.POST("/api/admin/tickets/:id/messages", requireAdmin, adminTicketReplyHandler)
@@ -309,7 +324,7 @@ func instanceGateway(c *gin.Context) {
 		return
 	}
 	var nodeID string
-	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT node_id FROM xcloud_instances WHERE route_key=? AND status IN ('running','deploying')`, route).Scan(&nodeID); err != nil {
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT node_id FROM xcloud_instances WHERE route_key=? AND (status IN ('running','deploying') OR (status='destroy_scheduled' AND COALESCE(runtime_status,'stopped')='running'))`, route).Scan(&nodeID); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "实例不可用"})
 		return
 	}

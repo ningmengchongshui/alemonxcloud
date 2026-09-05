@@ -44,6 +44,7 @@ var agentCapabilities = []string{
 	"container.logs.v1",
 	"container.list.v1",
 	"container.compose.v1",
+	"container.destroy.v1",
 	"image.pull.v1",
 	"image.inspect.v1",
 	"image.list.v1",
@@ -108,6 +109,7 @@ func runServer() {
 	control.POST("/:name/start", startContainer)
 	control.POST("/:name/stop", stopContainer)
 	control.POST("/:name/restart", restartContainer)
+	control.POST("/:name/destroy", destroyContainer)
 	control.GET("/:name/status", containerStatus)
 	control.GET("/:name/inspect", inspectContainer)
 	control.GET("/:name/logs", containerLogs)
@@ -437,6 +439,39 @@ func deleteContainer(c *gin.Context) {
 	} else if _, err := docker(ctx, "rm", "-f", name); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker 删除容器失败"})
 		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// destroyContainer removes only running Docker resources. The Compose file and
+// instance directory survive so the control plane can retain data for its
+// recovery window before issuing the separate purge operation.
+func destroyContainer(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Minute)
+	defer cancel()
+	dataRoot := filepath.Clean(env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances"))
+	dataDir := filepath.Join(dataRoot, name)
+	if !strings.HasPrefix(filepath.Clean(dataDir)+string(os.PathSeparator), dataRoot+string(os.PathSeparator)) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "实例数据目录无效"})
+		return
+	}
+	composePath := filepath.Join(dataDir, "docker-compose.yml")
+	if _, err := os.Stat(composePath); err == nil {
+		if _, err := docker(ctx, "compose", "-f", composePath, "down", "--remove-orphans"); err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 销毁运行资源失败"})
+			return
+		}
+	} else if _, err := docker(ctx, "rm", "-f", name); err != nil {
+		// Docker returns an error when a retried destroy finds no container. A
+		// missing managed container is already the desired idempotent outcome.
+		if _, inspectErr := docker(ctx, "inspect", name); inspectErr == nil {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "Docker 销毁运行资源失败"})
+			return
+		}
 	}
 	c.Status(http.StatusNoContent)
 }

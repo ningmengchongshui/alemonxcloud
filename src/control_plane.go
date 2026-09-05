@@ -745,7 +745,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 	case "start":
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, nil)
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='running' WHERE id=?`, item.ID)
+			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=CASE WHEN status='destroy_scheduled' THEN status ELSE 'running' END,runtime_status='running' WHERE id=?`, item.ID)
 			if err == nil {
 				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status=?`, orderActive, item.ID, orderDeploy)
 			}
@@ -753,7 +753,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 	case "stop":
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='stopped' WHERE id=?`, item.ID)
+			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=CASE WHEN status='destroy_scheduled' THEN status ELSE 'stopped' END,runtime_status='stopped' WHERE id=?`, item.ID)
 		}
 	case "restart":
 		// The Agent deliberately exposes only the primitive lifecycle calls.  A
@@ -764,36 +764,61 @@ func executeTask(ctx context.Context, task controlTask) error {
 			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/start", nil, nil)
 		}
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='running' WHERE id=?`, item.ID)
+			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=CASE WHEN status='destroy_scheduled' THEN status ELSE 'running' END,runtime_status='running' WHERE id=?`, item.ID)
 		}
-	case "expire-stop":
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
-		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='expired',purge_at=DATE_ADD(NOW(), INTERVAL retention_days DAY) WHERE id=?`, item.ID)
-			if err == nil {
-				_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status IN (?,?)`, orderExpired, item.ID, orderActive, orderDeploy)
-				if err == nil {
-					notifyInstanceRetention(ctx, item.ID, "stopped", "实例已停止", "服务已到期并停止，数据将在保留期结束后清理。")
-				}
-			}
-		}
-	case "delete":
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/stop", nil, nil)
-		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='retention',purge_at=DATE_ADD(NOW(), INTERVAL retention_days DAY) WHERE id=?`, item.ID)
-			if err == nil {
-				notifyInstanceRetention(ctx, item.ID, "deleted", "实例已停止", "实例已删除，数据将在保留期结束后清理。")
-			}
-		}
+	case "destroy":
+		err = executeDestroyTask(ctx, task, item.ID, item.ContainerName, n)
 	case "purge":
 		err = nodeRequest(ctx, n, httpMethodDelete, "/container/"+item.ContainerName+"?purge=true", nil, nil)
 		if err == nil {
-			_, err = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_instances WHERE id=?`, item.ID)
+			_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='purged',archived_at=NOW() WHERE id=? AND status='destroyed'`, item.ID)
+			if err == nil {
+				var ownerID string
+				if e := instanceDB.QueryRowContext(ctx, `SELECT owner_id FROM xcloud_instances WHERE id=?`, item.ID).Scan(&ownerID); e == nil {
+					_ = createNotification(ctx, ownerID, "instance_purged", "实例数据已物理清除", "实例容器和数据已按保留规则完成物理清除。", map[string]any{"instanceId": item.ID})
+				}
+			}
 		}
 	default:
 		return errors.New("未知任务动作")
 	}
 	return err
+}
+
+// executeDestroyTask locks the destruction plan for the whole Agent call. A
+// renewal or a manual cancellation therefore wins cleanly when it commits
+// first; a stale queued task becomes a successful no-op and never reaches the
+// Agent after its plan has been withdrawn.
+func executeDestroyTask(ctx context.Context, task controlTask, instanceID, containerName string, n node) error {
+	tx, err := beginSerializableTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status string
+	var destroyAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT status,destroy_at FROM xcloud_instances WHERE id=? FOR UPDATE`, instanceID).Scan(&status, &destroyAt); err != nil {
+		return err
+	}
+	if status != "destroy_scheduled" || !destroyAt.Valid || task.IdempotencyKey != lifecycleTaskKey(instanceID, "destroy", destroyAt.Time) {
+		return nil
+	}
+	if err := nodeRequest(ctx, n, httpMethodPost, "/container/"+containerName+"/destroy", nil, nil); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE xcloud_instances SET status='destroyed',runtime_status='stopped',destroyed_at=NOW(),purge_at=DATE_ADD(NOW(), INTERVAL 30 DAY),retention_days=30 WHERE id=? AND status='destroy_scheduled' AND destroy_at=?`, instanceID, destroyAt.Time)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return errors.New("销毁计划已变化")
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	notifyInstanceRetention(ctx, instanceID, "destroyed", "实例资源已销毁", "容器已销毁，数据将在保留期结束后物理清除。")
+	return nil
 }
 
 func notifyInstanceRetention(ctx context.Context, instanceID, eventType, title, intro string) {
@@ -841,24 +866,45 @@ func scheduleLifecycle(ctx context.Context) {
 	if instanceDB == nil {
 		return
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id FROM xcloud_instances i WHERE i.expires_at<NOW() AND i.status IN ('running','stopped') AND NOT EXISTS (SELECT 1 FROM xcloud_tasks t WHERE t.instance_id=i.id AND t.action='expire-stop' AND t.status IN ('pending','running'))`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.status FROM xcloud_instances i WHERE i.expires_at<NOW() AND i.status IN ('running','stopped')`)
+	if err == nil {
+		for rows.Next() {
+			var id, runtimeStatus string
+			if rows.Scan(&id, &runtimeStatus) == nil {
+				result, updateErr := instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status='destroy_scheduled',runtime_status=?,destroy_reason='expired',destroy_at=DATE_ADD(expires_at, INTERVAL 7 DAY),purge_at=NULL WHERE id=? AND status IN ('running','stopped')`, runtimeStatus, id)
+				if updateErr == nil {
+					affected, _ := result.RowsAffected()
+					if affected != 1 {
+						continue
+					}
+					_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status IN (?,?)`, orderExpired, id, orderActive, orderDeploy)
+					_ = writeAudit(ctx, "system", "instance.destroy_scheduled", "instance", id, map[string]any{"reason": "expired"})
+					notifyDestroyScheduled(ctx, id, "expired")
+				}
+			}
+		}
+		rows.Close()
+	}
+	rows, err = instanceDB.QueryContext(ctx, `SELECT i.id,i.destroy_at FROM xcloud_instances i WHERE i.status='destroy_scheduled' AND i.destroy_at<=NOW() AND NOT EXISTS (SELECT 1 FROM xcloud_tasks t WHERE t.instance_id=i.id AND t.action='destroy' AND t.status IN ('pending','running'))`)
 	if err == nil {
 		for rows.Next() {
 			var id string
-			if rows.Scan(&id) == nil {
-				if task, e := scheduleInstanceTask(ctx, id, "expire-stop", "system"); e == nil {
+			var scheduledAt time.Time
+			if rows.Scan(&id, &scheduledAt) == nil {
+				if task, e := scheduleLifecycleTask(ctx, id, "destroy", scheduledAt); e == nil {
 					_ = enqueuePersistedTask(ctx, task)
 				}
 			}
 		}
 		rows.Close()
 	}
-	rows, err = instanceDB.QueryContext(ctx, `SELECT i.id FROM xcloud_instances i WHERE i.purge_at<NOW() AND i.status IN ('expired','retention') AND NOT EXISTS (SELECT 1 FROM xcloud_tasks t WHERE t.instance_id=i.id AND t.action='purge' AND t.status IN ('pending','running'))`)
+	rows, err = instanceDB.QueryContext(ctx, `SELECT i.id,i.purge_at FROM xcloud_instances i WHERE i.status='destroyed' AND i.purge_at<=NOW() AND NOT EXISTS (SELECT 1 FROM xcloud_tasks t WHERE t.instance_id=i.id AND t.action='purge' AND t.status IN ('pending','running'))`)
 	if err == nil {
 		for rows.Next() {
 			var id string
-			if rows.Scan(&id) == nil {
-				if task, e := scheduleInstanceTask(ctx, id, "purge", "system"); e == nil {
+			var scheduledAt time.Time
+			if rows.Scan(&id, &scheduledAt) == nil {
+				if task, e := scheduleLifecycleTask(ctx, id, "purge", scheduledAt); e == nil {
 					_ = enqueuePersistedTask(ctx, task)
 				}
 			}
@@ -866,6 +912,52 @@ func scheduleLifecycle(ctx context.Context) {
 		rows.Close()
 	}
 	notifyRetentionReminders(ctx)
+}
+
+func notifyDestroyScheduled(ctx context.Context, instanceID, reason string) {
+	var ownerID string
+	var destroyAt time.Time
+	if err := instanceDB.QueryRowContext(ctx, `SELECT owner_id,destroy_at FROM xcloud_instances WHERE id=?`, instanceID).Scan(&ownerID, &destroyAt); err != nil {
+		return
+	}
+	result, err := instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_instance_notification_events (instance_id,event_type,created_at) VALUES (?,?,NOW())`, instanceID, "destroy_scheduled_"+reason)
+	if err != nil {
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return
+	}
+	message := fmt.Sprintf("服务将保持当前状态至 %s；届时将销毁容器资源。", destroyAt.Format("2006-01-02 15:04"))
+	switch reason {
+	case "refund":
+		message = fmt.Sprintf("退款后的服务将持续至 %s；届时将销毁容器资源，数据再保留 30 天。", destroyAt.Format("2006-01-02 15:04"))
+	case "manual":
+		message = fmt.Sprintf("实例将保持当前运行状态至 %s；届时将销毁容器资源，数据再保留 30 天。", destroyAt.Format("2006-01-02 15:04"))
+	case "expired":
+		message = fmt.Sprintf("服务已到期，仍可继续使用至 %s；届时将销毁容器资源，数据再保留 30 天。", destroyAt.Format("2006-01-02 15:04"))
+	}
+	_ = createNotification(ctx, ownerID, "instance_destroy_scheduled", "实例已进入待销毁", message, map[string]any{"instanceId": instanceID, "destroyAt": destroyAt, "reason": reason})
+}
+
+func scheduleLifecycleTask(ctx context.Context, instanceID, action string, at time.Time) (controlTask, error) {
+	key := lifecycleTaskKey(instanceID, action, at)
+	t := controlTask{ID: newID("task"), InstanceID: instanceID, Action: action, IdempotencyKey: key, Status: taskPending, RunAfter: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	result, err := instanceDB.ExecContext(ctx, `INSERT IGNORE INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, t.ID, t.InstanceID, t.Action, t.IdempotencyKey, t.Status, 0, t.RunAfter, t.CreatedAt, t.UpdatedAt)
+	if err != nil {
+		return controlTask{}, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		if err := instanceDB.QueryRowContext(ctx, `SELECT id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at FROM xcloud_tasks WHERE idempotency_key=?`, key).Scan(&t.ID, &t.InstanceID, &t.Action, &t.IdempotencyKey, &t.Status, &t.Attempts, &t.LastError, &t.RunAfter, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return controlTask{}, err
+		}
+		return t, nil
+	}
+	appendTaskEvent(ctx, t.ID, "queued", "等待执行 "+action)
+	return t, nil
+}
+
+func lifecycleTaskKey(instanceID, action string, at time.Time) string {
+	return action + ":" + instanceID + ":" + at.UTC().Format(time.RFC3339Nano)
 }
 
 func notifyRetentionReminders(ctx context.Context) {
@@ -877,7 +969,7 @@ func notifyRetentionReminders(ctx context.Context) {
 		{"purge_7d", "purge_at > NOW() + INTERVAL 6 DAY AND purge_at <= NOW() + INTERVAL 7 DAY", "数据将在约 7 天后清理，请及时备份。"},
 		{"purge_1d", "purge_at > NOW() AND purge_at <= NOW() + INTERVAL 1 DAY", "数据将在约 1 天后清理，请及时备份。"},
 	} {
-		rows, err := instanceDB.QueryContext(ctx, `SELECT id,owner_id,purge_at FROM xcloud_instances WHERE status IN ('expired','retention') AND `+reminder.window)
+		rows, err := instanceDB.QueryContext(ctx, `SELECT id,owner_id,purge_at FROM xcloud_instances WHERE status='destroyed' AND archived_at IS NULL AND `+reminder.window)
 		if err != nil {
 			continue
 		}
@@ -899,7 +991,7 @@ func notifyRetentionReminders(ctx context.Context) {
 }
 
 func listNodesWithUsage(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','expired','retention') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
 	if err != nil {
 		return nil, err
 	}

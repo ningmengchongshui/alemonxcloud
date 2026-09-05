@@ -21,6 +21,7 @@ import { UserOverviewPage } from './pages/UserOverviewPage'
 import { LoginPage } from './pages/LoginPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { AdminPage } from './pages/AdminPage'
+import { OffersPage } from './pages/OffersPage'
 import { AdminPromotionEditor } from './pages/admin/AdminPromotionEditor'
 import type { Page, SuperPage } from '@/types/cloud'
 
@@ -30,6 +31,7 @@ const userPaths = new Set([
   '/me/create',
   '/me/orders',
   '/me/wallet',
+  '/me/offers',
   '/me/notifications',
   '/me/tickets'
 ])
@@ -44,6 +46,8 @@ const superPaths: Record<SuperPage, string> = {
   audit: '/super/audit',
   tickets: '/super/tickets',
   promotions: '/super/promotions',
+  coupons: '/super/coupons',
+  redemptions: '/super/redemptions',
   settings: '/super/settings'
 }
 
@@ -66,6 +70,7 @@ function userPageFor(path: string): Page {
   if (path === '/me/create') return 'create'
   if (path === '/me/orders') return 'orders'
   if (path === '/me/wallet') return 'wallet'
+  if (path === '/me/offers') return 'offers'
   if (path === '/me/notifications') return 'notifications'
   if (path === '/me/tickets') return 'tickets'
   return 'overview'
@@ -280,6 +285,7 @@ export default function App() {
               create: '/me/create',
               orders: '/me/orders',
               wallet: '/me/wallet',
+              offers: '/me/offers',
               notifications: '/me/notifications',
               tickets: '/me/tickets'
             }[next]
@@ -313,6 +319,7 @@ export default function App() {
               create: '/me/create',
               orders: '/me/orders',
               wallet: '/me/wallet',
+              offers: '/me/offers',
               notifications: '/me/notifications',
               tickets: '/me/tickets'
             }[next]
@@ -347,6 +354,7 @@ export default function App() {
     create: '/me/create',
     orders: '/me/orders',
     wallet: '/me/wallet',
+    offers: '/me/offers',
     notifications: '/me/notifications',
     tickets: '/me/tickets'
   }
@@ -368,6 +376,8 @@ export default function App() {
       />
     ) : page === 'wallet' ? (
       <WalletPage />
+    ) : page === 'offers' ? (
+      <OffersPage />
     ) : page === 'notifications' ? (
       <NotificationsPage
         onOpenTicket={id => navigate(`/me/tickets/${encodeURIComponent(id)}`)}

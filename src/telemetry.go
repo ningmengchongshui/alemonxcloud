@@ -47,7 +47,7 @@ func allowedConsoleArea(value string) bool { return value == "me" || value == "s
 
 func allowedConsolePage(value string) bool {
 	switch value {
-	case "instances", "create", "orders", "overview", "catalog", "images", "nodes", "tasks", "users", "audit", "tickets":
+	case "instances", "create", "orders", "overview", "catalog", "images", "nodes", "tasks", "users", "audit", "tickets", "promotions", "settings":
 		return true
 	default:
 		return false

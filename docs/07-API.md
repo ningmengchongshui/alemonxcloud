@@ -19,7 +19,9 @@
 
 `/api/instances`、`/api/catalog`、`/api/orders`、`/api/wallet`、`/api/notifications` 和 `/api/instances/:id/tasks` 提供实例、目录、订单、钱包、通知和任务能力。新购使用 `POST /api/purchases`，请求包含 `planId`、`imageId`、`imageVersion` 和 `months`；续费使用 `POST /api/orders/:id/renew`，请求包含 `months`。两者均从钱包扣款，余额不足返回业务错误且不创建订单。旧的人工付款创建、付款、取消及管理确认接口已停用并返回 `410 Gone`。
 
-退款使用 `GET /api/orders/:id/refund-quote` 取得服务端试算，再以 `POST /api/orders/:id/refund` 确认。试算返回 `eligible`、`reason`、完整天数、预扣天数、退款金额、调整后服务到期时间和预计清理时间；确认返回更新后的 `order`、退款 `entry`、`wallet` 与最终 `quote`。仅迁移后创建且服务期完整的钱包订单可自助退款。退款回到 XCoin，不会立即停止实例；后续续费服务期会前移，退款实例停止后保留数据 30 天。钱包流水的 `orderId` 可关联购买、续费和退款记录。
+退款使用 `GET /api/orders/:id/refund-quote` 取得服务端试算，再以 `POST /api/orders/:id/refund` 确认。试算返回 `eligible`、`reason`、完整天数、预扣天数、退款金额、调整后服务到期时间和预计清理时间；确认返回更新后的 `order`、退款 `entry`、`wallet` 与最终 `quote`。仅迁移后创建且服务期完整的钱包订单可自助退款。退款回到 XCoin，不会立即停止实例；到最终服务时间才销毁容器资源，数据再保留 30 天，退款实例不可续费恢复。钱包流水的 `orderId` 可关联购买、续费和退款记录。
+
+实例操作使用 `POST /api/instances/:id/:action`：`destroy` 创建手动 7 天销毁计划，`destroy-now` 立即销毁容器资源但保留数据，`cancel-destroy` 仅取消手动计划，`archive` 仅从列表移除已销毁实例；旧 `DELETE /api/instances/:id` 兼容映射为 `destroy`。实例响应含 `runtimeStatus`、`destroyAt`、`destroyReason`、`destroyedAt`、`purgeAt` 与 `archivedAt`。
 
 工单使用 `/api/tickets`：用户可创建、查看本人列表与详情、回复，或重新打开已关闭工单。创建参数为 `category`（`instance`、`billing`、`account`、`other`）、`priority`（`normal`、`high`、`urgent`）、`subject`、`body`，并可选关联本人 `instanceId` 或 `orderId`。主题最多 160 字符，内容最多 4000 字符；不支持附件。
 

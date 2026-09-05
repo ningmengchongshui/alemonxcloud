@@ -41,11 +41,34 @@ func enabledNodes(ctx context.Context) ([]node, error) {
 	}
 	return items, rows.Err()
 }
+
+// heartbeatNodes deliberately includes enabled nodes without a recent
+// heartbeat. A newly enabled node and a temporarily disconnected node must be
+// probed again, otherwise a stale or NULL heartbeat would make it permanently
+// impossible for the control plane to mark that node healthy.
+func heartbeatNodes(ctx context.Context) ([]node, error) {
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []node{}
+	for rows.Next() {
+		var n node
+		var capabilities []byte
+		if err := rows.Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt, &n.AgentToken, &n.AgentVersion, &n.AgentAPIVersion, &capabilities); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(capabilities, &n.AgentCapabilities)
+		items = append(items, n)
+	}
+	return items, rows.Err()
+}
 func syncNodeHeartbeat(ctx context.Context) {
 	if instanceDB == nil {
 		return
 	}
-	nodes, err := enabledNodes(ctx)
+	nodes, err := heartbeatNodes(ctx)
 	if err != nil {
 		log.Printf("load nodes: %v", err)
 		return
@@ -84,16 +107,16 @@ func syncInstanceStates(ctx context.Context) {
 	if instanceDB == nil {
 		return
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.container_name,i.status,n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.agent_token_ciphertext,'') FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('deploying','running','stopped')`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.container_name,i.status,COALESCE(i.runtime_status,''),n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.agent_token_ciphertext,'') FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('deploying','running','stopped','destroy_scheduled')`)
 	if err != nil {
 		log.Printf("load instance state: %v", err)
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, name, stored string
+		var id, name, stored, runtimeStatus string
 		var n node
-		if err := rows.Scan(&id, &name, &stored, &n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt, &n.AgentToken); err != nil {
+		if err := rows.Scan(&id, &name, &stored, &runtimeStatus, &n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt, &n.AgentToken); err != nil {
 			continue
 		}
 		var body struct {
@@ -106,13 +129,20 @@ func syncInstanceStates(ctx context.Context) {
 			continue
 		}
 		next := stored
+		nextRuntime := runtimeStatus
 		if body.Status == "running" {
-			next = "running"
+			nextRuntime = "running"
+			if stored != "destroy_scheduled" {
+				next = "running"
+			}
 		} else if body.Status == "exited" || body.Status == "created" {
-			next = "stopped"
+			nextRuntime = "stopped"
+			if stored != "destroy_scheduled" {
+				next = "stopped"
+			}
 		}
-		if next != stored {
-			if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=? WHERE id=?`, next, id); err != nil {
+		if next != stored || nextRuntime != runtimeStatus {
+			if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET status=?,runtime_status=? WHERE id=?`, next, nextRuntime, id); err != nil {
 				log.Printf("sync instance %s: %v", id, err)
 			}
 		}

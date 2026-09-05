@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -62,7 +63,6 @@ func purchaseHandler(c *gin.Context) {
 		ImageID      string `json:"imageId" binding:"required"`
 		ImageVersion string `json:"imageVersion"`
 		Months       int    `json:"months"`
-		CouponCode   string `json:"couponCode"`
 		SelectionID  string `json:"selectionId"`
 		PayFullPrice bool   `json:"payFullPrice"`
 	}
@@ -71,7 +71,7 @@ func purchaseHandler(c *gin.Context) {
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	item, task, err := purchaseWithWallet(c.Request.Context(), user.ID, body.PlanID, body.ImageID, body.ImageVersion, body.Months, body.CouponCode, body.SelectionID, body.PayFullPrice)
+	item, task, err := purchaseWithWallet(c.Request.Context(), user.ID, body.PlanID, body.ImageID, body.ImageVersion, body.Months, body.SelectionID, body.PayFullPrice)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -203,7 +203,6 @@ func renewOrderHandler(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	var body struct {
 		Months       int    `json:"months"`
-		CouponCode   string `json:"couponCode"`
 		SelectionID  string `json:"selectionId"`
 		PayFullPrice bool   `json:"payFullPrice"`
 	}
@@ -244,7 +243,7 @@ func renewWithWalletHandler(c *gin.Context) {
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months, body.CouponCode, body.SelectionID, body.PayFullPrice)
+	item, task, err := renewWithWallet(c.Request.Context(), user.ID, c.Param("id"), body.Months, body.SelectionID, body.PayFullPrice)
 	if err != nil {
 		businessError(c, err)
 		return
@@ -582,13 +581,26 @@ func adminSaveNode(c *gin.Context) {
 		body.AgentAPIVersion = status.APIVersion
 		body.AgentCapabilities = status.Capabilities
 		body.AgentCompatibility = body.compatibility()
-		body.CPUTotal = 0
-		body.MemoryTotalMB = 0
-		body.Enabled = false
+		// The registration dialog intentionally sends zero capacities and leaves
+		// the node disabled for a second configuration step. API callers may
+		// however provide a valid capacity and enable the verified node in the
+		// same request; never silently turn that request back into a disabled
+		// zero-capacity node.
+		if body.CPUTotal <= 0 {
+			body.CPUTotal = status.CPUTotal
+		}
+		if body.MemoryTotalMB <= 0 {
+			body.MemoryTotalMB = status.MemoryTotalMB
+		}
 	}
 	if err := saveNode(c.Request.Context(), body); err != nil {
 		businessError(c, err)
 		return
+	}
+	// A freshly verified enabled node should be schedulable immediately instead
+	// of waiting for the next periodic heartbeat pass.
+	if body.Enabled {
+		syncNodeHeartbeat(c.Request.Context())
 	}
 	user := c.MustGet("user").(oidcUser)
 	_ = writeAudit(c.Request.Context(), user.ID, "node.save", "node", body.ID, map[string]any{"enabled": body.Enabled, "agentVersion": body.AgentVersion, "agentApiVersion": body.AgentAPIVersion})
@@ -647,8 +659,31 @@ func queueInstanceAction(c *gin.Context) {
 		return
 	}
 	action := c.Param("action")
-	if action != "start" && action != "stop" && action != "restart" && action != "delete" {
+	if action == "delete" {
+		action = "destroy"
+	}
+	if action == "destroy" {
+		scheduleManualDestroy(c, item, user.ID)
+		return
+	}
+	if action == "cancel-destroy" {
+		cancelManualDestroy(c, item, user.ID)
+		return
+	}
+	if action == "archive" {
+		archiveDestroyedInstance(c, item, user.ID)
+		return
+	}
+	if action == "destroy-now" {
+		queueImmediateDestroy(c, item, user.ID)
+		return
+	}
+	if action != "start" && action != "stop" && action != "restart" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的实例操作"})
+		return
+	}
+	if item.Status == "destroyed" || item.Status == "purged" {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例资源已销毁，不能执行运行操作"})
 		return
 	}
 	task, err := scheduleInstanceTask(c.Request.Context(), item.ID, action, user.ID)
@@ -663,8 +698,112 @@ func queueInstanceAction(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"task": task})
 }
 func queueDeleteInstance(c *gin.Context) {
-	c.Params = append(c.Params, gin.Param{Key: "action", Value: "delete"})
+	c.Params = append(c.Params, gin.Param{Key: "action", Value: "destroy"})
 	queueInstanceAction(c)
+}
+
+func scheduleManualDestroy(c *gin.Context, item instance, actorID string) {
+	if item.Status == "destroy_scheduled" {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例已在待销毁队列中"})
+		return
+	}
+	if item.Status == "destroyed" || item.Status == "purged" {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例资源已销毁"})
+		return
+	}
+	runtimeStatus := item.Status
+	if runtimeStatus != "running" && runtimeStatus != "stopped" {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例当前不能计划销毁"})
+		return
+	}
+	destroyAt := time.Now().AddDate(0, 0, 7)
+	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET status='destroy_scheduled',runtime_status=?,destroy_reason='manual',destroy_at=?,destroyed_at=NULL,purge_at=NULL WHERE id=? AND owner_id=? AND status IN ('running','stopped')`, runtimeStatus, destroyAt, item.ID, item.OwnerID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例状态已变化，请刷新后重试"})
+		return
+	}
+	_ = writeAudit(c.Request.Context(), actorID, "instance.destroy_scheduled", "instance", item.ID, map[string]any{"reason": "manual", "destroyAt": destroyAt})
+	_ = createNotification(c.Request.Context(), item.OwnerID, "instance_destroy_scheduled", "实例已计划销毁", fmt.Sprintf("服务将继续保持当前状态，实例资源预计于 %s 销毁。", destroyAt.Format("2006-01-02 15:04")), map[string]any{"instanceId": item.ID, "destroyAt": destroyAt, "reason": "manual"})
+	c.JSON(http.StatusAccepted, gin.H{"message": "已计划 7 天后销毁实例资源", "destroyAt": destroyAt})
+}
+
+func cancelManualDestroy(c *gin.Context, item instance, actorID string) {
+	if item.Status != "destroy_scheduled" {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例当前未处于待销毁状态"})
+		return
+	}
+	if item.DestroyReason == "refund" {
+		c.JSON(http.StatusConflict, gin.H{"message": "退款后的销毁计划不可撤销"})
+		return
+	}
+	if item.DestroyReason == "expired" {
+		c.JSON(http.StatusConflict, gin.H{"message": "正常到期的销毁计划请先续费后撤销"})
+		return
+	}
+	if item.DestroyReason != "manual" {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例销毁计划不可撤销"})
+		return
+	}
+	runtimeStatus := item.RuntimeStatus
+	if runtimeStatus != "running" && runtimeStatus != "stopped" {
+		runtimeStatus = "stopped"
+	}
+	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET status=?,runtime_status=?,destroy_at=NULL,destroy_reason=NULL WHERE id=? AND owner_id=? AND status='destroy_scheduled' AND destroy_reason='manual'`, runtimeStatus, runtimeStatus, item.ID, item.OwnerID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例状态已变化，请刷新后重试"})
+		return
+	}
+	_ = writeAudit(c.Request.Context(), actorID, "instance.destroy_cancelled", "instance", item.ID, nil)
+	_ = createNotification(c.Request.Context(), item.OwnerID, "instance_destroy_cancelled", "实例销毁计划已取消", "实例会继续保持当前运行状态。", map[string]any{"instanceId": item.ID})
+	c.JSON(http.StatusOK, gin.H{"message": "销毁计划已取消"})
+}
+
+func queueImmediateDestroy(c *gin.Context, item instance, actorID string) {
+	if item.Status != "destroy_scheduled" {
+		c.JSON(http.StatusConflict, gin.H{"message": "仅待销毁实例可以立即销毁资源"})
+		return
+	}
+	at := time.Now()
+	if item.DestroyAt != nil {
+		at = *item.DestroyAt
+	}
+	task, err := scheduleLifecycleTask(c.Request.Context(), item.ID, "destroy", at)
+	if err != nil {
+		businessError(c, err)
+		return
+	}
+	_ = writeAudit(c.Request.Context(), actorID, "instance.destroy_now", "instance", item.ID, map[string]any{"taskId": task.ID})
+	if err := enqueuePersistedTask(c.Request.Context(), task); err != nil {
+		c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "销毁任务已记录，等待队列恢复"})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"task": task})
+}
+
+func archiveDestroyedInstance(c *gin.Context, item instance, actorID string) {
+	if item.Status != "destroyed" {
+		c.JSON(http.StatusConflict, gin.H{"message": "仅已销毁实例可以从列表移除"})
+		return
+	}
+	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET archived_at=NOW() WHERE id=? AND owner_id=? AND status='destroyed' AND archived_at IS NULL`, item.ID, item.OwnerID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		c.JSON(http.StatusConflict, gin.H{"message": "实例已从列表移除或状态已变化"})
+		return
+	}
+	_ = writeAudit(c.Request.Context(), actorID, "instance.archived", "instance", item.ID, nil)
+	c.JSON(http.StatusOK, gin.H{"message": "实例已从列表移除"})
 }
 func instanceLogs(c *gin.Context) {
 	item, ok := ownedInstance(c)

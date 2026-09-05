@@ -8,6 +8,11 @@ func TestConsoleTelemetryValidation(t *testing.T) {
 			t.Fatalf("expected %q to be allowed", event)
 		}
 	}
+	for _, page := range []string{"promotions", "settings"} {
+		if !allowedConsolePage(page) {
+			t.Fatalf("expected page %q to be allowed", page)
+		}
+	}
 	if allowedConsoleEvent("free_form_event") {
 		t.Fatal("unexpected event accepted")
 	}

@@ -1,19 +1,28 @@
 import { Button, EmptyState, PageHeader, StatusBadge } from '@/components/ui'
-import {
-  useGetAdminCouponRedemptionsQuery,
-  useGetAdminCouponsQuery,
-  useGetAdminPromotionsQuery,
-  useUpdateAdminCouponStatusMutation
-} from '@/services/cloudApi'
+import { useGetAdminPromotionsQuery } from '@/services/cloudApi'
 import type { Promotion } from '@/types/cloud'
 
-const kindLabel = (kind: Promotion['kind']) =>
-  ({
-    campaign: '活动优惠',
-    newcomer: '新人专属',
-    first_plan_purchase: '套餐新购优惠'
-  })[kind]
-
+const kindMeta: Record<
+  Promotion['kind'],
+  { label: string; description: string; tone: string }
+> = {
+  campaign: {
+    label: '普通活动',
+    description: '可用于新购、续费，并可发放领取券。',
+    tone: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-200'
+  },
+  newcomer: {
+    label: '新人专属',
+    description: '首次成功购买任意套餐时可用。',
+    tone: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-200'
+  },
+  first_plan_purchase: {
+    label: '套餐新购',
+    description: '每个套餐的首次购买可单独享受。',
+    tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200'
+  }
+}
+const legacyNewUserMeta = kindMeta.newcomer
 export function AdminPromotionsPage({
   onCreate,
   onEdit
@@ -22,143 +31,96 @@ export function AdminPromotionsPage({
   onEdit?: (id: string) => void
 }) {
   const promotions = useGetAdminPromotionsQuery()
-  const coupons = useGetAdminCouponsQuery()
-  const redemptions = useGetAdminCouponRedemptionsQuery()
-  const [status] = useUpdateAdminCouponStatusMutation()
+  const values = promotions.data ?? []
   return (
     <section className="page super-page">
       <PageHeader
         eyebrow="营销运营"
         title="营销与优惠"
-        description="新人专属、套餐首次选购与普通活动分开管理；活动券由用户领取后进入优惠券包。"
-        actions={<Button onClick={onCreate}>＋ 引导式创建活动</Button>}
+        description="配置活动、发放代金券，并追踪每一笔优惠核销。"
+        actions={<Button onClick={onCreate}>＋ 创建活动</Button>}
       />
-      {(promotions.data ?? []).length === 0 ? (
+      <div className="mb-3 flex items-end justify-between">
+        <div>
+          <h2 className="text-lg font-bold">活动中心</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            点击活动可调整规则；活动类型决定其资格校验。
+          </p>
+        </div>
+        <span className="text-xs text-slate-500">
+          共 {values.length} 个活动
+        </span>
+      </div>
+      {values.length === 0 ? (
         <EmptyState
-          title="暂无活动"
-          description="使用引导流程创建第一项营销活动。"
+          title="暂无营销活动"
+          description="从“创建活动”开始设置第一项优惠。"
         />
       ) : (
-        <section className="admin-table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>活动</th>
-                <th>优惠</th>
-                <th>适用</th>
-                <th>核销</th>
-                <th>状态</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {(promotions.data ?? []).map(p => (
-                <tr key={p.id}>
-                  <td>
-                    <b>{p.name}</b>
-                    <small className="block">{kindLabel(p.kind)}</small>
-                  </td>
-                  <td>
-                    {p.discountType === 'fixed'
-                      ? `减 ${(p.discountValue / 100).toFixed(2)} XCoin`
-                      : `${(p.discountValue / 100).toFixed(2)} 折`}
-                  </td>
-                  <td>
-                    {p.scope === 'both'
-                      ? '新购与续费'
-                      : p.scope === 'purchase'
-                        ? '仅新购'
-                        : '仅续费'}
-                  </td>
-                  <td>
-                    {p.usedCount}
-                    {p.totalLimit ? ` / ${p.totalLimit}` : ' / 不限'}
-                  </td>
-                  <td>
-                    <StatusBadge tone={p.enabled ? 'success' : 'neutral'}>
-                      {p.enabled ? '启用' : '停用'}
-                    </StatusBadge>
-                  </td>
-                  <td>
-                    <button
-                      className="text-button"
-                      onClick={() => onEdit?.(p.id)}
+        <section className="grid gap-4 xl:grid-cols-2">
+          {values.map(item => {
+            const meta = kindMeta[item.kind] ?? legacyNewUserMeta
+            return (
+              <article
+                key={item.id}
+                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <span
+                      className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-extrabold ${meta.tone}`}
                     >
-                      编辑
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      {meta.label}
+                    </span>
+                    <h3 className="mt-3 text-base font-bold">{item.name}</h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {meta.description}
+                    </p>
+                  </div>
+                  <StatusBadge tone={item.enabled ? 'success' : 'neutral'}>
+                    {item.enabled ? '启用中' : '已停用'}
+                  </StatusBadge>
+                </div>
+                <div className="mt-5 grid grid-cols-3 gap-2 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-900">
+                  <div>
+                    <small className="block text-slate-500">优惠</small>
+                    <b>
+                      {item.discountType === 'fixed'
+                        ? `减 ${(item.discountValue / 100).toFixed(2)}`
+                        : `${(item.discountValue / 100).toFixed(2)} 折`}
+                    </b>
+                  </div>
+                  <div>
+                    <small className="block text-slate-500">范围</small>
+                    <b>
+                      {item.scope === 'both'
+                        ? '新购与续费'
+                        : item.scope === 'purchase'
+                          ? '仅新购'
+                          : '仅续费'}
+                    </b>
+                  </div>
+                  <div>
+                    <small className="block text-slate-500">核销</small>
+                    <b>
+                      {item.usedCount}
+                      {item.totalLimit ? ` / ${item.totalLimit}` : ' / 不限'}
+                    </b>
+                  </div>
+                </div>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    className="text-button"
+                    onClick={() => onEdit?.(item.id)}
+                  >
+                    编辑活动
+                  </button>
+                </div>
+              </article>
+            )
+          })}
         </section>
       )}
-      <h2 className="mt-8 text-lg font-bold">代金券</h2>
-      {(coupons.data ?? []).length === 0 ? (
-        <EmptyState
-          title="暂无代金券"
-          description="普通活动发布后可在其编辑页生成可领取代金券。"
-        />
-      ) : (
-        <section className="admin-table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>券码</th>
-                <th>模式</th>
-                <th>核销</th>
-                <th>状态</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {(coupons.data ?? []).map(c => (
-                <tr key={c.id}>
-                  <td>{c.codeMask}</td>
-                  <td>{c.mode === 'general' ? '通用券' : '单次券'}</td>
-                  <td>
-                    {c.usedCount} / {c.totalLimit}
-                  </td>
-                  <td>{c.enabled ? '启用' : '停用'}</td>
-                  <td>
-                    <button
-                      className="text-button"
-                      onClick={() =>
-                        void status({ id: c.id, enabled: !c.enabled })
-                      }
-                    >
-                      {c.enabled ? '停用' : '启用'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
-      <h2 className="mt-8 text-lg font-bold">最近核销</h2>
-      <section className="admin-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>订单</th>
-              <th>用户</th>
-              <th>优惠金额</th>
-              <th>时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(redemptions.data ?? []).slice(0, 20).map(item => (
-              <tr key={item.id}>
-                <td>{item.orderId.slice(0, 14)}</td>
-                <td>{item.ownerId}</td>
-                <td>{(item.discountAmountFen / 100).toFixed(2)} XCoin</td>
-                <td>{new Date(item.createdAt).toLocaleString('zh-CN')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
     </section>
   )
 }

@@ -48,3 +48,13 @@ func TestQuoteRefundUsesWholeTwentyFourHourDays(t *testing.T) {
 		t.Fatalf("must use complete 24-hour periods: %#v", quote)
 	}
 }
+
+func TestQuoteRefundRejectsDiscontinuousServiceChain(t *testing.T) {
+	segments := []refundSegment{
+		{ID: "first", Status: orderActive, AmountFen: 1000, Start: refundTime(1), End: refundTime(20), Source: "wallet"},
+		{ID: "renewal", Status: orderActive, AmountFen: 1000, Start: refundTime(21), End: refundTime(31), Source: "wallet"},
+	}
+	if _, _, _, err := quoteRefund(segments, "first", refundTime(5)); err == nil {
+		t.Fatal("discontinuous order service chain must require manual handling")
+	}
+}
