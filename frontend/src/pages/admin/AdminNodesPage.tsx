@@ -17,12 +17,6 @@ const memoryValue = (value: number) => {
 }
 const percent = (used: number, total: number) =>
   total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
-const diskValue = (bytes?: number) =>
-  bytes === undefined || bytes === null
-    ? '同步中'
-    : bytes >= 1024 ** 3
-      ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
-      : `${(bytes / 1024 ** 2).toFixed(0)} MB`
 const diskGBValue = (bytes: number) => {
   const value = Math.max(0, bytes) / 1024 ** 3
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
