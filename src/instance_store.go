@@ -63,7 +63,7 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		LEFT JOIN xcloud_tasks active_task ON active_task.id=(
 			SELECT t.id FROM xcloud_tasks t
 			WHERE t.instance_id=i.id AND t.status IN ('pending','running')
-			AND t.action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge')
+			AND t.action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize')
 			ORDER BY t.created_at DESC LIMIT 1
 		)
 		WHERE i.owner_id=? AND i.archived_at IS NULL ORDER BY i.created_at DESC`, ownerID)

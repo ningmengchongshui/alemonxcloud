@@ -23,12 +23,13 @@ const (
 	orderReject  = "rejected"
 	orderRefund  = "refunded"
 
-	taskPending  = "pending"
-	taskRunning  = "running"
-	taskDone     = "succeeded"
-	taskFailed   = "failed"
-	taskReview   = "needs_review"
-	taskCanceled = "cancelled"
+	taskPending   = "pending"
+	taskRunning   = "running"
+	taskDone      = "succeeded"
+	taskFailed    = "failed"
+	taskReview    = "needs_review"
+	taskCanceled  = "cancelled"
+	taskDiscarded = "discarded"
 )
 
 const taskLeaseDuration = 5 * time.Minute
@@ -827,7 +828,7 @@ func taskWorkerID() string {
 
 func lifecycleTask(action string) bool {
 	switch action {
-	case "create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge":
+	case "create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize":
 		return true
 	}
 	return false
@@ -960,6 +961,10 @@ func releaseInstanceTaskLock(ctx context.Context, task controlTask) {
 // prevents a paid instance from remaining in deploying forever while still
 // consuming node capacity.
 func failDeployment(ctx context.Context, task controlTask, cause error) {
+	if task.Action == "resize" && task.Attempts >= 3 {
+		failPlanChange(ctx, task, cause)
+		return
+	}
 	if task.Action == "update" && task.Attempts >= 3 {
 		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET runtime_status='missing' WHERE id=? AND status='running'`, task.InstanceID)
 		_ = writeAudit(ctx, "system", "instance.update_failed", "instance", task.InstanceID, map[string]any{"taskId": task.ID, "error": truncateError(cause.Error())})
@@ -1032,6 +1037,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 		"start":        {"stopped", "destroy_scheduled"},
 		"stop":         {"running", "destroy_scheduled"},
 		"update":       {"running"},
+		"resize":       {"running", "stopped"},
 		"restart":      {"running", "destroy_scheduled"},
 		"reinstall":    {"running", "stopped"},
 		"destroy":      {"destroy_scheduled"},
@@ -1220,6 +1226,33 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if err == nil {
 			runtime := "running"
 			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{"running"}, "running", &runtime, "image_digest=?", digest)
+		}
+	case "resize":
+		if err = taskMayCallAgent(ctx, task, "running", "stopped"); err != nil {
+			return err
+		}
+		var resize struct {
+			ChangeID   string  `json:"changeId"`
+			CPU        float64 `json:"cpu"`
+			MemoryMB   int     `json:"memoryMB"`
+			WasRunning bool    `json:"wasRunning"`
+		}
+		if err = json.Unmarshal(task.Payload, &resize); err != nil {
+			return err
+		}
+		payload, payloadErr := instanceRuntimePayload(ctx, item.ID, item.ContainerName, route)
+		if payloadErr != nil {
+			return payloadErr
+		}
+		payload["cpu"] = resize.CPU
+		payload["memoryMB"] = resize.MemoryMB
+		payload["keepStopped"] = !resize.WasRunning
+		if err = taskMayCallAgent(ctx, task, "running", "stopped"); err != nil {
+			return err
+		}
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/resize", payload, nil)
+		if err == nil {
+			err = completePlanChange(ctx, task)
 		}
 	case "destroy":
 		err = executeDestroyTask(ctx, task, item.ID, item.ContainerName, n)
@@ -1611,7 +1644,7 @@ func adminMetrics(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var failures, pending, openTickets, urgentTickets, deploymentFailed, runtimeMissing, destroyBlocked, offlineInstances, leaseRecoveries, needsReview int
+	var failures, pending, openTickets, urgentTickets, deploymentFailed, runtimeMissing, destroyBlocked, offlineInstances, leaseRecoveries, leaseRecoveryTasks, needsReview int
 	if err = instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE status=?`, taskFailed).Scan(&failures); err != nil {
 		return nil, err
 	}
@@ -1634,6 +1667,10 @@ func adminMetrics(ctx context.Context) (map[string]any, error) {
 		{query: `SELECT COUNT(*) FROM xcloud_instances WHERE status='destroy_scheduled' AND destroy_at<=NOW()`, dest: &destroyBlocked},
 		{query: `SELECT COUNT(*) FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('destroy_scheduled','destroyed') AND (n.enabled=FALSE OR n.last_heartbeat_at IS NULL OR n.last_heartbeat_at<?)`, dest: &offlineInstances, args: []any{time.Now().Add(-nodeHeartbeatTTL())}},
 		{query: `SELECT COUNT(*) FROM xcloud_task_events WHERE event_type='lease_recovered' AND created_at>=NOW()-INTERVAL 24 HOUR`, dest: &leaseRecoveries},
+		// Dashboard risk is about affected work, not the number of repeated
+		// recovery log lines emitted for that work. Keep the raw event counter in
+		// Prometheus, but give operators a de-duplicated task count here.
+		{query: `SELECT COUNT(DISTINCT task_id) FROM xcloud_task_events WHERE event_type='lease_recovered' AND created_at>=NOW()-INTERVAL 24 HOUR`, dest: &leaseRecoveryTasks},
 		{query: `SELECT COUNT(*) FROM xcloud_tasks WHERE status='needs_review'`, dest: &needsReview},
 	}
 	for _, item := range queries {
@@ -1641,5 +1678,5 @@ func adminMetrics(ctx context.Context) (map[string]any, error) {
 			return nil, err
 		}
 	}
-	return map[string]any{"nodes": nodes, "taskFailures": failures, "taskBacklog": pending, "openTickets": openTickets, "urgentTickets": urgentTickets, "deploymentFailed": deploymentFailed, "runtimeMissing": runtimeMissing, "destroyBlocked": destroyBlocked, "offlineInstances": offlineInstances, "leaseRecoveries24h": leaseRecoveries, "tasksNeedsReview": needsReview}, nil
+	return map[string]any{"nodes": nodes, "taskFailures": failures, "taskBacklog": pending, "openTickets": openTickets, "urgentTickets": urgentTickets, "deploymentFailed": deploymentFailed, "runtimeMissing": runtimeMissing, "destroyBlocked": destroyBlocked, "offlineInstances": offlineInstances, "leaseRecoveries24h": leaseRecoveries, "leaseRecoveryTasks24h": leaseRecoveryTasks, "tasksNeedsReview": needsReview}, nil
 }

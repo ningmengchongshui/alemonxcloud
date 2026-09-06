@@ -547,6 +547,15 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if err != nil {
 		return order{}, nil, errors.New("订单不可续费")
 	}
+	// A successful immediate plan change supersedes the original order's
+	// resource plan for future renewals without rewriting that historical order.
+	var changedPlanID string
+	if err = tx.QueryRowContext(ctx, `SELECT target_plan_id FROM xcloud_instance_plan_changes WHERE instance_id=? AND status='succeeded' ORDER BY completed_at DESC, created_at DESC LIMIT 1`, source.InstanceID).Scan(&changedPlanID); err == nil && changedPlanID != "" && changedPlanID != source.PlanID {
+		if err = tx.QueryRowContext(ctx, `SELECT id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans WHERE id=?`, changedPlanID).Scan(&p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt); err != nil {
+			return order{}, nil, errors.New("实例当前套餐不可用")
+		}
+		source.PlanID = changedPlanID
+	}
 	if !p.Enabled {
 		return order{}, nil, errors.New("套餐已下架，无法续费")
 	}

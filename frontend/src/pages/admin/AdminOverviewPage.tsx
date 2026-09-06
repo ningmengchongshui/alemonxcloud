@@ -53,9 +53,9 @@ export function AdminOverviewPage() {
       '请前往节点管理查看受影响节点与清理任务。'
     ],
     [
-      '24 小时租约恢复',
-      metrics.data?.leaseRecoveries24h ?? 0,
-      '请检查消费者进程与 RabbitMQ 连接稳定性。'
+      '24 小时受影响任务',
+      metrics.data?.leaseRecoveryTasks24h ?? 0,
+      '按任务去重统计，不会把同一任务的重复恢复记录放大为实例风险。请检查消费者进程与 RabbitMQ 连接。'
     ]
   ].filter(([, count]) => Number(count) > 0)
   async function refresh() {

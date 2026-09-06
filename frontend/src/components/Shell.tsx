@@ -484,8 +484,15 @@ export function Shell({
         {children}
       </main>
       {restoringSession && (
-        <div className="fixed inset-0 z-[100] grid cursor-wait place-items-center" aria-label="加载中" role="status">
-          <span className="size-5 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" aria-hidden="true" />
+        <div
+          className="fixed inset-0 z-[100] grid cursor-wait place-items-center"
+          aria-label="加载中"
+          role="status"
+        >
+          <span
+            className="size-5 animate-spin rounded-full border-2 border-blue-600 border-r-transparent"
+            aria-hidden="true"
+          />
         </div>
       )}
     </div>

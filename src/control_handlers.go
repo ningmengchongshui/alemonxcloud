@@ -918,6 +918,50 @@ func discardReviewTask(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// discardAllAdminTasks closes all historical failed/review work in one
+// deliberate administrative operation. It never touches pending or running
+// work, which could still be picked up by a worker or executing in an Agent.
+func discardAllAdminTasks(c *gin.Context) {
+	ctx := c.Request.Context()
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,instance_id FROM xcloud_tasks WHERE status IN (?,?) ORDER BY created_at LIMIT 500`, taskFailed, taskReview)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer rows.Close()
+	type taskRef struct{ id, instanceID string }
+	items := []taskRef{}
+	for rows.Next() {
+		var item taskRef
+		if err := rows.Scan(&item.id, &item.instanceID); err != nil {
+			internalError(c, err)
+			return
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		internalError(c, err)
+		return
+	}
+	count := 0
+	for _, item := range items {
+		result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=CONCAT(COALESCE(last_error,''), '\n管理员已一键作废：任务不会再次执行'),finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE id=? AND status IN (?,?)`, taskDiscarded, item.id, taskFailed, taskReview)
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			continue
+		}
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET active_task_id=NULL,active_task_token=NULL,active_task_expires_at=NULL WHERE id=? AND active_task_id=?`, item.instanceID, item.id)
+		appendTaskEvent(ctx, item.id, "discarded_by_admin", "管理员一键作废异常任务；任务不会再次执行")
+		count++
+	}
+	user := c.MustGet("user").(oidcUser)
+	_ = writeAudit(ctx, user.ID, "task.discard_all", "task", "all", map[string]any{"count": count})
+	c.JSON(http.StatusOK, gin.H{"discarded": count})
+}
+
 func queueInstanceAction(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	item, ok := ownedInstance(c)
@@ -990,7 +1034,7 @@ func activeLifecycleTask(ctx context.Context, instanceID string) (*controlTask, 
 	var taskID string
 	err := instanceDB.QueryRowContext(ctx, `SELECT id FROM xcloud_tasks
 		WHERE instance_id=? AND status IN ('pending','running')
-		AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge')
+		AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize')
 		ORDER BY created_at DESC LIMIT 1`, instanceID).Scan(&taskID)
 	if err == sql.ErrNoRows || taskID == "" {
 		return nil, nil

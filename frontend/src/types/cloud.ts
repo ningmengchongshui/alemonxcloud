@@ -54,6 +54,24 @@ export interface Instance {
   ip: string
   createdAt: string
 }
+export interface PlanChangeQuote {
+  quoteId: string
+  instanceId: string
+  currentPlanId: string
+  currentPlanName: string
+  targetPlanId: string
+  targetPlanName: string
+  currentCpu: number
+  currentMemoryMB: number
+  targetCpu: number
+  targetMemoryMB: number
+  remainingSeconds: number
+  deltaFen: number
+  chargeFen: number
+  refundFen: number
+  expiresAt: string
+  summary: string
+}
 
 export interface CreateInstanceInput {
   name: string
@@ -295,6 +313,7 @@ export interface AdminMetrics {
   destroyBlocked: number
   offlineInstances: number
   leaseRecoveries24h: number
+  leaseRecoveryTasks24h: number
   tasksNeedsReview?: number
 }
 export type TicketStatus = 'open' | 'in_progress' | 'closed'

@@ -6,6 +6,7 @@ import {
   useGetAdminTasksQuery,
   useGetAdminWalletEntriesQuery,
   useDiscardReviewTaskMutation,
+  useDiscardAllAdminTasksMutation,
   useRetryTaskMutation,
   useResumeReviewTaskMutation,
   useSearchAdminUsersQuery
@@ -90,6 +91,16 @@ export function AdminTasksPage() {
   const [retry] = useRetryTaskMutation()
   const [resume] = useResumeReviewTaskMutation()
   const [discard] = useDiscardReviewTaskMutation()
+  const [discardAll, discardAllState] = useDiscardAllAdminTasksMutation()
+  const abnormalCount = (tasks.data ?? []).filter(task =>
+    ['failed', 'needs_review'].includes(task.status)
+  ).length
+
+  async function discardAbnormalTasks() {
+    if (!window.confirm(`确认一键作废全部 ${abnormalCount} 个失败或待复核任务吗？任务记录会保留，但不会再执行。`)) return
+    await discardAll()
+    await tasks.refetch()
+  }
   return (
     <section className="page super-page">
       <PageHeader
@@ -97,13 +108,24 @@ export function AdminTasksPage() {
         title="任务执行记录"
         description="危险的过期生命周期任务会进入待复核，确认前不会再次操作容器。"
         actions={
-          <Button
-            tone="secondary"
-            loading={tasks.isFetching}
-            onClick={() => void tasks.refetch()}
-          >
-            ↻ 刷新
-          </Button>
+          <div className="flex gap-2">
+            {abnormalCount > 0 && (
+              <Button
+                tone="danger"
+                loading={discardAllState.isLoading}
+                onClick={() => void discardAbnormalTasks()}
+              >
+                一键作废异常任务（{abnormalCount}）
+              </Button>
+            )}
+            <Button
+              tone="secondary"
+              loading={tasks.isFetching}
+              onClick={() => void tasks.refetch()}
+            >
+              ↻ 刷新
+            </Button>
+          </div>
         }
       />
       <div className="admin-table-wrap">

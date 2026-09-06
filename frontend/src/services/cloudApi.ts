@@ -25,7 +25,8 @@ import type {
   PriceQuote,
   RechargeContact,
   BenefitProgram,
-  PlanPriceTier
+  PlanPriceTier,
+  PlanChangeQuote
 } from '@/types/cloud'
 
 interface SessionResponse {
@@ -90,6 +91,13 @@ export const cloudApi = createApi({
         method: 'POST'
       }),
       invalidatesTags: ['Instances', 'Orders']
+    }),
+    quotePlanChange: builder.mutation<PlanChangeQuote, { id: string; targetPlanId: string }>({
+      query: ({ id, targetPlanId }) => ({ url: `/instances/${id}/plan-change/quote`, method: 'POST', body: { targetPlanId } })
+    }),
+    submitPlanChange: builder.mutation<{ change: unknown; task: Task; message?: string }, { id: string; targetPlanId: string; currentPlanId: string; quoteExpiresAt?: string }>({
+      query: ({ id, ...body }) => ({ url: `/instances/${id}/plan-change`, method: 'POST', body }),
+      invalidatesTags: ['Instances', 'Wallet']
     }),
     getInstanceLogs: builder.query<
       { lines: string[]; tail: number; truncated: boolean },
@@ -359,9 +367,13 @@ export const cloudApi = createApi({
       Ticket[],
       { status?: TicketStatus; priority?: TicketPriority } | void
     >({
-      query: filters => ({
-        url: `/admin/tickets?${new URLSearchParams(filters ?? {}).toString()}`
-      }),
+      query: filters => {
+        const params = new URLSearchParams()
+        if (filters?.status) params.set('status', filters.status)
+        if (filters?.priority) params.set('priority', filters.priority)
+        const query = params.toString()
+        return { url: query ? `/admin/tickets?${query}` : '/admin/tickets' }
+      },
       providesTags: ['Tickets', 'Admin']
     }),
     getAdminTicket: builder.query<TicketDetail, string>({
@@ -526,6 +538,10 @@ export const cloudApi = createApi({
       }),
       invalidatesTags: ['Admin']
     }),
+    discardAllAdminTasks: builder.mutation<{ discarded: number }, void>({
+      query: () => ({ url: '/admin/tasks/discard-all', method: 'POST' }),
+      invalidatesTags: ['Admin']
+    }),
     logout: builder.mutation<void, void>({
       query: () => ({ url: '/logout', method: 'POST' }),
       invalidatesTags: ['Session', 'Instances']
@@ -555,6 +571,8 @@ export const {
   useGetSessionQuery,
   useGetInstancesQuery,
   useInstanceActionMutation,
+  useQuotePlanChangeMutation,
+  useSubmitPlanChangeMutation,
   useGetInstanceLogsQuery,
   useLazyGetInstanceLogsQuery,
   useGetCatalogQuery,
@@ -614,6 +632,7 @@ export const {
   useRetryTaskMutation,
   useResumeReviewTaskMutation,
   useDiscardReviewTaskMutation,
+  useDiscardAllAdminTasksMutation,
   useLogoutMutation,
   useAuthorizeMutation,
   useCallbackMutation,

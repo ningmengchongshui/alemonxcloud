@@ -85,6 +85,7 @@ type createRequest struct {
 	MemoryMB      int     `json:"memoryMB" binding:"required"`
 	BandwidthMbps int     `json:"bandwidthMbps" binding:"required"`
 	Route         string  `json:"route" binding:"required"`
+	KeepStopped   bool    `json:"keepStopped,omitempty"`
 }
 
 func main() {
@@ -139,6 +140,7 @@ func runServer() {
 	control.POST("/:name/start", startContainer)
 	control.POST("/:name/stop", stopContainer)
 	control.POST("/:name/restart", restartContainer)
+	control.POST("/:name/resize", resizeContainer)
 	control.POST("/:name/reinstall", reinstallContainer)
 	control.POST("/:name/destroy", destroyContainer)
 	control.POST("/:name/bandwidth", applyContainerBandwidth)
@@ -815,6 +817,50 @@ func restartContainer(c *gin.Context) {
 	}
 	cacheRouteTarget(ctx, input.Name, input.Route)
 	respondWithBandwidthStatus(c, http.StatusOK, input.Name, "restarted", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
+}
+
+// resizeContainer reconciles only CPU and memory. It deliberately does not
+// call the bandwidth controller, so changing plans cannot re-enable the old
+// traffic-shaping path.
+func resizeContainer(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	var input createRequest
+	if c.ShouldBindJSON(&input) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "套餐变更需要当前实例配置"})
+		return
+	}
+	input.Name = name
+	if !validCreateRequest(input) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "套餐变更配置无效"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
+	defer cancel()
+	instanceDir, homeDir, workspaceDir := instancePaths(input.Name)
+	if err := prepareInstanceDirs(instanceDir, homeDir, workspaceDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法准备实例数据目录"})
+		return
+	}
+	composePath := filepath.Join(instanceDir, instanceComposeFile)
+	if err := writeFileAtomically(composePath, []byte(instanceCompose(input, homeDir, workspaceDir)), 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法写入实例 Compose 配置"})
+		return
+	}
+	if _, err := docker(ctx, "compose", "-p", composeProject(input.Route), "-f", composePath, "up", "-d", "--pull", "never", "--remove-orphans"); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 调整资源失败"})
+		return
+	}
+	if input.KeepStopped {
+		if _, err := docker(ctx, "compose", "-p", composeProject(input.Route), "-f", composePath, "stop"); err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "恢复关机状态失败"})
+			return
+		}
+	}
+	cacheRouteTarget(ctx, input.Name, input.Route)
+	c.JSON(http.StatusOK, gin.H{"name": input.Name, "status": "resized"})
 }
 
 // reinstallContainer intentionally removes an instance's persistent state and

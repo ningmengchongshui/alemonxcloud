@@ -31,9 +31,13 @@ function readSessionHint(): CurrentUser | null {
     const value = window.sessionStorage.getItem(sessionHintKey)
     if (!value) return null
     const user: unknown = JSON.parse(value)
-    return typeof user === 'object' && user !== null && 'username' in user && 'isAdmin' in user &&
-      typeof user.username === 'string' && typeof user.isAdmin === 'boolean'
-      ? user as CurrentUser
+    return typeof user === 'object' &&
+      user !== null &&
+      'username' in user &&
+      'isAdmin' in user &&
+      typeof user.username === 'string' &&
+      typeof user.isAdmin === 'boolean'
+      ? (user as CurrentUser)
       : null
   } catch {
     return null
@@ -42,14 +46,26 @@ function readSessionHint(): CurrentUser | null {
 
 function SessionRestoreOverlay() {
   return (
-    <div className="fixed inset-0 z-[100] grid cursor-wait place-items-center" aria-label="加载中" role="status">
-      <span className="size-5 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" aria-hidden="true" />
+    <div
+      className="fixed inset-0 z-[100] grid cursor-wait place-items-center"
+      aria-label="加载中"
+      role="status"
+    >
+      <span
+        className="size-5 animate-spin rounded-full border-2 border-blue-600 border-r-transparent"
+        aria-hidden="true"
+      />
     </div>
   )
 }
 
 function withSessionRestoreOverlay(content: ReactNode, restoring: boolean) {
-  return <>{content}{restoring && <SessionRestoreOverlay />}</>
+  return (
+    <>
+      {content}
+      {restoring && <SessionRestoreOverlay />}
+    </>
+  )
 }
 
 const userPaths = new Set([
@@ -154,7 +170,9 @@ export default function App() {
   const [path, setPath] = useState(currentPath)
   const [error, setError] = useState('')
   const { data: session, isLoading } = useGetSessionQuery()
-  const [sessionHint, setSessionHint] = useState<CurrentUser | null>(readSessionHint)
+  const [sessionHint, setSessionHint] = useState<CurrentUser | null>(
+    readSessionHint
+  )
   const activeSession = useMemo(
     () => session ?? (isLoading && sessionHint ? { user: sessionHint } : null),
     [isLoading, session, sessionHint]
@@ -212,7 +230,10 @@ export default function App() {
 
   useEffect(() => {
     if (session?.user) {
-      window.sessionStorage.setItem(sessionHintKey, JSON.stringify(session.user))
+      window.sessionStorage.setItem(
+        sessionHintKey,
+        JSON.stringify(session.user)
+      )
       setSessionHint(session.user)
       return
     }
@@ -512,7 +533,9 @@ export default function App() {
       page={page}
       onPageChange={next => navigate(routeForPage[next])}
       onGoToMe={() => navigate('/me')}
-      onGoToSuper={activeSession.user.isAdmin ? () => navigate('/super') : undefined}
+      onGoToSuper={
+        activeSession.user.isAdmin ? () => navigate('/super') : undefined
+      }
       onLogout={signOut}
     >
       {content}

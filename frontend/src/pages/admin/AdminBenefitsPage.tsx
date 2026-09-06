@@ -111,8 +111,13 @@ export function AdminBenefitsPage() {
     skip: !grantProgram
   })
   const plans = catalog?.plans ?? []
-  const [filter, setFilter] = useState<'all' | BenefitProgram['triggerType']>('all')
-  const visiblePrograms = filter === 'all' ? programs : programs.filter(program => program.triggerType === filter)
+  const [filter, setFilter] = useState<'all' | BenefitProgram['triggerType']>(
+    'all'
+  )
+  const visiblePrograms =
+    filter === 'all'
+      ? programs
+      : programs.filter(program => program.triggerType === filter)
 
   const closeEditor = () => {
     setEditing(null)
@@ -266,7 +271,7 @@ export function AdminBenefitsPage() {
       />
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-          <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-700 max-[560px]:items-start">
+        <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-700 max-[560px]:items-start">
           <div>
             <h2 className="m-0 text-sm font-bold text-slate-800 dark:text-white">
               方案列表
@@ -276,8 +281,22 @@ export function AdminBenefitsPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 border-b border-slate-100 px-5 py-3 dark:border-slate-700">
-            {([['all', '全部'], ['automatic', '自动权益'], ['promo_code', '推广码'], ['targeted', '定向权益']] as const).map(([value, label]) => (
-              <button key={value} type="button" onClick={() => setFilter(value)} className={`rounded-md border px-3 py-1.5 text-xs font-bold ${filter === value ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 text-slate-600 dark:border-slate-600 dark:text-slate-200'}`}>{label}</button>
+            {(
+              [
+                ['all', '全部'],
+                ['automatic', '自动权益'],
+                ['promo_code', '推广码'],
+                ['targeted', '定向权益']
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setFilter(value)}
+                className={`rounded-md border px-3 py-1.5 text-xs font-bold ${filter === value ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 text-slate-600 dark:border-slate-600 dark:text-slate-200'}`}
+              >
+                {label}
+              </button>
             ))}
           </div>
           <span className="shrink-0 text-[11px] font-bold text-slate-500 dark:text-slate-300">
@@ -330,7 +349,16 @@ export function AdminBenefitsPage() {
                     · 已使用 {program.usedCount}
                     {program.totalLimit ? ` / ${program.totalLimit}` : ''}
                   </p>
-                  {program.triggerType === 'promo_code' && <p className="mb-0 mt-0.5 text-[11px] text-slate-400 dark:text-slate-400">推广码：<b className="text-slate-600 dark:text-slate-200">{program.codeMask || '未配置'}</b> · 渠道：{program.channelLabel || '未标记'} · 每人 {program.codePerUserLimit || '不限'} 次</p>}
+                  {program.triggerType === 'promo_code' && (
+                    <p className="mb-0 mt-0.5 text-[11px] text-slate-400 dark:text-slate-400">
+                      推广码：
+                      <b className="text-slate-600 dark:text-slate-200">
+                        {program.codeMask || '未配置'}
+                      </b>{' '}
+                      · 渠道：{program.channelLabel || '未标记'} · 每人{' '}
+                      {program.codePerUserLimit || '不限'} 次
+                    </p>
+                  )}
                   <p className="mb-0 mt-0.5 text-[11px] text-slate-400 dark:text-slate-400">
                     预算 {money(program.cashSpentFen)} /{' '}
                     {program.cashBudgetFen

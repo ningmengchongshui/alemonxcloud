@@ -16,12 +16,14 @@ import {
   useInstanceActionMutation,
   useGetCatalogQuery,
   useGetWalletQuery,
+  useQuotePlanChangeMutation,
+  useSubmitPlanChangeMutation,
   useQuoteRenewalMutation,
   useRenewOrderMutation
 } from '@/services/cloudApi'
 import { trackConsoleEvent } from '@/services/telemetry'
 import { watchTask } from '@/store/uiSlice'
-import type { Instance, Order, Plan, PriceQuote } from '@/types/cloud'
+import type { Instance, Order, Plan, PlanChangeQuote, PriceQuote } from '@/types/cloud'
 
 const subscriptionMonths = [1, 3, 6, 12]
 const renewDiscountLabel = (plan: Plan | undefined, months: number) => {
@@ -69,6 +71,7 @@ function taskLabel(action: string) {
       'stop': '关机中',
       'restart': '重启中',
       'update': '更新中',
+      'resize': '套餐变更中',
       'reinstall': '重装中',
       'destroy': '销毁中',
       'purge': '清理中'
@@ -248,6 +251,10 @@ export function InstancesPage({
     Record<string, NonNullable<Instance['activeTask']>>
   >({})
   const [renewing, setRenewing] = useState<Order | null>(null)
+  const [resizing, setResizing] = useState<Instance | null>(null)
+  const [resizePlanID, setResizePlanID] = useState('')
+  const [resizeQuote, setResizeQuote] = useState<PlanChangeQuote | null>(null)
+  const [resizeError, setResizeError] = useState('')
   const [months, setMonths] = useState('1')
   const [renewPromoCode, setRenewPromoCode] = useState('')
   const [renewQuote, setRenewQuote] = useState<PriceQuote | null>(null)
@@ -256,6 +263,8 @@ export function InstancesPage({
   const { data: catalog } = useGetCatalogQuery()
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
   const [quoteRenewal] = useQuoteRenewalMutation()
+  const [quotePlanChange] = useQuotePlanChangeMutation()
+  const [submitPlanChange, { isLoading: resizeLoading }] = useSubmitPlanChangeMutation()
   const { data: wallet } = useGetWalletQuery()
   const dispatch = useDispatch()
   useEffect(() => {
@@ -330,6 +339,14 @@ export function InstancesPage({
             : '优惠试算失败'
         )
       )
+  }
+
+  function openResize(item: Instance) {
+    setResizing(item); setResizeQuote(null); setResizeError('')
+    const current = renewableOrderByInstance.get(item.id)?.planId
+    const first = catalog?.plans.find(plan => plan.id !== current)?.id || ''
+    setResizePlanID(first)
+    if (first) void quotePlanChange({ id: item.id, targetPlanId: first }).unwrap().then(setResizeQuote).catch((error: { data?: { message?: string } }) => setResizeError(error.data?.message || '套餐报价失败'))
   }
 
   function confirmAction() {
@@ -564,6 +581,9 @@ export function InstancesPage({
                           }
                         />
                       )}
+                    {['running', 'stopped'].includes(lifecycle) && canOperate && (
+                      <Button tone="secondary" onClick={() => openResize(item)}>变更套餐</Button>
+                    )}
                     {lifecycle === 'stopped' &&
                       runtime === 'stopped' &&
                       canOperate && (
@@ -704,23 +724,25 @@ export function InstancesPage({
           </fieldset>
           <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-700">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-300">有推广码？</span>
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-300">
+                有推广码？
+              </span>
               <span className="text-[11px] text-slate-400">可选填写</span>
             </div>
             <div className="mt-2 flex gap-2">
-                  <input
-                    className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 shadow-none outline-none placeholder:text-slate-400 focus:border-blue-300 focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
-                    value={renewPromoCode}
-                    onChange={event => setRenewPromoCode(event.target.value)}
-                    placeholder="输入推广码"
-                  />
-                  <Button
-                    className="h-10 px-4"
-                    tone="secondary"
-                    onClick={() => refreshRenewQuote(renewing, renewPromoCode)}
-                  >
-                    应用
-                  </Button>
+              <input
+                className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 shadow-none outline-none placeholder:text-slate-400 focus:border-blue-300 focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+                value={renewPromoCode}
+                onChange={event => setRenewPromoCode(event.target.value)}
+                placeholder="输入推广码"
+              />
+              <Button
+                className="h-10 px-4"
+                tone="secondary"
+                onClick={() => refreshRenewQuote(renewing, renewPromoCode)}
+              >
+                应用
+              </Button>
             </div>
             <div className="mt-4 space-y-2 text-xs">
               <div className="flex justify-between gap-3 text-slate-500 dark:text-slate-300">
@@ -809,6 +831,19 @@ export function InstancesPage({
                 : '确认续费'}
             </Button>
           </div>
+        </Dialog>
+      )}
+      {resizing && (
+        <Dialog onClose={() => setResizing(null)} eyebrow="实例套餐" title={`变更套餐 · ${imageName(resizing.image)}`} description="套餐变更立即生效，只调整 CPU 和内存，不调整网络。">
+          <label className="grid gap-2 text-xs font-bold text-slate-600 dark:text-slate-200">目标套餐
+            <select className="h-11 rounded-lg border border-slate-200 px-3 text-sm" value={resizePlanID} onChange={event => { const value=event.target.value; setResizePlanID(value); setResizeQuote(null); setResizeError(''); void quotePlanChange({id:resizing.id,targetPlanId:value}).unwrap().then(setResizeQuote).catch((error: { data?: { message?: string } })=>setResizeError(error.data?.message || '套餐报价失败')) }}>
+              <option value="">请选择套餐</option>
+              {(catalog?.plans || []).map(plan => <option key={plan.id} value={plan.id}>{plan.name} · {plan.cpu} 核 / {plan.memoryMB / 1024} GB</option>)}
+            </select>
+          </label>
+          {resizeQuote && <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-900"><div className="flex justify-between"><span>当前套餐</span><b>{resizeQuote.currentPlanName}</b></div><div className="mt-2 flex justify-between"><span>变更后</span><b>{resizeQuote.targetPlanName} · {resizeQuote.targetCpu} 核 / {resizeQuote.targetMemoryMB / 1024} GB</b></div><div className="mt-2 flex justify-between"><span>{resizeQuote.chargeFen ? '需补差价' : '退回钱包'}</span><b className={resizeQuote.refundFen ? 'text-emerald-600' : ''}>¥{((resizeQuote.chargeFen || resizeQuote.refundFen) / 100).toFixed(2)}</b></div><p className="mb-0 mt-2 text-slate-500">{resizeQuote.summary}</p></div>}
+          {resizeError && <Alert tone="error">{resizeError}</Alert>}
+          <div className="mt-5 flex justify-end gap-2"><Button tone="secondary" onClick={() => setResizing(null)}>取消</Button><Button loading={resizeLoading} disabled={!resizeQuote} onClick={() => { if (!resizeQuote) return; void submitPlanChange({id:resizing.id,targetPlanId:resizeQuote.targetPlanId,currentPlanId:resizeQuote.currentPlanId,quoteExpiresAt:resizeQuote.expiresAt}).unwrap().then(response => { setSubmittedTasks(current => ({...current,[resizing.id]: {id: response.task.id, action: response.task.action, status: response.task.status}})); dispatch(watchTask({id:response.task.id,action:response.task.action})); setResizing(null) }).catch((error: { data?: { message?: string } }) => setResizeError(error.data?.message || '套餐变更失败')) }}>确认变更</Button></div>
         </Dialog>
       )}
     </section>

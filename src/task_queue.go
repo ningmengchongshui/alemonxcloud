@@ -339,7 +339,7 @@ func quarantineDangerousFailedTasks(ctx context.Context) {
 }
 
 func dangerousRecoveredTask(action string) bool {
-	return action == "stop" || action == "update" || action == "restart" || action == "reinstall" || action == "destroy" || action == "purge" || action == "retry-deploy"
+	return action == "stop" || action == "update" || action == "restart" || action == "reinstall" || action == "destroy" || action == "purge" || action == "retry-deploy" || action == "resize"
 }
 func safeRecoveryState(ctx context.Context, task controlTask) bool {
 	if task.Action != "create" && task.Action != "start" {

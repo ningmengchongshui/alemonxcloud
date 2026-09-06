@@ -336,25 +336,31 @@ export function CreateServicePage({
           </dl>
           <div className="mt-5 border-t border-slate-100 pt-4 text-sm dark:border-slate-700">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-300">有推广码？</span>
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-300">
+                有推广码？
+              </span>
               <span className="text-[11px] text-slate-400">可选填写</span>
             </div>
             <div className="mt-2 flex gap-2">
-                <input
-                  className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 shadow-none outline-none placeholder:text-slate-400 focus:border-blue-300 focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
-                  value={promoCode}
-                  onChange={event => setPromoCode(event.target.value)}
-                  placeholder="输入推广码"
-                />
-                <Button className="h-10 px-4" tone="secondary" onClick={() => preview(promoCode)}>
-                  应用
-                </Button>
+              <input
+                className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 shadow-none outline-none placeholder:text-slate-400 focus:border-blue-300 focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+                value={promoCode}
+                onChange={event => setPromoCode(event.target.value)}
+                placeholder="输入推广码"
+              />
+              <Button
+                className="h-10 px-4"
+                tone="secondary"
+                onClick={() => preview(promoCode)}
+              >
+                应用
+              </Button>
             </div>
             <div className="mt-4 space-y-2 text-xs">
               <div className="flex justify-between gap-3 text-slate-500 dark:text-slate-300">
                 <span>
-                套餐价格
-                {quote?.tierMonths ? `（${quote.tierMonths} 个月）` : ''}
+                  套餐价格
+                  {quote?.tierMonths ? `（${quote.tierMonths} 个月）` : ''}
                 </span>
                 <b>{quote ? money(quote.listAmountFen) : '—'}</b>
               </div>
