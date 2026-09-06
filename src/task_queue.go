@@ -201,6 +201,12 @@ func processDelivery(delivery amqp091.Delivery) {
 		return
 	}
 	if err != nil {
+		if strings.HasPrefix(err.Error(), "节点 ") {
+			// Keep the latest concise Agent failure visible in node management.
+			// Full Docker stderr stays in the node's journal rather than leaking to
+			// customers through execution records.
+			_, _ = instanceDB.ExecContext(context.Background(), `UPDATE xcloud_nodes n JOIN xcloud_instances i ON i.node_id=n.id SET n.last_agent_error=?,n.updated_at=NOW() WHERE i.id=?`, truncateError(err.Error()), task.InstanceID)
+		}
 		failDeployment(context.Background(), task, err)
 		log.Printf("task %s %s failed (attempt %d): %v", task.ID, task.Action, task.Attempts, err)
 		if task.Attempts >= 3 {

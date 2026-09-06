@@ -412,7 +412,23 @@ func nodeRequest(ctx context.Context, n node, method, path string, payload any, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("节点 %s 返回 %d", n.Name, resp.StatusCode)
+		// The Agent already returns a short, operator-safe message (for example
+		// “Docker Compose 重启容器失败”). Preserve it instead of reducing every
+		// node failure to an opaque HTTP status. Docker command output remains on
+		// the node and is never exposed through the customer API.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		var failure struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(body, &failure)
+		message := strings.TrimSpace(failure.Message)
+		if message == "" {
+			message = strings.TrimSpace(string(body))
+		}
+		if message == "" {
+			return fmt.Errorf("节点 %s 返回 %d", n.Name, resp.StatusCode)
+		}
+		return fmt.Errorf("节点 %s 返回 %d：%s", n.Name, resp.StatusCode, truncateError(message))
 	}
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil && !errors.Is(err, io.EOF) {
