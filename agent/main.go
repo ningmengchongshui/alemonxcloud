@@ -395,6 +395,10 @@ func createContainer(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 	defer cancel()
+	if err := ensurePinnedImageAvailable(ctx, input.Image); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "实例所需的固定镜像缺失且补拉失败"})
+		return
+	}
 	if _, err := docker(ctx, "inspect", input.Name); err == nil {
 		// A worker may retry after the Docker command succeeded but before its
 		// database acknowledgement. Treat the managed name as an idempotent key.
@@ -799,6 +803,10 @@ func restartContainer(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 	defer cancel()
+	if err := ensurePinnedImageAvailable(ctx, input.Image); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "实例所需的固定镜像缺失且补拉失败"})
+		return
+	}
 	instanceDir, homeDir, workspaceDir := instancePaths(input.Name)
 	if err := prepareInstanceDirs(instanceDir, homeDir, workspaceDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法准备实例数据目录"})
@@ -840,6 +848,10 @@ func resizeContainer(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 	defer cancel()
+	if err := ensurePinnedImageAvailable(ctx, input.Image); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "实例所需的固定镜像缺失且补拉失败"})
+		return
+	}
 	instanceDir, homeDir, workspaceDir := instancePaths(input.Name)
 	if err := prepareInstanceDirs(instanceDir, homeDir, workspaceDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法准备实例数据目录"})
@@ -885,6 +897,10 @@ func reinstallContainer(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 	defer cancel()
+	if err := ensurePinnedImageAvailable(ctx, input.Image); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "实例所需的固定镜像缺失且补拉失败"})
+		return
+	}
 	instanceDir, homeDir, workspaceDir := instancePaths(input.Name)
 	composePath := filepath.Join(instanceDir, instanceComposeFile)
 	if _, err := os.Stat(composePath); err == nil {
@@ -1376,6 +1392,25 @@ func docker(ctx context.Context, args ...string) (string, error) {
 		log.Printf("docker %s: %s", strings.Join(args[:min(2, len(args))], " "), strings.TrimSpace(string(out)))
 	}
 	return string(out), err
+}
+
+// ensurePinnedImageAvailable restores only the exact immutable image recorded
+// for an instance. A restarted container must not depend on Docker's local
+// cache, but it also must not silently follow a mutable tag to newer code.
+func ensurePinnedImageAvailable(ctx context.Context, image string) error {
+	if !validDigestImage(image) {
+		return nil
+	}
+	if _, err := docker(ctx, "image", "inspect", image); err == nil {
+		return nil
+	}
+	if _, err := docker(ctx, "pull", image); err != nil {
+		return fmt.Errorf("pull pinned image: %w", err)
+	}
+	if _, err := docker(ctx, "image", "inspect", image); err != nil {
+		return fmt.Errorf("verify pulled pinned image: %w", err)
+	}
+	return nil
 }
 func validImage(value string) bool {
 	return len(value) <= 255 && !strings.ContainsAny(value, " \t\n\r;&|`$()")
