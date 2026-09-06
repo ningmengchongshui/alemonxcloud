@@ -25,6 +25,18 @@ func TestInstanceComposeCarriesPlanLimitsAndRuntimeTuning(t *testing.T) {
 	}
 }
 
+func TestInstanceComposeEnablesInteractiveTerminalModeOnlyWhenRequested(t *testing.T) {
+	base := createRequest{Name: "xcloud-12345678", Image: "registry.example/alemonx:latest", CPU: 1, MemoryMB: 1024, BandwidthMbps: 10, Route: "r0123456789abcdef"}
+	terminalCompose := instanceCompose(createRequest{Name: base.Name, Image: base.Image, CPU: base.CPU, MemoryMB: base.MemoryMB, BandwidthMbps: base.BandwidthMbps, Route: base.Route, TerminalMode: true}, "/data/home", "/data/workspace")
+	if !strings.Contains(terminalCompose, "    stdin_open: true\n    tty: true\n") {
+		t.Fatalf("terminal compose must allocate an interactive TTY:\n%s", terminalCompose)
+	}
+	webCompose := instanceCompose(base, "/data/home", "/data/workspace")
+	if strings.Contains(webCompose, "stdin_open:") || strings.Contains(webCompose, "    tty:") {
+		t.Fatalf("web compose must not receive terminal-only runtime settings:\n%s", webCompose)
+	}
+}
+
 func TestPrepareInstanceDirsMigratesLegacyRootData(t *testing.T) {
 	root := t.TempDir()
 	instanceDir := filepath.Join(root, "xcloud-12345678")

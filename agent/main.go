@@ -89,6 +89,7 @@ type createRequest struct {
 	MemoryMB      int     `json:"memoryMB" binding:"required"`
 	BandwidthMbps int     `json:"bandwidthMbps" binding:"required"`
 	Route         string  `json:"route" binding:"required"`
+	TerminalMode  bool    `json:"terminalMode,omitempty"`
 	KeepStopped   bool    `json:"keepStopped,omitempty"`
 }
 
@@ -698,6 +699,11 @@ func instanceCompose(input createRequest, homeDir, workspaceDir string) string {
 	// In particular, do not drop every Linux capability: the official image runs
 	// as root and Git must retain normal access to its bind-mounted workspace.
 	fmt.Fprintf(&out, "# Managed by xcloud-agent. Manual edits apply on the next compose up.\nname: %s\nservices:\n  alemonx:\n    container_name: %s\n    image: %s\n    restart: unless-stopped\n    init: true\n    cpus: %s\n    mem_limit: %s\n    memswap_limit: %s\n    shm_size: 1g\n", composeProject(input.Route), yamlString(input.Name), yamlString(input.Image), yamlString(cpu), yamlString(memory(input.MemoryMB)), yamlString(memory(input.MemoryMB)))
+	if input.TerminalMode {
+		// Terminal-mode images run interactively. Without these flags, a command
+		// such as `node` has no TTY and exits instead of keeping its REPL alive.
+		out.WriteString("    stdin_open: true\n    tty: true\n")
+	}
 	out.WriteString("    healthcheck:\n      test: [\"CMD-SHELL\", \"curl -fsS http://127.0.0.1:17390/healthz >/dev/null\"]\n      interval: 30s\n      timeout: 5s\n      retries: 3\n      start_period: 20s\n    environment:\n")
 	for _, key := range keys {
 		fmt.Fprintf(&out, "      %s: %s\n", key, yamlString(env[key]))

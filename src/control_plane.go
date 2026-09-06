@@ -1220,7 +1220,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 			if err = taskMayCallAgent(ctx, task, "running"); err != nil {
 				return err
 			}
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, &lifecycleResult)
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route, "terminalMode": item.TerminalOnly}, &lifecycleResult)
 			if err == nil {
 				persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			}
@@ -1283,10 +1283,11 @@ func instanceRuntimePayload(ctx context.Context, instanceID, containerName, rout
 		return nil, err
 	}
 	var imageRef, digest, selectedVersion string
-	if err := instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(ins.image_digest,o.selected_image_digest,i.image_digest,''),COALESCE(ins.version,o.selected_image_version,i.version) FROM xcloud_instances ins JOIN xcloud_orders o ON o.instance_id=ins.id JOIN xcloud_images i ON i.id=o.image_id WHERE ins.id=? ORDER BY o.created_at DESC LIMIT 1`, instanceID).Scan(&imageRef, &digest, &selectedVersion); err != nil {
+	var terminalMode bool
+	if err := instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(ins.image_digest,o.selected_image_digest,i.image_digest,''),COALESCE(ins.version,o.selected_image_version,i.version),COALESCE(i.terminal_only,TRUE) FROM xcloud_instances ins JOIN xcloud_orders o ON o.instance_id=ins.id JOIN xcloud_images i ON i.id=o.image_id WHERE ins.id=? ORDER BY o.created_at DESC LIMIT 1`, instanceID).Scan(&imageRef, &digest, &selectedVersion, &terminalMode); err != nil {
 		return nil, err
 	}
-	return map[string]any{"name": containerName, "image": deploymentImage(imageRef, selectedVersion, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route}, nil
+	return map[string]any{"name": containerName, "image": deploymentImage(imageRef, selectedVersion, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route, "terminalMode": terminalMode}, nil
 }
 
 func executePurgeTask(ctx context.Context, task controlTask, instanceID, containerName string, n node) error {
