@@ -1253,6 +1253,12 @@ func executeTask(ctx context.Context, task controlTask) error {
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/resize", payload, nil)
 		if err == nil {
 			err = completePlanChange(ctx, task)
+			if err != nil {
+				// The Agent has already applied the target resources. A settlement
+				// failure is ambiguous and must keep funds blocked for verification;
+				// it must not be converted into a normal Agent failure/refund.
+				markPlanChangeBlocked(ctx, resize.ChangeID, "Agent 已完成资源调整，但控制面结算失败："+err.Error())
+			}
 		}
 	case "destroy":
 		err = executeDestroyTask(ctx, task, item.ID, item.ContainerName, n)

@@ -902,6 +902,11 @@ func resumeReviewTask(c *gin.Context) {
 	c.Status(http.StatusAccepted)
 }
 func discardReviewTask(c *gin.Context) {
+	task, loadErr := loadTask(c.Request.Context(), c.Param("id"))
+	if loadErr != nil {
+		internalError(c, loadErr)
+		return
+	}
 	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_tasks SET status=?,finished_at=NOW(),last_error='管理员作废',updated_at=NOW() WHERE id=? AND status=?`, taskFailed, c.Param("id"), taskReview)
 	if err != nil {
 		internalError(c, err)
@@ -910,6 +915,9 @@ func discardReviewTask(c *gin.Context) {
 	if n, _ := result.RowsAffected(); n != 1 {
 		c.JSON(http.StatusConflict, gin.H{"message": "任务当前不可作废"})
 		return
+	}
+	if task.Action == "resize" {
+		failPlanChange(c.Request.Context(), task, errors.New("管理员作废套餐变更任务"))
 	}
 	user := c.MustGet("user").(oidcUser)
 	_, _ = instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET active_task_id=NULL,active_task_token=NULL,active_task_expires_at=NULL WHERE active_task_id=?`, c.Param("id"))
@@ -923,17 +931,17 @@ func discardReviewTask(c *gin.Context) {
 // work, which could still be picked up by a worker or executing in an Agent.
 func discardAllAdminTasks(c *gin.Context) {
 	ctx := c.Request.Context()
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,instance_id FROM xcloud_tasks WHERE status IN (?,?) ORDER BY created_at LIMIT 500`, taskFailed, taskReview)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,instance_id,action FROM xcloud_tasks WHERE status IN (?,?) ORDER BY created_at LIMIT 500`, taskFailed, taskReview)
 	if err != nil {
 		internalError(c, err)
 		return
 	}
 	defer rows.Close()
-	type taskRef struct{ id, instanceID string }
+	type taskRef struct{ id, instanceID, action string }
 	items := []taskRef{}
 	for rows.Next() {
 		var item taskRef
-		if err := rows.Scan(&item.id, &item.instanceID); err != nil {
+		if err := rows.Scan(&item.id, &item.instanceID, &item.action); err != nil {
 			internalError(c, err)
 			return
 		}
@@ -952,6 +960,12 @@ func discardAllAdminTasks(c *gin.Context) {
 		}
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			continue
+		}
+		if item.action == "resize" {
+			task, loadErr := loadTask(ctx, item.id)
+			if loadErr == nil {
+				failPlanChange(ctx, task, errors.New("管理员批量作废套餐变更任务"))
+			}
 		}
 		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET active_task_id=NULL,active_task_token=NULL,active_task_expires_at=NULL WHERE id=? AND active_task_id=?`, item.instanceID, item.id)
 		appendTaskEvent(ctx, item.id, "discarded_by_admin", "管理员一键作废异常任务；任务不会再次执行")

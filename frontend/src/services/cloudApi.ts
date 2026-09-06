@@ -92,11 +92,30 @@ export const cloudApi = createApi({
       }),
       invalidatesTags: ['Instances', 'Orders']
     }),
-    quotePlanChange: builder.mutation<PlanChangeQuote, { id: string; targetPlanId: string }>({
-      query: ({ id, targetPlanId }) => ({ url: `/instances/${id}/plan-change/quote`, method: 'POST', body: { targetPlanId } })
+    quotePlanChange: builder.mutation<
+      PlanChangeQuote,
+      { id: string; targetPlanId: string }
+    >({
+      query: ({ id, targetPlanId }) => ({
+        url: `/instances/${id}/plan-change/quote`,
+        method: 'POST',
+        body: { targetPlanId }
+      })
     }),
-    submitPlanChange: builder.mutation<{ change: unknown; task: Task; message?: string }, { id: string; targetPlanId: string; currentPlanId: string; quoteExpiresAt?: string }>({
-      query: ({ id, ...body }) => ({ url: `/instances/${id}/plan-change`, method: 'POST', body }),
+    submitPlanChange: builder.mutation<
+      { change: unknown; task: Task; message?: string },
+      {
+        id: string
+        targetPlanId: string
+        currentPlanId: string
+        quoteExpiresAt?: string
+      }
+    >({
+      query: ({ id, ...body }) => ({
+        url: `/instances/${id}/plan-change`,
+        method: 'POST',
+        body
+      }),
       invalidatesTags: ['Instances', 'Wallet']
     }),
     getInstanceLogs: builder.query<

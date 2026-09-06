@@ -59,6 +59,7 @@ var agentCapabilities = []string{
 	"container.list.v1",
 	"container.compose.v1",
 	"container.compose.restart.v1",
+	"container.compose.resize.v1",
 	"container.reinstall.v1",
 	"container.destroy.v1",
 	"image.pull.v1",
@@ -849,15 +850,15 @@ func resizeContainer(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法写入实例 Compose 配置"})
 		return
 	}
-	if _, err := docker(ctx, "compose", "-p", composeProject(input.Route), "-f", composePath, "up", "-d", "--pull", "never", "--remove-orphans"); err != nil {
+	composeArgs := []string{"compose", "-p", composeProject(input.Route), "-f", composePath, "up", "--pull", "never", "--remove-orphans"}
+	if input.KeepStopped {
+		composeArgs = append(composeArgs, "--no-start")
+	} else {
+		composeArgs = append(composeArgs, "-d")
+	}
+	if _, err := docker(ctx, composeArgs...); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 调整资源失败"})
 		return
-	}
-	if input.KeepStopped {
-		if _, err := docker(ctx, "compose", "-p", composeProject(input.Route), "-f", composePath, "stop"); err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"message": "恢复关机状态失败"})
-			return
-		}
 	}
 	cacheRouteTarget(ctx, input.Name, input.Route)
 	c.JSON(http.StatusOK, gin.H{"name": input.Name, "status": "resized"})
@@ -1019,12 +1020,12 @@ func inspectContainer(c *gin.Context) {
 	defer cancel()
 	// Return lifecycle facts only. Environment variables and host mounts remain
 	// private to the node even for authenticated control-plane callers.
-	output, err := docker(ctx, "inspect", "--format", "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.Image}}|{{.Created}}|{{.RestartCount}}", name)
+	output, err := docker(ctx, "inspect", "--format", "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.Image}}|{{.Created}}|{{.RestartCount}}|{{.HostConfig.NanoCpus}}|{{.HostConfig.Memory}}", name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "容器不存在"})
 		return
 	}
-	parts := strings.SplitN(strings.TrimSpace(output), "|", 5)
+	parts := strings.SplitN(strings.TrimSpace(output), "|", 7)
 	result := gin.H{"name": name}
 	if len(parts) > 0 {
 		result["status"] = parts[0]
@@ -1040,6 +1041,12 @@ func inspectContainer(c *gin.Context) {
 	}
 	if len(parts) > 4 {
 		result["restartCount"] = parts[4]
+	}
+	if len(parts) > 5 {
+		result["nanoCPUs"] = parts[5]
+	}
+	if len(parts) > 6 {
+		result["memoryBytes"] = parts[6]
 	}
 	c.JSON(http.StatusOK, result)
 }

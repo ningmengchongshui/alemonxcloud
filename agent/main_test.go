@@ -64,7 +64,7 @@ func TestAgentProtocolDeclaresStableExecutionCapabilities(t *testing.T) {
 	required := []string{
 		"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1",
 		"container.list.v1", "container.compose.v1", "container.destroy.v1", "image.pull.v1",
-		"container.compose.restart.v1", "container.reinstall.v1",
+		"container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1",
 		"image.inspect.v1", "image.list.v1", "route.proxy.v1", "node.resources.v1", "network.bandwidth.v1",
 		"network.bandwidth.status.v1",
 		"network.bandwidth.queue.v1",

@@ -46,3 +46,23 @@ groups:
         for: 5m
         labels: { severity: warning }
         annotations: { summary: "ALemonX Cloud repeatedly recovers expired task leases" }
+      - alert: XCloudPlanChangeFundsPending
+        expr: xcloud_plan_changes_fund_pending > 0
+        for: 10m
+        labels: { severity: critical }
+        annotations: { summary: "ALemonX Cloud has套餐变更资金待结算超过10分钟" }
+      - alert: XCloudPlanChangeNeedsReview
+        expr: xcloud_plan_changes_needs_review > 0
+        for: 30m
+        labels: { severity: critical }
+        annotations: { summary: "ALemonX Cloud has套餐变更待人工核实超过30分钟" }
+      - alert: XCloudPlanChangeAgentVerifyFailures
+        expr: xcloud_plan_changes_agent_verify_failures > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "ALemonX Cloud Agent资源核实出现失败" }
+      - alert: XCloudPlanChangeProcessingStale
+        expr: xcloud_plan_changes_processing > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "ALemonX Cloud套餐变更持续处理中" }

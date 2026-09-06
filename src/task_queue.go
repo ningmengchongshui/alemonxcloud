@@ -294,6 +294,9 @@ func recoverExpiredTaskLeases(ctx context.Context) {
 		}
 		appendTaskEvent(ctx, task.ID, event, detail)
 		_ = writeAudit(ctx, "system", "task."+event, "task", task.ID, map[string]any{"instanceId": task.InstanceID, "action": task.Action})
+		if next == taskReview && task.Action == "resize" {
+			reconcileRecoveredPlanChange(ctx, task)
+		}
 		if next == taskPending && queueAvailable() {
 			if err := enqueuePersistedTask(ctx, task); err != nil {
 				log.Printf("republish recovered task %s: %v", task.ID, err)

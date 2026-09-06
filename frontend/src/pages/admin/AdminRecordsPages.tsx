@@ -97,7 +97,12 @@ export function AdminTasksPage() {
   ).length
 
   async function discardAbnormalTasks() {
-    if (!window.confirm(`确认一键作废全部 ${abnormalCount} 个失败或待复核任务吗？任务记录会保留，但不会再执行。`)) return
+    if (
+      !window.confirm(
+        `确认一键作废全部 ${abnormalCount} 个失败或待复核任务吗？任务记录会保留，但不会再执行。`
+      )
+    )
+      return
     await discardAll()
     await tasks.refetch()
   }

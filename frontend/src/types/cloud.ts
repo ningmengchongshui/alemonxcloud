@@ -53,6 +53,10 @@ export interface Instance {
   archivedAt?: string
   ip: string
   createdAt: string
+  currentPlanId?: string
+  currentPlanName?: string
+  planChangeStatus?: 'processing' | 'succeeded' | 'failed' | 'needs_review'
+  planChangeId?: string
 }
 export interface PlanChangeQuote {
   quoteId: string

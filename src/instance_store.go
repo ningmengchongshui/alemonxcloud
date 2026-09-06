@@ -80,6 +80,10 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 			return nil, err
 		}
 		item.CreatedAt = created.Format("2006-01-02 15:04")
+		item.CurrentPlanID, item.CurrentPlanName = effectiveInstancePlan(ctx, ownerID, item.ID)
+		var changeStatus, changeID string
+		_ = instanceDB.QueryRowContext(ctx, `SELECT id,status FROM xcloud_instance_plan_changes WHERE instance_id=? ORDER BY created_at DESC LIMIT 1`, item.ID).Scan(&changeID, &changeStatus)
+		item.PlanChangeID, item.PlanChangeStatus = changeID, changeStatus
 		if activeTask.ID != "" {
 			item.ActiveTask = &activeTask
 		}

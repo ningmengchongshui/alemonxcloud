@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,28 +35,33 @@ type planChangeQuote struct {
 }
 
 type planChangeRecord struct {
-	ID                      string
-	InstanceID              string
-	OwnerID                 string
-	SourcePlanID            string
-	TargetPlanID            string
-	SourceCPU               float64
-	SourceMemoryMB          int
-	TargetCPU               float64
-	TargetMemoryMB          int
-	RemainingSeconds        int64
-	DeltaFen                int
-	ChargeFen               int
-	RefundFen               int
-	Status                  string
-	TaskID                  string
-	IdempotencyKey          string
-	PendingWalletEntryID    string
-	SettlementWalletEntryID string
-	ErrorMessage            string
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
-	CompletedAt             *time.Time
+	ID                      string     `json:"id"`
+	InstanceID              string     `json:"instanceId"`
+	OwnerID                 string     `json:"ownerId"`
+	SourcePlanID            string     `json:"sourcePlanId"`
+	TargetPlanID            string     `json:"targetPlanId"`
+	SourceCPU               float64    `json:"sourceCpu"`
+	SourceMemoryMB          int        `json:"sourceMemoryMB"`
+	TargetCPU               float64    `json:"targetCpu"`
+	TargetMemoryMB          int        `json:"targetMemoryMB"`
+	RemainingSeconds        int64      `json:"remainingSeconds"`
+	DeltaFen                int        `json:"deltaFen"`
+	ChargeFen               int        `json:"chargeFen"`
+	RefundFen               int        `json:"refundFen"`
+	Status                  string     `json:"status"`
+	FundStatus              string     `json:"fundStatus"`
+	AgentVerifyStatus       string     `json:"agentVerifyStatus"`
+	AgentVerifiedAt         *time.Time `json:"agentVerifiedAt,omitempty"`
+	AgentVerifyResult       string     `json:"agentVerifyResult,omitempty"`
+	AgentVerifyError        string     `json:"agentVerifyError,omitempty"`
+	TaskID                  string     `json:"taskId"`
+	IdempotencyKey          string     `json:"idempotencyKey"`
+	PendingWalletEntryID    string     `json:"pendingWalletEntryId"`
+	SettlementWalletEntryID string     `json:"settlementWalletEntryId"`
+	ErrorMessage            string     `json:"errorMessage,omitempty"`
+	CreatedAt               time.Time  `json:"createdAt"`
+	UpdatedAt               time.Time  `json:"updatedAt"`
+	CompletedAt             *time.Time `json:"completedAt,omitempty"`
 }
 
 func planChangeHandler(c *gin.Context) {
@@ -96,11 +102,32 @@ func latestPlanForInstance(ctx context.Context, tx *sql.Tx, ownerID, instanceID 
 	return planID, name, cpu, memory, expiry, instanceStatus, nil
 }
 
+func effectiveInstancePlan(ctx context.Context, ownerID, instanceID string) (string, string) {
+	var planID, planName string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT p.id,p.name FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id WHERE o.owner_id=? AND o.instance_id=? AND o.status IN (?,?) ORDER BY o.created_at DESC LIMIT 1`, ownerID, instanceID, orderActive, orderExpired).Scan(&planID, &planName); err != nil {
+		return "", ""
+	}
+	var changedID string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT target_plan_id FROM xcloud_instance_plan_changes WHERE instance_id=? AND status='succeeded' ORDER BY completed_at DESC,created_at DESC LIMIT 1`, instanceID).Scan(&changedID); err == nil && changedID != "" {
+		_ = instanceDB.QueryRowContext(ctx, `SELECT id,name FROM xcloud_plans WHERE id=?`, changedID).Scan(&planID, &planName)
+	}
+	return planID, planName
+}
+
 func calculatePlanDelta(currentMonthly, targetMonthly int, expiry time.Time, now time.Time) (int64, int) {
 	seconds := int64(math.Max(0, expiry.Sub(now).Seconds()))
 	// A 30-day month is the fixed billing denominator used by the quote.
 	delta := int(math.Round(float64(targetMonthly-currentMonthly) * float64(seconds) / float64(30*24*60*60)))
 	return seconds, delta
+}
+
+func validPlanChangeQuoteExpiry(expiresAt, now time.Time) bool {
+	if expiresAt.IsZero() || !expiresAt.After(now) {
+		return false
+	}
+	// The quote endpoint issues five-minute quotes. Do not trust a client to
+	// extend that window and submit a stale price snapshot.
+	return !expiresAt.After(now.Add(5 * time.Minute))
 }
 
 func buildPlanChangeQuote(ctx context.Context, ownerID, instanceID, targetPlanID string) (planChangeQuote, error) {
@@ -155,7 +182,7 @@ func submitPlanChangeHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "套餐变更参数无效"})
 		return
 	}
-	if !body.QuoteExpiresAt.IsZero() && time.Now().After(body.QuoteExpiresAt) {
+	if !validPlanChangeQuoteExpiry(body.QuoteExpiresAt, time.Now()) {
 		c.JSON(http.StatusConflict, gin.H{"message": "报价已过期，请重新报价"})
 		return
 	}
@@ -173,7 +200,7 @@ func submitPlanChangeHandler(c *gin.Context) {
 
 func getPlanChangesHandler(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id,instance_id,owner_id,source_plan_id,target_plan_id,source_cpu,source_memory_mb,target_cpu,target_memory_mb,remaining_seconds,delta_fen,charge_fen,refund_fen,status,COALESCE(task_id,''),idempotency_key,COALESCE(pending_wallet_entry_id,''),COALESCE(settlement_wallet_entry_id,''),COALESCE(error_message,''),created_at,updated_at,completed_at FROM xcloud_instance_plan_changes WHERE instance_id=? AND owner_id=? ORDER BY created_at DESC LIMIT 20`, c.Param("id"), user.ID)
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id,instance_id,owner_id,source_plan_id,target_plan_id,source_cpu,source_memory_mb,target_cpu,target_memory_mb,remaining_seconds,delta_fen,charge_fen,refund_fen,status,fund_status,agent_verify_status,agent_verified_at,COALESCE(CAST(agent_verify_result AS CHAR),''),COALESCE(agent_verify_error,''),COALESCE(task_id,''),idempotency_key,COALESCE(pending_wallet_entry_id,''),COALESCE(settlement_wallet_entry_id,''),COALESCE(error_message,''),created_at,updated_at,completed_at FROM xcloud_instance_plan_changes WHERE instance_id=? AND owner_id=? ORDER BY created_at DESC LIMIT 20`, c.Param("id"), user.ID)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -182,7 +209,7 @@ func getPlanChangesHandler(c *gin.Context) {
 	out := []planChangeRecord{}
 	for rows.Next() {
 		var v planChangeRecord
-		if err := rows.Scan(&v.ID, &v.InstanceID, &v.OwnerID, &v.SourcePlanID, &v.TargetPlanID, &v.SourceCPU, &v.SourceMemoryMB, &v.TargetCPU, &v.TargetMemoryMB, &v.RemainingSeconds, &v.DeltaFen, &v.ChargeFen, &v.RefundFen, &v.Status, &v.TaskID, &v.IdempotencyKey, &v.PendingWalletEntryID, &v.SettlementWalletEntryID, &v.ErrorMessage, &v.CreatedAt, &v.UpdatedAt, &v.CompletedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.InstanceID, &v.OwnerID, &v.SourcePlanID, &v.TargetPlanID, &v.SourceCPU, &v.SourceMemoryMB, &v.TargetCPU, &v.TargetMemoryMB, &v.RemainingSeconds, &v.DeltaFen, &v.ChargeFen, &v.RefundFen, &v.Status, &v.FundStatus, &v.AgentVerifyStatus, &v.AgentVerifiedAt, &v.AgentVerifyResult, &v.AgentVerifyError, &v.TaskID, &v.IdempotencyKey, &v.PendingWalletEntryID, &v.SettlementWalletEntryID, &v.ErrorMessage, &v.CreatedAt, &v.UpdatedAt, &v.CompletedAt); err != nil {
 			internalError(c, err)
 			return
 		}
@@ -241,6 +268,22 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 	if err = tx.QueryRowContext(ctx, `SELECT n.id,n.enabled,n.last_heartbeat_at FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.id=? FOR UPDATE`, instanceID).Scan(&nodeID, &nodeEnabled, &heartbeat); err != nil || !nodeEnabled || !heartbeat.Valid || time.Since(heartbeat.Time) > nodeHeartbeatTTL() {
 		return planChangeRecord{}, controlTask{}, errors.New("实例节点暂不可用")
 	}
+	var capabilities []byte
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE id=?`, nodeID).Scan(&capabilities); err != nil {
+		return planChangeRecord{}, controlTask{}, err
+	}
+	var capabilityList []string
+	_ = json.Unmarshal(capabilities, &capabilityList)
+	resizeSupported := false
+	for _, capability := range capabilityList {
+		if capability == "container.compose.resize.v1" {
+			resizeSupported = true
+			break
+		}
+	}
+	if !resizeSupported {
+		return planChangeRecord{}, controlTask{}, errors.New("当前节点 Agent 不支持无启动套餐变更，请先升级 Agent")
+	}
 	var usedCPU float64
 	var usedMem int
 	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(cpu),0),COALESCE(SUM(memory_mb),0) FROM xcloud_instances WHERE node_id=? AND id<>? AND status IN ('deploying','running','stopped','destroy_scheduled')`, nodeID, instanceID).Scan(&usedCPU, &usedMem); err != nil {
@@ -277,11 +320,11 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=balance_fen-?,updated_at=NOW() WHERE user_id=?`, charge, ownerID); err != nil {
 			return planChangeRecord{}, controlTask{}, err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,created_at) SELECT ?,user_id,?,?,?, ?,?,NOW() FROM xcloud_wallets WHERE user_id=?`, pending, -charge, balance-charge, "plan_change_pending", "套餐升级暂扣", ownerID, ownerID); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,plan_change_id,business_key,created_at) SELECT ?,user_id,?,?,?, ?,?,?,?,NOW() FROM xcloud_wallets WHERE user_id=?`, pending, -charge, balance-charge, "plan_change_pending", "套餐升级暂扣", ownerID, changeID, "plan-change:pending:"+changeID, ownerID); err != nil {
 			return planChangeRecord{}, controlTask{}, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instance_plan_changes (id,instance_id,owner_id,source_plan_id,target_plan_id,source_cpu,source_memory_mb,target_cpu,target_memory_mb,remaining_seconds,delta_fen,charge_fen,refund_fen,status,idempotency_key,pending_wallet_entry_id,before_snapshot,after_snapshot,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, changeID, instanceID, ownerID, currentPlan, targetPlanID, currentCPU, currentMem, targetCPU, targetMem, seconds, delta, charge, refund, "processing", idem, pending, before, after, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instance_plan_changes (id,instance_id,owner_id,source_plan_id,target_plan_id,source_cpu,source_memory_mb,target_cpu,target_memory_mb,remaining_seconds,delta_fen,charge_fen,refund_fen,status,fund_status,idempotency_key,pending_wallet_entry_id,before_snapshot,after_snapshot,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, changeID, instanceID, ownerID, currentPlan, targetPlanID, currentCPU, currentMem, targetCPU, targetMem, seconds, delta, charge, refund, "processing", "pending", idem, pending, before, after, now, now); err != nil {
 		return planChangeRecord{}, controlTask{}, err
 	}
 	payload, _ := json.Marshal(map[string]any{"changeId": changeID, "cpu": targetCPU, "memoryMB": targetMem, "wasRunning": status == "running"})
@@ -300,6 +343,75 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 	return planChangeRecord{ID: changeID, InstanceID: instanceID, OwnerID: ownerID, SourcePlanID: currentPlan, TargetPlanID: targetPlanID, SourceCPU: currentCPU, SourceMemoryMB: currentMem, TargetCPU: targetCPU, TargetMemoryMB: targetMem, RemainingSeconds: seconds, DeltaFen: delta, ChargeFen: charge, RefundFen: refund, Status: "processing", TaskID: taskID, IdempotencyKey: idem, PendingWalletEntryID: pending, CreatedAt: now, UpdatedAt: now}, controlTask{ID: taskID, InstanceID: instanceID, Action: "resize", IdempotencyKey: idem, Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, Payload: payload}, nil
 }
 
+func markPlanChangeBlocked(ctx context.Context, changeID, message string) {
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='needs_review',fund_status='blocked',agent_verify_status='unavailable',agent_verified_at=NOW(),agent_verify_result=JSON_OBJECT('status','unknown'),agent_verify_error=?,updated_at=NOW() WHERE id=? AND status='processing'`, truncateError(message), changeID)
+}
+
+// reconcileRecoveredPlanChange resolves a resize task whose worker lease
+// expired after the Agent call. It never guesses: only an exact target or
+// exact source resource match is settled automatically.
+func reconcileRecoveredPlanChange(ctx context.Context, task controlTask) {
+	var payload struct {
+		ChangeID string `json:"changeId"`
+	}
+	if json.Unmarshal(task.Payload, &payload) != nil || payload.ChangeID == "" {
+		return
+	}
+	var containerName, nodeID string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT container_name,COALESCE(node_id,'') FROM xcloud_instances WHERE id=?`, task.InstanceID).Scan(&containerName, &nodeID); err != nil {
+		markPlanChangeBlocked(ctx, payload.ChangeID, err.Error())
+		return
+	}
+	n, err := nodeByID(ctx, nodeID)
+	if err != nil {
+		markPlanChangeBlocked(ctx, payload.ChangeID, err.Error())
+		return
+	}
+	var inspection struct {
+		NanoCPUs    string `json:"nanoCPUs"`
+		MemoryBytes string `json:"memoryBytes"`
+	}
+	if err = nodeRequest(ctx, n, "GET", "/container/"+containerName+"/inspect", nil, &inspection); err != nil {
+		markPlanChangeBlocked(ctx, payload.ChangeID, err.Error())
+		appendTaskEvent(ctx, task.ID, "plan_change_verify_failed", truncateError(err.Error()))
+		return
+	}
+	var targetCPU, sourceCPU float64
+	var targetMemory, sourceMemory int
+	if err = instanceDB.QueryRowContext(ctx, `SELECT source_cpu,source_memory_mb,target_cpu,target_memory_mb FROM xcloud_instance_plan_changes WHERE id=?`, payload.ChangeID).Scan(&sourceCPU, &sourceMemory, &targetCPU, &targetMemory); err != nil {
+		markPlanChangeBlocked(ctx, payload.ChangeID, err.Error())
+		return
+	}
+	nano, nanoErr := strconv.ParseInt(strings.TrimSpace(inspection.NanoCPUs), 10, 64)
+	memoryBytes, memoryErr := strconv.ParseInt(strings.TrimSpace(inspection.MemoryBytes), 10, 64)
+	if nanoErr != nil || memoryErr != nil {
+		markPlanChangeBlocked(ctx, payload.ChangeID, "Agent 未返回可核实的 CPU/内存配置")
+		return
+	}
+	actualCPU := float64(nano) / 1e9
+	actualMemory := int(memoryBytes / (1024 * 1024))
+	if math.Abs(actualCPU-targetCPU) < 0.001 && actualMemory == targetMemory {
+		if err = completePlanChange(ctx, task); err != nil {
+			markPlanChangeBlocked(ctx, payload.ChangeID, err.Error())
+			return
+		}
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status='succeeded',finished_at=NOW(),last_error=NULL,updated_at=NOW() WHERE id=? AND status='needs_review'`, task.ID)
+		releaseInstanceTaskLock(ctx, task)
+		appendTaskEvent(ctx, task.ID, "plan_change_verified_target", "Agent 配置已匹配目标套餐，变更自动完成")
+		return
+	}
+	if math.Abs(actualCPU-sourceCPU) < 0.001 && actualMemory == sourceMemory {
+		failPlanChange(ctx, task, errors.New("Agent 配置仍为变更前资源"))
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET agent_verify_status='verified_old',agent_verified_at=NOW(),agent_verify_result=JSON_OBJECT('cpu',?,'memoryMB',?,'status','source') WHERE id=? AND status='failed'`, actualCPU, actualMemory, payload.ChangeID)
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status='failed',finished_at=NOW(),last_error='Agent 配置未发生变更',updated_at=NOW() WHERE id=? AND status='needs_review'`, task.ID)
+		releaseInstanceTaskLock(ctx, task)
+		appendTaskEvent(ctx, task.ID, "plan_change_verified_source", "Agent 配置仍为原套餐，已退款并结束变更")
+		return
+	}
+	markPlanChangeBlocked(ctx, payload.ChangeID, fmt.Sprintf("Agent 当前资源 %.3f 核/%d MB 与目标及原配置均不一致", actualCPU, actualMemory))
+	appendTaskEvent(ctx, task.ID, "plan_change_verify_ambiguous", "Agent 资源无法与目标或原配置匹配，等待人工复核")
+}
+
 func completePlanChange(ctx context.Context, task controlTask) error {
 	var p struct {
 		ChangeID string  `json:"changeId"`
@@ -314,14 +426,23 @@ func completePlanChange(ctx context.Context, task controlTask) error {
 		return err
 	}
 	defer tx.Rollback()
-	var id, owner, target string
+	var id, owner, target, pendingEntry string
 	var delta, refund int
 	var status string
-	if err = tx.QueryRowContext(ctx, `SELECT id,owner_id,target_plan_id,delta_fen,refund_fen,status FROM xcloud_instance_plan_changes WHERE id=? FOR UPDATE`, p.ChangeID).Scan(&id, &owner, &target, &delta, &refund, &status); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT id,owner_id,target_plan_id,delta_fen,refund_fen,status,COALESCE(pending_wallet_entry_id,'') FROM xcloud_instance_plan_changes WHERE id=? FOR UPDATE`, p.ChangeID).Scan(&id, &owner, &target, &delta, &refund, &status, &pendingEntry); err != nil {
 		return err
 	}
 	if status != "processing" {
 		return nil
+	}
+	if task.ExecutionToken != "" {
+		var owned int
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id WHERE t.id=? AND t.instance_id=? AND t.status=? AND t.worker_id=? AND t.execution_token=? AND t.claim_expires_at>NOW() AND i.active_task_id=t.id AND i.active_task_token=t.execution_token AND i.active_task_expires_at>NOW() AND i.status IN ('running','stopped')`, task.ID, task.InstanceID, taskRunning, task.WorkerID, task.ExecutionToken).Scan(&owned); err != nil {
+			return err
+		}
+		if owned != 1 {
+			return errors.New("任务已失去套餐变更执行租约")
+		}
 	}
 	var currentStatus string
 	var bandwidthMbps int
@@ -337,6 +458,7 @@ func completePlanChange(ctx context.Context, task controlTask) error {
 		return errors.New("实例状态已变化，套餐变更未提交")
 	}
 	var entryID string
+	fundStatus := "charged"
 	if refund > 0 {
 		var balance int
 		if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, owner).Scan(&balance); err != nil {
@@ -346,11 +468,15 @@ func completePlanChange(ctx context.Context, task controlTask) error {
 		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=balance_fen+?,updated_at=NOW() WHERE user_id=?`, refund, owner); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,created_at) VALUES (?,?,?,?,?,?,?,NOW())`, entryID, owner, refund, balance+refund, "plan_change_refund", "套餐降级差额退款", "system"); err != nil {
+		fundStatus = "refunded"
+		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,plan_change_id,business_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())`, entryID, owner, refund, balance+refund, "plan_change_refund", "套餐降级差额退款", "system", p.ChangeID, "plan-change:refund:"+p.ChangeID); err != nil {
 			return err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='succeeded',settlement_wallet_entry_id=?,updated_at=NOW(),completed_at=NOW() WHERE id=? AND status='processing'`, entryID, p.ChangeID); err != nil {
+	if entryID == "" {
+		entryID = pendingEntry
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='succeeded',fund_status=?,settlement_wallet_entry_id=?,agent_verify_status='verified',agent_verified_at=NOW(),agent_verify_result=JSON_OBJECT('cpu',?,'memoryMB',?,'status','target'),updated_at=NOW(),completed_at=NOW() WHERE id=? AND status='processing'`, fundStatus, entryID, p.CPU, p.MemoryMB, p.ChangeID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -368,27 +494,25 @@ func failPlanChange(ctx context.Context, task controlTask, cause error) {
 		return
 	}
 	defer tx.Rollback()
-	var owner string
-	var amount, status string
-	if tx.QueryRowContext(ctx, `SELECT owner_id,charge_fen,status FROM xcloud_instance_plan_changes WHERE id=? FOR UPDATE`, p.ChangeID).Scan(&owner, &amount, &status) != nil || status != "processing" {
+	var owner, status string
+	var chargeFen int
+	if tx.QueryRowContext(ctx, `SELECT owner_id,charge_fen,status FROM xcloud_instance_plan_changes WHERE id=? FOR UPDATE`, p.ChangeID).Scan(&owner, &chargeFen, &status) != nil || status != "processing" {
 		return
 	}
-	var charge int
-	fmt.Sscan(amount, &charge)
 	var entryID string
-	if charge > 0 {
+	if chargeFen > 0 {
 		var balance int
 		if tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, owner).Scan(&balance) != nil {
 			return
 		}
 		entryID = newID("wal")
-		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=balance_fen+?,updated_at=NOW() WHERE user_id=?`, charge, owner); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=balance_fen+?,updated_at=NOW() WHERE user_id=?`, chargeFen, owner); err != nil {
 			return
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,created_at) VALUES (?,?,?,?,?,?,?,NOW())`, entryID, owner, charge, balance+charge, "plan_change_refund", "套餐变更失败退回暂扣", "system"); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,plan_change_id,business_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())`, entryID, owner, chargeFen, balance+chargeFen, "plan_change_refund", "套餐变更失败退回暂扣", "system", p.ChangeID, "plan-change:refund:"+p.ChangeID); err != nil {
 			return
 		}
 	}
-	_, _ = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='failed',settlement_wallet_entry_id=?,error_message=?,updated_at=NOW(),completed_at=NOW() WHERE id=? AND status='processing'`, entryID, truncateError(cause.Error()), p.ChangeID)
+	_, _ = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='failed',fund_status='refunded',settlement_wallet_entry_id=?,agent_verify_status='not_checked',agent_verify_result=JSON_OBJECT('status','agent_error'),error_message=?,updated_at=NOW(),completed_at=NOW() WHERE id=? AND status='processing'`, entryID, truncateError(cause.Error()), p.ChangeID)
 	_ = tx.Commit()
 }

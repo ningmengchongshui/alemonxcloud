@@ -562,6 +562,17 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if activeTaskExpiresAt.Valid && activeTaskExpiresAt.Time.After(time.Now()) {
 		return order{}, nil, errors.New("实例生命周期任务处理中，请稍后再续费")
 	}
+	// An expired instance may still have the original pending destroy task. A
+	// successful renewal intentionally supersedes that task; every other
+	// lifecycle task remains a hard conflict.
+	allowExpiredDestroy := instanceStatus == "destroy_scheduled" && destroyReason == "expired"
+	var pendingLifecycleTasks int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE instance_id=? AND status IN (?,?) AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize') AND (? OR action<>'destroy')`, source.InstanceID, taskPending, taskRunning, allowExpiredDestroy).Scan(&pendingLifecycleTasks); err != nil {
+		return order{}, nil, err
+	}
+	if pendingLifecycleTasks > 0 {
+		return order{}, nil, errors.New("实例生命周期任务处理中，请稍后再续费")
+	}
 	// Renewal continues the instance's existing immutable image snapshot. A
 	// later source/version delisting must not prevent a paying customer from
 	// extending an already running service, nor silently replace its image.

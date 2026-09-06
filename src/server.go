@@ -38,21 +38,25 @@ const oidcStateCookieName = "alemonx_oidc_state"
 const oidcVerifierCookieName = "alemonx_oidc_verifier"
 
 type instance struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	Image         string     `json:"image"`
-	Version       string     `json:"version"`
-	Spec          string     `json:"spec"`
-	Status        string     `json:"status"`
-	RuntimeStatus string     `json:"runtimeStatus,omitempty"`
-	BandwidthMbps int        `json:"bandwidthMbps,omitempty"`
-	DestroyAt     *time.Time `json:"destroyAt,omitempty"`
-	DestroyedAt   *time.Time `json:"destroyedAt,omitempty"`
-	PurgeAt       *time.Time `json:"purgeAt,omitempty"`
-	DestroyReason string     `json:"destroyReason,omitempty"`
-	ArchivedAt    *time.Time `json:"archivedAt,omitempty"`
-	IP            string     `json:"ip"`
-	CreatedAt     string     `json:"createdAt"`
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Image            string     `json:"image"`
+	Version          string     `json:"version"`
+	Spec             string     `json:"spec"`
+	Status           string     `json:"status"`
+	RuntimeStatus    string     `json:"runtimeStatus,omitempty"`
+	BandwidthMbps    int        `json:"bandwidthMbps,omitempty"`
+	DestroyAt        *time.Time `json:"destroyAt,omitempty"`
+	DestroyedAt      *time.Time `json:"destroyedAt,omitempty"`
+	PurgeAt          *time.Time `json:"purgeAt,omitempty"`
+	DestroyReason    string     `json:"destroyReason,omitempty"`
+	ArchivedAt       *time.Time `json:"archivedAt,omitempty"`
+	IP               string     `json:"ip"`
+	CreatedAt        string     `json:"createdAt"`
+	CurrentPlanID    string     `json:"currentPlanId,omitempty"`
+	CurrentPlanName  string     `json:"currentPlanName,omitempty"`
+	PlanChangeStatus string     `json:"planChangeStatus,omitempty"`
+	PlanChangeID     string     `json:"planChangeId,omitempty"`
 	// ContainerName is also the basename of this instance's persisted data
 	// directory on its assigned node (for example xcloud-a1b2c3d4).
 	ContainerName string              `json:"containerName,omitempty"`
