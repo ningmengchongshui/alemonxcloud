@@ -1329,7 +1329,10 @@ func containerTerminal(c *gin.Context) {
 	defer conn.Close()
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "-t", name, "/bin/sh", "-i")
+	// Use Bash when an image provides it: its interactive line editor supplies
+	// history navigation and completion. Minimal images still fall back to sh
+	// rather than making terminal access depend on a particular base image.
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "-t", "-e", "TERM=xterm-256color", "-e", "COLORTERM=truecolor", name, "/bin/sh", "-c", "if [ -x /bin/bash ]; then exec /bin/bash -i; elif [ -x /usr/bin/bash ]; then exec /usr/bin/bash -i; else exec /bin/sh -i; fi")
 	terminal, err := pty.Start(cmd)
 	if err != nil {
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("\r\n无法启动容器终端。\r\n"))

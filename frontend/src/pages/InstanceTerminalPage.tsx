@@ -30,6 +30,7 @@ export function InstanceTerminalPage({ instanceID, instance, onBack }: { instanc
     terminal.loadAddon(fit)
     terminal.open(host.current)
     fit.fit()
+    terminal.focus()
     const socket = new WebSocket(terminalSocketURL(instanceID))
     socket.onmessage = event => terminal.write(typeof event.data === 'string' ? event.data : '')
     socket.onerror = () => setError('终端连接失败，请确认实例和节点均处于运行状态。')
