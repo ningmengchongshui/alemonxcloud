@@ -35,10 +35,13 @@ export function AdminImagesPage() {
     usePullAdminImageVersionMutation()
   const [deleteVersion, { isLoading: deletingVersion }] =
     useDeleteAdminImageVersionMutation()
-  const target = catalog.data?.images.find(image => image.id === targetID)
+  // Older catalog records can lack the optional versions array. Treat that as
+  // an empty list so opening version management never crashes the console.
+  const images = Array.isArray(catalog.data?.images) ? catalog.data.images : []
+  const target = images.find(image => image.id === targetID)
   const currentVersions = versionsFor
-    ? (catalog.data?.images.find(image => image.id === versionsFor.id)
-        ?.versions ?? versionsFor.versions)
+    ? (images.find(image => image.id === versionsFor.id)?.versions ??
+      versionsFor.versions ?? [])
     : []
   async function toggle() {
     if (!target) return
@@ -76,7 +79,7 @@ export function AdminImagesPage() {
             </tr>
           </thead>
           <tbody>
-            {(catalog.data?.images ?? []).map(image => (
+            {images.map(image => (
               <tr key={image.id}>
                 <td>
                   <b>{image.name}</b>
