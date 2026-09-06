@@ -2,8 +2,7 @@ import {
   useGetAdminMetricsQuery,
   useGetAdminNodesQuery,
   useGetAdminOrdersQuery,
-  useGetAdminTasksQuery,
-  useRetryTaskMutation
+  useGetAdminTasksQuery
 } from '@/services/cloudApi'
 import { Alert, Button, PageHeader } from '@/components/ui'
 
@@ -12,11 +11,23 @@ export function AdminOverviewPage() {
   const nodes = useGetAdminNodesQuery()
   const tasks = useGetAdminTasksQuery()
   const metrics = useGetAdminMetricsQuery()
-  const [retry] = useRetryTaskMutation()
   const deploying = (orders.data ?? []).filter(
     order => order.status === 'deploying'
   )
   const failed = (tasks.data ?? []).filter(task => task.status === 'failed')
+  const failedInstances = Array.from(
+    failed.reduce((groups, task) => {
+      const current = groups.get(task.instanceId) ?? []
+      current.push(task)
+      groups.set(task.instanceId, current)
+      return groups
+    }, new Map<string, typeof failed>())
+  ).map(([instanceId, instanceTasks]) => ({
+    instanceId,
+    actions: [...new Set(instanceTasks.map(task => task.action))],
+    count: instanceTasks.length,
+    maxAttempts: Math.max(...instanceTasks.map(task => task.attempts))
+  }))
   const online = (nodes.data ?? []).filter(
     node => node.enabled && node.lastHeartbeatAt
   )
@@ -116,21 +127,28 @@ export function AdminOverviewPage() {
             : ''}
         </span>
       </section>
-      {failed.length > 0 && (
+      {failedInstances.length > 0 && (
         <section className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900 dark:bg-amber-950">
           <h2 className="m-0 text-sm font-bold">需要处理的失败任务</h2>
+          <p className="mb-0 mt-1 text-xs text-amber-800 dark:text-amber-100">
+            同一实例的失败任务已合并展示。更新、重启、销毁等操作不会在这里被一键重放。
+          </p>
           <div className="mt-3 grid gap-2">
-            {failed.slice(0, 5).map(task => (
+            {failedInstances.slice(0, 5).map(item => (
               <article
                 className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white p-3 text-xs dark:bg-slate-900"
-                key={task.id}
+                key={item.instanceId}
               >
                 <span>
-                  <b>{task.action}</b> · 实例 {task.instanceId.slice(0, 14)} ·
-                  已尝试 {task.attempts} 次
+                  <b>{item.actions.join(' / ')}</b> · 实例{' '}
+                  {item.instanceId.slice(0, 14)} · {item.count} 个失败任务 ·
+                  最高已尝试 {item.maxAttempts} 次
                 </span>
-                <Button tone="secondary" onClick={() => void retry(task.id)}>
-                  安全重试
+                <Button
+                  tone="secondary"
+                  onClick={() => window.location.assign('/super/tasks')}
+                >
+                  查看并处理
                 </Button>
               </article>
             ))}

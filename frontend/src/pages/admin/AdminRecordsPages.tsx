@@ -21,6 +21,17 @@ import {
 } from '@/components/ui'
 import type { CloudUser } from '@/types/cloud'
 
+const dangerousTaskAction = (action: string) =>
+  [
+    'stop',
+    'update',
+    'restart',
+    'reinstall',
+    'destroy',
+    'purge',
+    'retry-deploy'
+  ].includes(action)
+
 export function AdminOrdersPage() {
   const orders = useGetAdminOrdersQuery()
   return (
@@ -128,14 +139,24 @@ export function AdminTasksPage() {
                       className="text-button"
                       onClick={() => void retry(task.id)}
                     >
-                      安全重试
+                      {dangerousTaskAction(task.action)
+                        ? '转入复核'
+                        : '重新执行'}
                     </button>
                   )}
                   {task.status === 'needs_review' && (
                     <>
                       <button
                         className="text-button"
-                        onClick={() => void resume(task.id)}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `确认恢复 ${task.action} 任务吗？这会再次对实例 ${task.instanceId.slice(0, 14)} 执行生命周期操作。`
+                            )
+                          ) {
+                            void resume(task.id)
+                          }
+                        }}
                       >
                         确认恢复
                       </button>

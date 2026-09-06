@@ -17,6 +17,7 @@ func startControlLoops() {
 		for range ticker.C {
 			syncBenefitProgramStates(context.Background())
 			scheduleLifecycle(context.Background())
+			quarantineDangerousFailedTasks(context.Background())
 			recoverExpiredTaskLeases(context.Background())
 			recoverPendingTasks()
 			syncNodeHeartbeat(context.Background())
@@ -33,6 +34,7 @@ func startControlLoops() {
 	syncNodeHeartbeat(context.Background())
 	syncBenefitProgramStates(context.Background())
 	syncInstanceStates(context.Background())
+	quarantineDangerousFailedTasks(context.Background())
 	recoverExpiredTaskLeases(context.Background())
 	reconcileBandwidthTasks(context.Background())
 }

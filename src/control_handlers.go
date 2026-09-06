@@ -193,6 +193,108 @@ func instanceTasksHandler(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, items)
 }
+
+// Users may retract a task only while it is still waiting in the durable
+// queue. A running task may already be inside the Agent, where marking it
+// cancelled would lie about the real container state.
+func userCancelableTaskAction(action string) bool {
+	switch action {
+	case "start", "stop", "update", "restart", "reinstall", "retry-deploy":
+		return true
+	}
+	return false
+}
+
+func cancelQueuedInstanceTask(ctx context.Context, item instance, task controlTask, actorID string) (bool, error) {
+	if task.InstanceID != item.ID || task.Status != taskPending || !userCancelableTaskAction(task.Action) {
+		return false, nil
+	}
+	result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error='用户已取消（任务尚未开始执行）',finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE id=? AND instance_id=? AND status=?`, taskCanceled, task.ID, item.ID, taskPending)
+	if err != nil {
+		return false, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return false, nil
+	}
+	// These actions update business state before entering the queue, so roll
+	// that local marker back only after the queue cancellation has won.
+	if task.Action == "update" {
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET runtime_status='running' WHERE id=? AND owner_id=? AND status='running' AND runtime_status='updating'`, item.ID, item.OwnerID)
+	}
+	if task.Action == "retry-deploy" {
+		_, _ = transitionInstance(ctx, instanceDB, item.ID, []string{"deploying"}, "deployment_failed", nil, "")
+	}
+	appendTaskEvent(ctx, task.ID, "cancelled_by_user", "用户取消了尚未开始执行的任务")
+	_ = writeAudit(ctx, actorID, "task.cancel", "task", task.ID, map[string]any{"instanceId": item.ID, "action": task.Action})
+	return true, nil
+}
+
+func cancelInstanceTaskHandler(c *gin.Context) {
+	item, ok := ownedInstance(c)
+	if !ok {
+		return
+	}
+	task, err := loadTask(c.Request.Context(), c.Param("taskID"))
+	if err == sql.ErrNoRows || task.InstanceID != item.ID {
+		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
+		return
+	}
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	user := c.MustGet("user").(oidcUser)
+	cancelled, err := cancelQueuedInstanceTask(c.Request.Context(), item, task, user.ID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if !cancelled {
+		c.JSON(http.StatusConflict, gin.H{"message": "仅等待执行的用户操作可以取消；执行中的任务不能强制中断"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func cancelAllInstanceTasksHandler(c *gin.Context) {
+	item, ok := ownedInstance(c)
+	if !ok {
+		return
+	}
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT `+taskSelectFields+` FROM xcloud_tasks WHERE instance_id=? AND status=? AND action IN ('start','stop','update','restart','reinstall','retry-deploy') ORDER BY created_at`, item.ID, taskPending)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer rows.Close()
+	tasks := []controlTask{}
+	for rows.Next() {
+		var task controlTask
+		if err := scanControlTask(rows, &task); err != nil {
+			internalError(c, err)
+			return
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		internalError(c, err)
+		return
+	}
+	user := c.MustGet("user").(oidcUser)
+	count := 0
+	for _, task := range tasks {
+		cancelled, err := cancelQueuedInstanceTask(c.Request.Context(), item, task, user.ID)
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		if cancelled {
+			count++
+		}
+	}
+	_ = writeAudit(c.Request.Context(), user.ID, "task.cancel_all", "instance", item.ID, map[string]any{"count": count})
+	c.JSON(http.StatusOK, gin.H{"cancelled": count})
+}
 func cancelOrderHandler(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	if err := cancelOrder(c.Request.Context(), c.Param("id"), user.ID); err != nil {
@@ -723,7 +825,44 @@ func adminMetricsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, value)
 }
 func retryTask(c *gin.Context) {
-	result, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_tasks SET status=?,run_after=NOW(),last_error=NULL,claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,updated_at=NOW() WHERE id=? AND status=?`, taskPending, c.Param("id"), taskFailed)
+	ctx := c.Request.Context()
+	task, err := loadTask(ctx, c.Param("id"))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
+			return
+		}
+		internalError(c, err)
+		return
+	}
+	if task.Status != taskFailed {
+		c.JSON(http.StatusConflict, gin.H{"message": "任务当前不可重试"})
+		return
+	}
+
+	// A failed destructive lifecycle operation is evidence of an unknown
+	// container state. It must never be replayed from a convenience button:
+	// require an operator to inspect the task and explicitly resume it instead.
+	if dangerousRecoveredTask(task.Action) {
+		result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=CONCAT(COALESCE(last_error,''), '\n已由管理员操作隔离：危险生命周期任务需人工复核后才能恢复'),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE id=? AND status=?`, taskReview, task.ID, taskFailed)
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			c.JSON(http.StatusConflict, gin.H{"message": "任务状态已变化，请刷新后重试"})
+			return
+		}
+		appendTaskEvent(ctx, task.ID, "manual_retry_quarantined", "危险生命周期任务已转入人工复核，未重放容器操作")
+		user := c.MustGet("user").(oidcUser)
+		_ = writeAudit(ctx, user.ID, "task.retry_quarantined", "task", task.ID, map[string]any{"action": task.Action, "instanceId": task.InstanceID})
+		c.JSON(http.StatusAccepted, gin.H{"message": "危险任务已转入人工复核，未执行重试"})
+		return
+	}
+
+	// A deliberate new attempt starts a fresh retry budget. Without this reset a
+	// task that previously reached its retry limit fails immediately forever.
+	result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,attempts=0,run_after=NOW(),last_error=NULL,finished_at=NULL,claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE id=? AND status=?`, taskPending, task.ID, taskFailed)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -733,12 +872,12 @@ func retryTask(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"message": "任务当前不可重试"})
 		return
 	}
-	appendTaskEvent(c.Request.Context(), c.Param("id"), "manual_retry", "管理员手动重试")
+	appendTaskEvent(ctx, task.ID, "manual_retry", "管理员手动重试，已开始新的执行代次")
 	user := c.MustGet("user").(oidcUser)
-	_ = writeAudit(c.Request.Context(), user.ID, "task.retry", "task", c.Param("id"), nil)
-	task, err := loadTask(c.Request.Context(), c.Param("id"))
+	_ = writeAudit(ctx, user.ID, "task.retry", "task", task.ID, nil)
+	task, err = loadTask(ctx, task.ID)
 	if err == nil {
-		_ = enqueuePersistedTask(c.Request.Context(), task)
+		_ = enqueuePersistedTask(ctx, task)
 	}
 	c.Status(http.StatusAccepted)
 }

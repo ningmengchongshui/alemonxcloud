@@ -23,11 +23,12 @@ const (
 	orderReject  = "rejected"
 	orderRefund  = "refunded"
 
-	taskPending = "pending"
-	taskRunning = "running"
-	taskDone    = "succeeded"
-	taskFailed  = "failed"
-	taskReview  = "needs_review"
+	taskPending  = "pending"
+	taskRunning  = "running"
+	taskDone     = "succeeded"
+	taskFailed   = "failed"
+	taskReview   = "needs_review"
+	taskCanceled = "cancelled"
 )
 
 const taskLeaseDuration = 5 * time.Minute

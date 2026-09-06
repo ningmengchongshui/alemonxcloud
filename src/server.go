@@ -146,6 +146,8 @@ func Run() {
 	router.POST("/api/notifications/:id/read", requireSession, readNotificationHandler)
 	router.GET("/api/tasks/:id", requireSession, taskStatusHandler)
 	router.GET("/api/instances/:id/tasks", requireSession, instanceTasksHandler)
+	router.POST("/api/instances/:id/tasks/:taskID/cancel", requireSession, cancelInstanceTaskHandler)
+	router.POST("/api/instances/:id/tasks/cancel-all", requireSession, cancelAllInstanceTasksHandler)
 	router.GET("/api/orders", requireSession, myOrders)
 	router.GET("/api/tickets", requireSession, myTicketsHandler)
 	router.POST("/api/tickets", requireSession, createTicketHandler)

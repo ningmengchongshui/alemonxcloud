@@ -302,6 +302,42 @@ func recoverExpiredTaskLeases(ctx context.Context) {
 	}
 }
 
+// quarantineDangerousFailedTasks cleans up failures created before lifecycle
+// fencing was introduced. A failed update/restart/destroy has an unknown
+// remote state, so treating it as a normal retry is unsafe. Keep the record
+// and its error, but require an explicit review before any replay.
+func quarantineDangerousFailedTasks(ctx context.Context) {
+	if instanceDB == nil {
+		return
+	}
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,instance_id,action FROM xcloud_tasks
+		WHERE status=? AND action IN ('stop','update','restart','reinstall','destroy','purge','retry-deploy')
+		ORDER BY updated_at ASC LIMIT 100`, taskFailed)
+	if err != nil {
+		log.Printf("load failed lifecycle tasks for quarantine: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, instanceID, action string
+		if err := rows.Scan(&id, &instanceID, &action); err != nil {
+			continue
+		}
+		result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks
+			SET status=?,last_error=CONCAT(COALESCE(last_error,''), '\n已自动隔离：危险生命周期任务需人工复核后才能恢复'),updated_at=NOW()
+			WHERE id=? AND status=?`, taskReview, id, taskFailed)
+		if err != nil {
+			log.Printf("quarantine failed lifecycle task %s: %v", id, err)
+			continue
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			continue
+		}
+		appendTaskEvent(ctx, id, "failed_task_quarantined", "危险生命周期任务已自动转入人工复核，未重放容器操作")
+		_ = writeAudit(ctx, "system", "task.failed_quarantined", "task", id, map[string]any{"instanceId": instanceID, "action": action})
+	}
+}
+
 func dangerousRecoveredTask(action string) bool {
 	return action == "stop" || action == "update" || action == "restart" || action == "reinstall" || action == "destroy" || action == "purge" || action == "retry-deploy"
 }

@@ -7,7 +7,11 @@ import {
   PageHeader,
   StatusBadge
 } from '@/components/ui'
-import { useGetInstanceTasksQuery } from '@/services/cloudApi'
+import {
+  useCancelAllInstanceTasksMutation,
+  useCancelInstanceTaskMutation,
+  useGetInstanceTasksQuery
+} from '@/services/cloudApi'
 import type { Instance } from '@/types/cloud'
 
 function taskTone(status: string) {
@@ -28,8 +32,16 @@ function taskLabel(status: string) {
           ? '执行中'
           : status === 'failed'
             ? '失败'
-            : status
+            : status === 'cancelled'
+              ? '已取消'
+              : status
 }
+
+const canCancelTask = (task: { status: string; action: string }) =>
+  task.status === 'pending' &&
+  ['start', 'stop', 'update', 'restart', 'reinstall', 'retry-deploy'].includes(
+    task.action
+  )
 
 export function InstanceExecutionPage({
   instanceID,
@@ -41,10 +53,13 @@ export function InstanceExecutionPage({
   onBack: () => void
 }) {
   const [onlyProblems, setOnlyProblems] = useState(false)
+  const [operationError, setOperationError] = useState('')
   const tasks = useGetInstanceTasksQuery(instanceID, {
     pollingInterval: 5000,
     refetchOnFocus: true
   })
+  const [cancelTask, cancelTaskState] = useCancelInstanceTaskMutation()
+  const [cancelAll, cancelAllState] = useCancelAllInstanceTasksMutation()
   const records = useMemo(() => tasks.data ?? [], [tasks.data])
   const visible = records.filter(
     ({ task }) =>
@@ -53,6 +68,35 @@ export function InstanceExecutionPage({
   const riskCount = records.filter(({ task }) =>
     ['failed', 'needs_review'].includes(task.status)
   ).length
+  const cancellableCount = records.filter(({ task }) =>
+    canCancelTask(task)
+  ).length
+
+  async function cancelOne(taskID: string) {
+    setOperationError('')
+    try {
+      await cancelTask({ instanceId: instanceID, taskId: taskID }).unwrap()
+      await tasks.refetch()
+    } catch {
+      setOperationError('任务状态已变化，无法取消；请刷新后确认执行记录。')
+    }
+  }
+
+  async function cancelPendingTasks() {
+    if (
+      !window.confirm(
+        `确认取消这台实例全部 ${cancellableCount} 个等待执行的操作吗？已开始执行的任务不会被强制中断。`
+      )
+    )
+      return
+    setOperationError('')
+    try {
+      await cancelAll(instanceID).unwrap()
+      await tasks.refetch()
+    } catch {
+      setOperationError('取消任务失败，请刷新后重试。')
+    }
+  }
 
   return (
     <section className="page me-page">
@@ -75,6 +119,15 @@ export function InstanceExecutionPage({
             >
               ↻ 刷新
             </Button>
+            {cancellableCount > 0 && (
+              <Button
+                tone="danger"
+                loading={cancelAllState.isLoading}
+                onClick={() => void cancelPendingTasks()}
+              >
+                取消全部等待任务（{cancellableCount}）
+              </Button>
+            )}
           </div>
         }
       />
@@ -84,6 +137,7 @@ export function InstanceExecutionPage({
           条需要关注的执行记录。失败或“待人工复核”不会被静默忽略。
         </Alert>
       )}
+      {operationError && <Alert tone="error">{operationError}</Alert>}
       <div className="mb-4 flex rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <button
           className={`rounded-md px-3 py-1.5 text-sm ${onlyProblems ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-100'}`}
@@ -123,11 +177,26 @@ export function InstanceExecutionPage({
                     {task.attempts} 次
                   </p>
                 </div>
-                {task.recoveryCount ? (
-                  <span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-100">
-                    租约恢复 {task.recoveryCount} 次
-                  </span>
-                ) : null}
+                <div className="flex items-center gap-2">
+                  {task.recoveryCount ? (
+                    <span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                      租约恢复 {task.recoveryCount} 次
+                    </span>
+                  ) : null}
+                  {canCancelTask(task) && (
+                    <Button
+                      tone="danger"
+                      loading={cancelTaskState.isLoading}
+                      onClick={() => {
+                        if (window.confirm('确认取消这个等待执行的任务吗？')) {
+                          void cancelOne(task.id)
+                        }
+                      }}
+                    >
+                      取消任务
+                    </Button>
+                  )}
+                </div>
               </div>
               {task.lastError && (
                 <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-100">

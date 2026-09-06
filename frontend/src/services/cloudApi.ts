@@ -165,7 +165,25 @@ export const cloudApi = createApi({
       invalidatesTags: ['Notifications']
     }),
     getInstanceTasks: builder.query<InstanceTaskRecord[], string>({
-      query: id => `/instances/${id}/tasks`
+      query: id => `/instances/${id}/tasks`,
+      providesTags: ['Instances']
+    }),
+    cancelInstanceTask: builder.mutation<
+      void,
+      { instanceId: string; taskId: string }
+    >({
+      query: ({ instanceId, taskId }) => ({
+        url: `/instances/${instanceId}/tasks/${taskId}/cancel`,
+        method: 'POST'
+      }),
+      invalidatesTags: ['Instances']
+    }),
+    cancelAllInstanceTasks: builder.mutation<{ cancelled: number }, string>({
+      query: instanceId => ({
+        url: `/instances/${instanceId}/tasks/cancel-all`,
+        method: 'POST'
+      }),
+      invalidatesTags: ['Instances']
     }),
     getTask: builder.query<Task, string>({
       query: id => `/tasks/${id}`
@@ -551,6 +569,8 @@ export const {
   useReadNotificationMutation,
   useReadAllNotificationsMutation,
   useGetInstanceTasksQuery,
+  useCancelInstanceTaskMutation,
+  useCancelAllInstanceTasksMutation,
   useGetTaskQuery,
   useGetOrdersQuery,
   useGetTicketsQuery,
