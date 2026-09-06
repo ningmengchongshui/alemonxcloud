@@ -82,13 +82,18 @@ export function CreateServicePage({
   const [quotePurchase] = useQuotePurchaseMutation()
   const { data: wallet } = useGetWalletQuery()
   const dispatch = useDispatch()
-  const images = catalog?.images ?? []
+  const images = Array.isArray(catalog?.images) ? catalog.images : []
   const selectedImageID = imageID || images[0]?.id || ''
   const selectedImage = images.find(image => image.id === selectedImageID)
-  const imageVersions = selectedImage?.versions ?? []
+  const imageVersions = Array.isArray(selectedImage?.versions)
+    ? selectedImage.versions
+    : []
+  const preferredVersion =
+    imageVersions.find(version => version.tag.toLowerCase() === 'latest') ??
+    imageVersions[0]
   const selectedVersion =
     imageVersions.find(version => version.tag === imageVersion) ??
-    imageVersions[0]
+    preferredVersion
   const plans = catalog?.plans ?? []
   const selectedPlanID = planID || plans[0]?.id || ''
   const selectedPlan = plans.find(plan => plan.id === selectedPlanID)
@@ -205,7 +210,13 @@ export function CreateServicePage({
                       aria-pressed={selectedImageID === source.id}
                       onClick={() => {
                         setImageID(source.id)
-                        setImageVersion('')
+                        const versions = Array.isArray(source.versions)
+                          ? source.versions
+                          : []
+                        setImageVersion(
+                          versions.find(version => version.tag.toLowerCase() === 'latest')
+                            ?.tag ?? versions[0]?.tag ?? ''
+                        )
                         setError('')
                       }}
                     >
@@ -220,28 +231,30 @@ export function CreateServicePage({
                   ))}
                 </div>
                 <div className="mt-5">
-                  <p className="mb-2 text-sm font-bold">选择镜像版本</p>
-                  <div className="choice-grid">
-                    {imageVersions.map(version => (
-                      <button
-                        key={version.tag}
-                        type="button"
-                        className={`catalog-choice ${selectedVersion?.tag === version.tag ? 'selected' : ''}`}
-                        aria-pressed={selectedVersion?.tag === version.tag}
-                        onClick={() => {
-                          setImageVersion(version.tag)
-                          setError('')
-                        }}
-                      >
-                        <span className="choice-mark">
-                          {selectedVersion?.tag === version.tag ? '✓' : ''}
-                        </span>
-                        <span>
-                          <b>{version.tag}</b>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                  <label className="block text-sm font-bold text-slate-800 dark:text-slate-100" htmlFor="image-version">
+                    选择镜像版本
+                    <span className="ml-2 text-[11px] font-normal text-slate-400">默认推荐 latest</span>
+                    <select
+                      id="image-version"
+                      className="mt-2 block h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-blue-500 focus:ring-3 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-blue-950"
+                      value={selectedVersion?.tag ?? ''}
+                      disabled={imageVersions.length === 0}
+                      onChange={event => {
+                        setImageVersion(event.target.value)
+                        setError('')
+                      }}
+                    >
+                      {imageVersions.length === 0 ? (
+                        <option value="">暂无可购买版本</option>
+                      ) : (
+                        imageVersions.map(version => (
+                          <option key={version.tag} value={version.tag}>
+                            {version.tag}{version.tag.toLowerCase() === 'latest' ? '（推荐）' : ''}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </label>
                 </div>
               </>
             )}

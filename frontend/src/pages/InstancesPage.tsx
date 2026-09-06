@@ -239,6 +239,7 @@ export function InstancesPage({
   loading,
   onCreate,
   onOpenLogs,
+  onOpenTerminal,
   onOpenExecutions
 }: {
   instances: Instance[]
@@ -246,6 +247,7 @@ export function InstancesPage({
   loading: boolean
   onCreate: () => void
   onOpenLogs: (instanceID: string) => void
+  onOpenTerminal: (instanceID: string) => void
   onOpenExecutions: (instanceID: string) => void
 }) {
   const [error, setError] = useState('')
@@ -491,9 +493,6 @@ export function InstancesPage({
                       className="mb-0 mt-1.5 truncate text-xs text-slate-500 dark:text-slate-300"
                       title={`${item.image}:${item.version}`}
                     >
-                      {item.currentPlanName
-                        ? `套餐 ${item.currentPlanName} · `
-                        : ''}
                       版本 {item.version}
                       {item.containerName
                         ? ` · 域址 ${item.containerName}`
@@ -542,16 +541,21 @@ export function InstancesPage({
                     </span>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full">
+                    {!item.terminalOnly && (
+                      <Button
+                        tone="secondary"
+                        disabled={!item.ip || runtime !== 'running' || Boolean(activeTask)}
+                        onClick={() => window.open(item.ip, '_blank', 'noopener,noreferrer')}
+                      >
+                        {item.ip ? 'Web服务 ↗' : '服务准备中'}
+                      </Button>
+                    )}
                     <Button
                       tone="secondary"
-                      disabled={
-                        !item.ip || runtime !== 'running' || Boolean(activeTask)
-                      }
-                      onClick={() =>
-                        window.open(item.ip, '_blank', 'noopener,noreferrer')
-                      }
+                      disabled={runtime !== 'running' || Boolean(activeTask)}
+                      onClick={() => onOpenTerminal(item.id)}
                     >
-                      {item.ip ? '打开服务 ↗' : '服务准备中'}
+                      {runtime === 'running' ? '终端' : '终端准备中'}
                     </Button>
                     {lifecycle !== 'destroyed' && lifecycle !== 'purged' && (
                       <Button

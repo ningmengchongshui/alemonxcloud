@@ -140,8 +140,8 @@ export function AdminTasksPage() {
               <th>动作</th>
               <th>实例</th>
               <th>状态</th>
-              <th>尝试次数</th>
-              <th>最近错误</th>
+              <th>尝试</th>
+              <th>ERROR</th>
               <th />
             </tr>
           </thead>

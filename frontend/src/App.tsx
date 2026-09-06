@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   useAuthorizeMutation,
   useCallbackMutation,
@@ -23,6 +23,11 @@ import { LoginPage } from './pages/LoginPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { AdminPage } from './pages/AdminPage'
 import type { CurrentUser, Page, SuperPage } from '@/types/cloud'
+import { LoadingState } from '@/components/ui'
+
+const InstanceTerminalPage = lazy(() =>
+  import('./pages/InstanceTerminalPage').then(module => ({ default: module.InstanceTerminalPage }))
+)
 
 const sessionHintKey = 'alemonxcloud:session-hint'
 
@@ -149,6 +154,15 @@ function instanceExecutionID(path: string) {
     return null
   }
 }
+function instanceTerminalID(path: string) {
+  const match = path.match(/^\/me\/instances\/([^/]+)\/terminal$/)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+}
 function ticketID(path: string) {
   const match = path.match(/^\/me\/tickets\/([^/]+)$/)
   if (!match) return null
@@ -179,11 +193,13 @@ export default function App() {
   )
   const logInstanceID = instanceLogID(path)
   const executionInstanceID = instanceExecutionID(path)
+  const terminalInstanceID = instanceTerminalID(path)
   const selectedTicketID = ticketID(path)
   const isUserArea =
     userPaths.has(path) ||
     Boolean(logInstanceID) ||
     Boolean(executionInstanceID) ||
+    Boolean(terminalInstanceID) ||
     Boolean(selectedTicketID)
   const {
     data: instances = [],
@@ -424,6 +440,24 @@ export default function App() {
       </Shell>
     )
   }
+  if (terminalInstanceID) {
+    return (
+      <Shell
+        user={activeSession.user}
+        restoringSession={isLoading}
+        area="me"
+        page="instances"
+        onPageChange={next => navigate({ overview: '/me', instances: '/me/instances', create: '/me/create', orders: '/me/orders', wallet: '/me/wallet', notifications: '/me/notifications', tickets: '/me/tickets' }[next])}
+        onGoToMe={() => navigate('/me')}
+        onGoToSuper={activeSession.user.isAdmin ? () => navigate('/super') : undefined}
+        onLogout={signOut}
+      >
+        <Suspense fallback={<main className="page me-page"><LoadingState>正在载入终端…</LoadingState></main>}>
+          <InstanceTerminalPage instanceID={terminalInstanceID} instance={instances.find(item => item.id === terminalInstanceID)} onBack={() => navigate('/me/instances')} />
+        </Suspense>
+      </Shell>
+    )
+  }
   if (selectedTicketID) {
     return (
       <Shell
@@ -491,6 +525,9 @@ export default function App() {
         onCreate={() => navigate('/me/create')}
         onOpenLogs={instanceID =>
           navigate(`/me/instances/${encodeURIComponent(instanceID)}/logs`)
+        }
+        onOpenTerminal={instanceID =>
+          navigate(`/me/instances/${encodeURIComponent(instanceID)}/terminal`)
         }
         onOpenExecutions={instanceID =>
           navigate(`/me/instances/${encodeURIComponent(instanceID)}/executions`)

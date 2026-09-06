@@ -42,6 +42,7 @@ export interface Instance {
   version: string
   containerName?: string
   activeTask?: Pick<Task, 'id' | 'action' | 'status'>
+  terminalOnly?: boolean
   spec: string
   status: string
   runtimeStatus?: string
@@ -93,6 +94,7 @@ export interface CatalogImage {
   imageDigest: string
   version: string
   enabled: boolean
+  terminalOnly: boolean
   versions: ImageVersion[]
 }
 export interface PublicCatalogImage {
@@ -227,6 +229,7 @@ export interface Node {
   lastHeartbeatAt?: string
   dockerVersion?: string
   diskAvailableBytes?: number
+  diskTotalBytes?: number
   managedContainerCount?: number
   agentVersion?: string
   agentApiVersion?: number

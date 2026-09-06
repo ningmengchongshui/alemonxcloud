@@ -172,6 +172,7 @@ func syncNodeHeartbeat(ctx context.Context) {
 			CPUTotal              float64  `json:"cpuTotal"`
 			MemoryTotalMB         int      `json:"memoryTotalMB"`
 			DiskAvailableBytes    int64    `json:"diskAvailableBytes"`
+			DiskTotalBytes        int64    `json:"diskTotalBytes"`
 			ManagedContainerCount int      `json:"managedContainerCount"`
 			BandwidthToolsReady   bool     `json:"bandwidthToolsReady"`
 		}
@@ -187,11 +188,11 @@ func syncNodeHeartbeat(ctx context.Context) {
 			s.Capabilities = removeAgentCapability(s.Capabilities, "network.bandwidth.v1")
 		}
 		capabilities, _ := json.Marshal(s.Capabilities)
-		query := `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),last_agent_error=NULL,docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
-		args := []any{s.DockerVersion, s.AgentVersion, s.APIVersion, string(capabilities), s.DiskAvailableBytes, s.ManagedContainerCount, n.ID}
+		query := `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),last_agent_error=NULL,docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
+		args := []any{s.DockerVersion, s.AgentVersion, s.APIVersion, string(capabilities), s.DiskAvailableBytes, s.DiskTotalBytes, s.ManagedContainerCount, n.ID}
 		if s.CPUTotal > 0 && s.MemoryTotalMB >= 256 {
-			query = `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),last_agent_error=NULL,cpu_detected=?,memory_detected_mb=?,docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
-			args = []any{s.CPUTotal, s.MemoryTotalMB, s.DockerVersion, s.AgentVersion, s.APIVersion, string(capabilities), s.DiskAvailableBytes, s.ManagedContainerCount, n.ID}
+			query = `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),last_agent_error=NULL,cpu_detected=?,memory_detected_mb=?,docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`
+			args = []any{s.CPUTotal, s.MemoryTotalMB, s.DockerVersion, s.AgentVersion, s.APIVersion, string(capabilities), s.DiskAvailableBytes, s.DiskTotalBytes, s.ManagedContainerCount, n.ID}
 		}
 		if _, err := instanceDB.ExecContext(ctx, query, args...); err != nil {
 			log.Printf("save node %s heartbeat: %v", n.ID, err)

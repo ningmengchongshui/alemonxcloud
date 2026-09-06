@@ -25,6 +25,7 @@ export function AdminImagesPage() {
   const [targetID, setTargetID] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<CatalogImage | null>(null)
   const [softwareName, setSoftwareName] = useState('')
+  const [webSupported, setWebSupported] = useState(false)
   const [versionsFor, setVersionsFor] = useState<CatalogImage | null>(null)
   const [tag, setTag] = useState('')
   const [addingVersion, setAddingVersion] = useState(false)
@@ -53,7 +54,7 @@ export function AdminImagesPage() {
       <PageHeader
         eyebrow="镜像管理"
         title="软件与版本"
-        description="配置可信软件和可购买版本；用户只会看到软件名称与版本号。"
+        description="配置可信软件、可购买版本与访问能力；镜像默认使用终端，可按需启用 Web 服务。"
         actions={
           <Button
             tone="secondary"
@@ -93,7 +94,7 @@ export function AdminImagesPage() {
                     .map(version => version.tag)
                     .join('、') || '暂无'}
                 </td>
-                <td>{image.enabled ? '可售' : '已下架'}</td>
+                <td><div>{image.enabled ? '可售' : '已下架'}</div>{image.terminalOnly === false && <small className="text-blue-700">支持 Web</small>}</td>
                 <td className="flex gap-2">
                   <button
                     className="text-button"
@@ -106,9 +107,10 @@ export function AdminImagesPage() {
                     onClick={() => {
                       setRenaming(image)
                       setSoftwareName(image.name)
+                      setWebSupported(image.terminalOnly === false)
                     }}
                   >
-                    修改名称
+                    软件设置
                   </button>
                   <button
                     className="text-button"
@@ -139,8 +141,8 @@ export function AdminImagesPage() {
       )}
       {renaming && (
         <Dialog
-          title="修改软件名称"
-          description="仅修改用户和运营端显示名称，不会改变镜像仓库或已部署实例。"
+          title="软件设置"
+          description="修改显示名称和访问方式，不会改变镜像仓库或已部署实例。"
           onClose={() => setRenaming(null)}
         >
           <form
@@ -148,7 +150,7 @@ export function AdminImagesPage() {
             onSubmit={event => {
               event.preventDefault()
               if (!softwareName.trim()) return
-              void saveImage({ ...renaming, name: softwareName.trim() })
+              void saveImage({ ...renaming, name: softwareName.trim(), terminalOnly: !webSupported })
                 .unwrap()
                 .then(() => setRenaming(null))
                 .catch(() => setVersionError('软件名称保存失败'))
@@ -164,6 +166,10 @@ export function AdminImagesPage() {
                 placeholder="请输入软件显示名称"
                 data-autofocus
               />
+            </label>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 text-xs text-slate-700 dark:border-slate-700 dark:text-slate-100">
+              <input className="mt-0.5" type="checkbox" checked={webSupported} onChange={event => setWebSupported(event.target.checked)} />
+              <span><b className="block">支持 Web 服务</b><small className="mt-1 block leading-5 text-slate-500 dark:text-slate-300">默认关闭。开启后，用户实例页会额外显示“Web 服务”入口；终端入口始终可用。</small></span>
             </label>
             {versionError && <Alert tone="error">{versionError}</Alert>}
             <DialogFooter>

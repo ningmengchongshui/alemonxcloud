@@ -58,8 +58,10 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		}
 		return items, nil
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,i.bandwidth_mbps,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,i.bandwidth_mbps,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE),COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
 		FROM xcloud_instances i
+		LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id
+		LEFT JOIN xcloud_images img ON img.id=source_order.image_id
 		LEFT JOIN xcloud_tasks active_task ON active_task.id=(
 			SELECT t.id FROM xcloud_tasks t
 			WHERE t.instance_id=i.id AND t.status IN ('pending','running')
@@ -76,7 +78,7 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		var item instance
 		var created time.Time
 		var activeTask instanceActiveTask
-		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.BandwidthMbps, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.BandwidthMbps, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Format("2006-01-02 15:04")
@@ -116,7 +118,7 @@ func getStoredInstance(ctx context.Context, id, ownerID string) (instance, bool,
 	}
 	var item instance
 	var created time.Time
-	err := instanceDB.QueryRowContext(ctx, `SELECT id,name,image,version,spec,status,COALESCE(runtime_status,''),access_address,container_name,created_at,destroy_at,destroyed_at,purge_at,COALESCE(destroy_reason,''),archived_at FROM xcloud_instances WHERE id=? AND owner_id=? AND archived_at IS NULL`, id, ownerID).Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt)
+	err := instanceDB.QueryRowContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE) FROM xcloud_instances i LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id LEFT JOIN xcloud_images img ON img.id=source_order.image_id WHERE i.id=? AND i.owner_id=? AND i.archived_at IS NULL`, id, ownerID).Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly)
 	if err == sql.ErrNoRows {
 		return instance{}, false, nil
 	}

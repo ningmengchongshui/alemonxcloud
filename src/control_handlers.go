@@ -410,7 +410,7 @@ func adminSaveImage(c *gin.Context) {
 		return
 	}
 	user := c.MustGet("user").(oidcUser)
-	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image.save", "image", body.ID, map[string]any{"imageRef": body.ImageRef, "version": body.Version})
+	_ = writeAudit(c.Request.Context(), user.ID, "catalog.image.save", "image", body.ID, map[string]any{"imageRef": body.ImageRef, "version": body.Version, "terminalOnly": body.TerminalOnly})
 	c.JSON(http.StatusOK, body)
 }
 func adminSaveImageVersion(c *gin.Context) {

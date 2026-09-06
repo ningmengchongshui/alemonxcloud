@@ -1,0 +1,1 @@
+ALTER TABLE xcloud_images ADD COLUMN terminal_only BOOLEAN NOT NULL DEFAULT FALSE;

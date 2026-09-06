@@ -23,6 +23,10 @@ const diskValue = (bytes?: number) =>
     : bytes >= 1024 ** 3
       ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
       : `${(bytes / 1024 ** 2).toFixed(0)} MB`
+const diskGBValue = (bytes: number) => {
+  const value = Math.max(0, bytes) / 1024 ** 3
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
 
 function nodeState(node: Node) {
   if (!node.enabled) return { label: '未启用', tone: 'neutral' as const }
@@ -35,12 +39,14 @@ function Capacity({
   label,
   used,
   total,
-  suffix
+  suffix,
+  format = value => String(value)
 }: {
   label: string
   used: number
   total: number
   suffix: string
+  format?: (value: number) => string
 }) {
   const ratio = percent(used, total)
   return (
@@ -48,7 +54,7 @@ function Capacity({
       <div className="flex items-baseline justify-between gap-2 text-[10px] text-slate-500 dark:text-slate-300">
         <span>{label}</span>
         <b className="shrink-0 text-slate-700 dark:text-slate-100">
-          {used}/{total} {suffix}
+          {format(used)}/{format(total)} {suffix}
         </b>
       </div>
       <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
@@ -73,6 +79,15 @@ export function AdminNodesPage() {
   )
   const reservedMemory = values.reduce(
     (total, node) => total + node.memoryReservedMB,
+    0
+  )
+  const nodesWithDiskCapacity = values.filter(node => (node.diskTotalBytes ?? 0) > 0)
+  const diskTotal = nodesWithDiskCapacity.reduce(
+    (total, node) => total + (node.diskTotalBytes ?? 0),
+    0
+  )
+  const diskUsed = nodesWithDiskCapacity.reduce(
+    (total, node) => total + Math.max(0, (node.diskTotalBytes ?? 0) - (node.diskAvailableBytes ?? 0)),
     0
   )
 
@@ -107,6 +122,13 @@ export function AdminNodesPage() {
           <b className="text-slate-900 dark:text-white">
             {memoryValue(reservedMemory)}/{memoryValue(memory)} GB
           </b>
+          {diskTotal > 0 && <>
+            <span className="mx-2 text-slate-300 dark:text-slate-600">·</span>
+            磁盘已用{' '}
+            <b className="text-slate-900 dark:text-white">
+              {diskGBValue(diskUsed)}/{diskGBValue(diskTotal)} GB
+            </b>
+          </>}
         </p>
         <NodeEditor />
       </div>
@@ -172,7 +194,7 @@ export function AdminNodesPage() {
                         : '尚未收到'}
                     </p>
                   </div>
-                  <div className="grid gap-3 rounded-lg bg-slate-50 p-3 dark:bg-slate-900 sm:grid-cols-2 lg:bg-transparent lg:p-0">
+                  <div className="grid gap-3 rounded-lg bg-slate-50 p-3 dark:bg-slate-900 sm:grid-cols-2 lg:grid-cols-3 lg:bg-transparent lg:p-0">
                     <Capacity
                       label="CPU 已分配"
                       used={node.cpuReserved}
@@ -185,6 +207,20 @@ export function AdminNodesPage() {
                       total={node.memoryTotalMB / 1024}
                       suffix="GB"
                     />
+                    {(node.diskTotalBytes ?? 0) > 0 ? (
+                      <Capacity
+                        label="磁盘已用"
+                        used={Math.max(0, (node.diskTotalBytes ?? 0) - (node.diskAvailableBytes ?? 0))}
+                        total={node.diskTotalBytes ?? 0}
+                        suffix="GB"
+                        format={diskGBValue}
+                      />
+                    ) : (
+                      <div className="min-w-0 text-[10px] text-slate-500 dark:text-slate-300">
+                        <span>磁盘容量</span>
+                        <b className="mt-1.5 block text-slate-700 dark:text-slate-100">同步中</b>
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-1.5 text-[11px] text-slate-500 dark:text-slate-300">
                     <span>{node.managedContainerCount ?? 0} 个托管容器</span>

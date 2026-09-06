@@ -60,6 +60,7 @@ type instance struct {
 	// ContainerName is also the basename of this instance's persisted data
 	// directory on its assigned node (for example xcloud-a1b2c3d4).
 	ContainerName string              `json:"containerName,omitempty"`
+	TerminalOnly  bool                `json:"terminalOnly,omitempty"`
 	ActiveTask    *instanceActiveTask `json:"activeTask,omitempty"`
 	OwnerID       string              `json:"-"`
 }
@@ -153,6 +154,7 @@ func Run() {
 	router.POST("/api/notifications/:id/read", requireSession, readNotificationHandler)
 	router.GET("/api/tasks/:id", requireSession, taskStatusHandler)
 	router.GET("/api/instances/:id/tasks", requireSession, instanceTasksHandler)
+	router.GET("/api/instances/:id/terminal", requireSession, instanceTerminalSocket)
 	router.POST("/api/instances/:id/tasks/:taskID/cancel", requireSession, cancelInstanceTaskHandler)
 	router.POST("/api/instances/:id/tasks/cancel-all", requireSession, cancelAllInstanceTasksHandler)
 	router.GET("/api/orders", requireSession, myOrders)

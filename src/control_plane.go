@@ -94,14 +94,15 @@ func transitionInstance(ctx context.Context, executor instanceStateExecutor, ins
 }
 
 type catalogImage struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	ImageRef    string         `json:"imageRef"`
-	ImageDigest string         `json:"imageDigest"`
-	Version     string         `json:"version"`
-	Enabled     bool           `json:"enabled"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	Versions    []imageVersion `json:"versions,omitempty"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	ImageRef     string         `json:"imageRef"`
+	ImageDigest  string         `json:"imageDigest"`
+	Version      string         `json:"version"`
+	Enabled      bool           `json:"enabled"`
+	TerminalOnly bool           `json:"terminalOnly"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	Versions     []imageVersion `json:"versions,omitempty"`
 }
 type imageVersion struct {
 	ID          string     `json:"id"`
@@ -150,6 +151,7 @@ type node struct {
 	MemoryReservedMB      int        `json:"memoryReservedMB"`
 	DockerVersion         string     `json:"dockerVersion,omitempty"`
 	DiskAvailableBytes    int64      `json:"diskAvailableBytes,omitempty"`
+	DiskTotalBytes        int64      `json:"diskTotalBytes,omitempty"`
 	ManagedContainerCount int        `json:"managedContainerCount,omitempty"`
 	AgentVersion          string     `json:"agentVersion,omitempty"`
 	AgentAPIVersion       int        `json:"agentApiVersion,omitempty"`
@@ -253,7 +255,7 @@ func listCatalog(ctx context.Context, includeDisabled bool) ([]catalogImage, []p
 	if instanceDB == nil {
 		return nil, nil, errors.New("开发模式未配置 MySQL")
 	}
-	imageSQL := `SELECT id,name,image_ref,COALESCE(image_digest,''),version,enabled,created_at FROM xcloud_images`
+	imageSQL := `SELECT id,name,image_ref,COALESCE(image_digest,''),version,enabled,COALESCE(terminal_only,FALSE),created_at FROM xcloud_images`
 	planSQL := `SELECT id,name,cpu,memory_mb,bandwidth_mbps,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans`
 	if !includeDisabled {
 		imageSQL += ` WHERE enabled=TRUE`
@@ -385,7 +387,7 @@ func scanImages(ctx context.Context, statement string, args ...any) ([]catalogIm
 	items := []catalogImage{}
 	for rows.Next() {
 		var item catalogImage
-		if err := rows.Scan(&item.ID, &item.Name, &item.ImageRef, &item.ImageDigest, &item.Version, &item.Enabled, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.ImageRef, &item.ImageDigest, &item.Version, &item.Enabled, &item.TerminalOnly, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -457,7 +459,7 @@ func saveImage(ctx context.Context, value catalogImage) error {
 	if value.ImageDigest != "" && !validImageDigest(value.ImageDigest) {
 		return errors.New("镜像摘要格式无效")
 	}
-	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_images (id,name,image_ref,image_digest,version,enabled,created_at) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),image_ref=VALUES(image_ref),version=VALUES(version),enabled=VALUES(enabled)`, value.ID, value.Name, value.ImageRef, nullableString(value.ImageDigest), value.Version, value.Enabled, value.CreatedAt)
+	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_images (id,name,image_ref,image_digest,version,enabled,terminal_only,created_at) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),image_ref=VALUES(image_ref),version=VALUES(version),enabled=VALUES(enabled),terminal_only=VALUES(terminal_only)`, value.ID, value.Name, value.ImageRef, nullableString(value.ImageDigest), value.Version, value.Enabled, value.TerminalOnly, value.CreatedAt)
 	if err != nil || !isNew {
 		return err
 	}
@@ -1583,7 +1585,7 @@ func notifyRetentionReminders(ctx context.Context) {
 }
 
 func listNodesWithUsage(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(n.last_agent_error,''),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('destroy_scheduled','destroyed') THEN 1 ELSE 0 END),0),COALESCE((SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances ti ON ti.id=t.instance_id WHERE ti.node_id=n.id AND t.action IN ('destroy','purge') AND t.status IN ('pending','running')),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.disk_total_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(n.last_agent_error,''),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('destroy_scheduled','destroyed') THEN 1 ELSE 0 END),0),COALESCE((SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances ti ON ti.id=t.instance_id WHERE ti.node_id=n.id AND t.action IN ('destroy','purge') AND t.status IN ('pending','running')),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -1592,7 +1594,7 @@ func listNodesWithUsage(ctx context.Context) ([]node, error) {
 	for rows.Next() {
 		var item node
 		var capabilities []byte
-		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.DockerVersion, &item.DiskAvailableBytes, &item.ManagedContainerCount, &item.AgentVersion, &item.AgentAPIVersion, &capabilities, &item.LastAgentError, &item.CPUReserved, &item.MemoryReservedMB, &item.OfflineInstanceCount, &item.PendingCleanupTasks); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.DockerVersion, &item.DiskAvailableBytes, &item.DiskTotalBytes, &item.ManagedContainerCount, &item.AgentVersion, &item.AgentAPIVersion, &capabilities, &item.LastAgentError, &item.CPUReserved, &item.MemoryReservedMB, &item.OfflineInstanceCount, &item.PendingCleanupTasks); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(capabilities, &item.AgentCapabilities)

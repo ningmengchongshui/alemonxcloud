@@ -103,9 +103,6 @@ export function TicketsPage({
         description="提交服务、账务或账号问题；管理员回复会通过站内通知提醒你。"
         actions={<Button onClick={() => setCreating(true)}>＋ 新建工单</Button>}
       />
-      <p className="mb-4 text-xs text-slate-500 dark:text-slate-300">
-        紧急工单会优先展示给管理员；请仅在服务完全不可用或数据风险时选择“紧急”。
-      </p>
       {tickets.isLoading ? (
         <LoadingState>正在加载工单…</LoadingState>
       ) : (tickets.data ?? []).length === 0 ? (

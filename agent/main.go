@@ -25,7 +25,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 )
 
@@ -56,6 +58,7 @@ var agentCapabilities = []string{
 	"container.lifecycle.v1",
 	"container.inspect.v1",
 	"container.logs.v1",
+	"container.terminal.v1",
 	"container.list.v1",
 	"container.compose.v1",
 	"container.compose.restart.v1",
@@ -148,6 +151,7 @@ func runServer() {
 	control.GET("/:name/status", containerStatus)
 	control.GET("/:name/inspect", inspectContainer)
 	control.GET("/:name/logs", containerLogs)
+	control.GET("/:name/terminal", containerTerminal)
 	control.DELETE("/:name", deleteContainer)
 	// Nginx 在请求中写入实例路由键；控制接口会先于该路由命中。
 	r.NoRoute(proxyContainer)
@@ -1127,6 +1131,70 @@ func containerLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"lines": lines, "tail": tail, "truncated": len(output) >= 64*1024})
 }
 
+// containerTerminal is intentionally reachable only through the control token.
+// The public console never sees this Agent endpoint or Docker container names.
+func containerTerminal(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "-t", name, "/bin/sh", "-i")
+	terminal, err := pty.Start(cmd)
+	if err != nil {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("\r\n无法启动容器终端。\r\n"))
+		return
+	}
+	defer terminal.Close()
+	writeOutput := func(reader io.Reader) {
+		buffer := make([]byte, 4096)
+		for {
+			count, readErr := reader.Read(buffer)
+			if count > 0 {
+				writeErr := conn.WriteMessage(websocket.TextMessage, buffer[:count])
+				if writeErr != nil {
+					cancel()
+					return
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}
+	go writeOutput(terminal)
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+		_ = conn.Close()
+	}()
+	for {
+		_, data, readErr := conn.ReadMessage()
+		if readErr != nil {
+			_ = terminal.Close()
+			return
+		}
+		if len(data) > 0 {
+			if _, writeErr := terminal.Write(data); writeErr != nil {
+				return
+			}
+		}
+		select {
+		case <-done:
+			return
+		default:
+		}
+	}
+}
+
 func agentStatus(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -1170,7 +1238,9 @@ func agentStatus(c *gin.Context) {
 		"status": "ok", "agentVersion": Version, "apiVersion": AgentAPIVersion,
 		"capabilities": capabilities, "bandwidthToolsReady": toolsReady, "dockerVersion": strings.TrimSpace(output),
 		"cpuTotal": runtime.NumCPU(), "memoryTotalMB": hostMemoryMB(),
-		"diskAvailableBytes": int64(stat.Bavail) * int64(stat.Bsize), "managedContainerCount": count,
+		"diskAvailableBytes":    int64(stat.Bavail) * int64(stat.Bsize),
+		"diskTotalBytes":        int64(stat.Blocks) * int64(stat.Bsize),
+		"managedContainerCount": count,
 	})
 }
 

@@ -12,12 +12,14 @@ export function ImageSourceEditor() {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [ref, setRef] = useState('')
+  const [webSupported, setWebSupported] = useState(false)
   const [error, setError] = useState('')
   const { data: catalog } = useGetAdminCatalogQuery()
   const [save, { isLoading }] = useSaveAdminImageMutation()
   const close = () => {
     setOpen(false)
     setError('')
+    setWebSupported(false)
   }
   async function submit() {
     const imageRef = ref.trim()
@@ -37,7 +39,8 @@ export function ImageSourceEditor() {
         imageDigest: '',
         version: 'latest',
         versions: [],
-        enabled: true
+        enabled: true,
+        terminalOnly: !webSupported
       }).unwrap()
       setName('')
       setRef('')
@@ -71,6 +74,10 @@ export function ImageSourceEditor() {
                 placeholder="ALemonX"
                 data-autofocus
               />
+            </label>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 text-xs text-slate-700 dark:border-slate-700 dark:text-slate-100">
+              <input className="mt-0.5" type="checkbox" checked={webSupported} onChange={event => setWebSupported(event.target.checked)} />
+              <span><b className="block">支持 Web 服务</b><small className="mt-1 block leading-5 text-slate-500 dark:text-slate-300">默认关闭。终端入口始终可用；开启后实例额外提供 Web 服务入口。</small></span>
             </label>
             <label
               className="block text-[11px] font-bold text-slate-700 dark:text-slate-100"

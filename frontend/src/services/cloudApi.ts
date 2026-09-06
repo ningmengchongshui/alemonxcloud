@@ -1,4 +1,5 @@
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
+import { toast } from '@/services/toast'
 import type {
   AdminMetrics,
   AuditLog,
@@ -38,7 +39,21 @@ interface AuthorizeResponse {
 
 export const cloudApi = createApi({
   reducerPath: 'cloudApi',
-  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  baseQuery: async (args, api, extraOptions) => {
+    const result = await fetchBaseQuery({ baseUrl: '/api' })(args, api, extraOptions)
+    if (!result.error) return result
+    const url = typeof args === 'string' ? args : args.url
+    // Session probing expects a 401 before login and must stay silent.
+    if (url === '/oidc/session') return result
+    const payload = result.error.data
+    const detail = typeof payload === 'object' && payload !== null && 'message' in payload && typeof payload.message === 'string'
+      ? payload.message
+      : result.error.status === 'FETCH_ERROR'
+        ? '请检查网络连接后重试。'
+        : '请求未能完成，请稍后重试。'
+    toast.error('操作未完成', detail)
+    return result
+  },
   // Console data is operational data rather than static content. A page must
   // revalidate when it is opened again or when the user returns to the tab.
   refetchOnMountOrArgChange: true,
@@ -58,7 +73,7 @@ export const cloudApi = createApi({
     getSession: builder.query<{ user: CurrentUser } | null, void>({
       query: () => ({
         url: '/oidc/session',
-        validateStatus: response =>
+        validateStatus: (response: Response) =>
           response.status === 200 || response.status === 401
       }),
       transformResponse: (response: SessionResponse) =>

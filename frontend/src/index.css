@@ -517,7 +517,7 @@
   }
 
   .order-summary {
-    @apply sticky top-7 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800 max-[850px]:static;
+    @apply sticky top-14 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800 max-[850px]:static;
   }
 
   .order-summary h2 {
