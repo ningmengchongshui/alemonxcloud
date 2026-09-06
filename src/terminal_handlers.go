@@ -10,6 +10,79 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func instanceWorkspaceNode(c *gin.Context) (instance, node, bool) {
+	item, ok := ownedInstance(c)
+	if !ok {
+		return instance{}, node{}, false
+	}
+	var nodeID string
+	if err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(node_id,'') FROM xcloud_instances WHERE id=?`, item.ID).Scan(&nodeID); err != nil || nodeID == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "实例工作区暂不可用"})
+		return instance{}, node{}, false
+	}
+	n, err := nodeByID(c.Request.Context(), nodeID)
+	if err != nil || !n.Enabled {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "实例节点暂不可用"})
+		return instance{}, node{}, false
+	}
+	return item, n, true
+}
+
+func instanceFiles(c *gin.Context) {
+	item, n, ok := instanceWorkspaceNode(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Path    string           `json:"path"`
+		Entries []map[string]any `json:"entries"`
+	}
+	if err := nodeRequest(c.Request.Context(), n, http.MethodGet, "/container/"+url.PathEscape(item.ContainerName)+"/files?path="+url.QueryEscape(c.Query("path")), nil, &body); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "读取工作区失败"})
+		return
+	}
+	c.JSON(http.StatusOK, body)
+}
+
+func instanceFileContent(c *gin.Context) {
+	item, n, ok := instanceWorkspaceNode(c)
+	if !ok {
+		return
+	}
+	var body map[string]any
+	if err := nodeRequest(c.Request.Context(), n, http.MethodGet, "/container/"+url.PathEscape(item.ContainerName)+"/files/content?path="+url.QueryEscape(c.Query("path")), nil, &body); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "打开文件失败"})
+		return
+	}
+	c.JSON(http.StatusOK, body)
+}
+
+func saveInstanceFileContent(c *gin.Context) {
+	instanceFileMutation(c, http.MethodPut, "/files/content", "保存文件失败")
+}
+func uploadInstanceFile(c *gin.Context) {
+	instanceFileMutation(c, http.MethodPost, "/files/upload", "上传文件失败")
+}
+
+func instanceFileMutation(c *gin.Context, method, suffix, failure string) {
+	item, n, ok := instanceWorkspaceNode(c)
+	if !ok {
+		return
+	}
+	var body map[string]any
+	if c.ShouldBindJSON(&body) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "文件请求无效"})
+		return
+	}
+	var result map[string]any
+	if err := nodeRequest(c.Request.Context(), n, method, "/container/"+url.PathEscape(item.ContainerName)+suffix, body, &result); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": failure})
+		return
+	}
+	_ = writeAudit(c.Request.Context(), c.MustGet("user").(oidcUser).ID, "instance.workspace.write", "instance", item.ID, map[string]any{"operation": suffix})
+	c.JSON(http.StatusOK, result)
+}
+
 var consoleTerminalUpgrader = websocket.Upgrader{
 	CheckOrigin: func(request *http.Request) bool {
 		origin := request.Header.Get("Origin")

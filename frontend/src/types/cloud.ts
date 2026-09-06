@@ -59,6 +59,9 @@ export interface Instance {
   planChangeStatus?: 'processing' | 'succeeded' | 'failed' | 'needs_review'
   planChangeId?: string
 }
+export interface WorkspaceEntry { name: string; path: string; kind: 'file' | 'directory' | 'symlink'; size: number; modifiedAt: string }
+export interface WorkspaceListing { path: string; entries: WorkspaceEntry[] }
+export interface WorkspaceFile { path: string; content: string; size: number; modifiedAt: string }
 export interface PlanChangeQuote {
   quoteId: string
   instanceId: string

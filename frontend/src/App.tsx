@@ -155,7 +155,7 @@ function instanceExecutionID(path: string) {
   }
 }
 function instanceTerminalID(path: string) {
-  const match = path.match(/^\/me\/instances\/([^/]+)\/terminal$/)
+	const match = path.match(/^\/terminal\/([^/]+)$/)
   if (!match) return null
   try {
     return decodeURIComponent(match[1])
@@ -441,21 +441,11 @@ export default function App() {
     )
   }
   if (terminalInstanceID) {
-    return (
-      <Shell
-        user={activeSession.user}
-        restoringSession={isLoading}
-        area="me"
-        page="instances"
-        onPageChange={next => navigate({ overview: '/me', instances: '/me/instances', create: '/me/create', orders: '/me/orders', wallet: '/me/wallet', notifications: '/me/notifications', tickets: '/me/tickets' }[next])}
-        onGoToMe={() => navigate('/me')}
-        onGoToSuper={activeSession.user.isAdmin ? () => navigate('/super') : undefined}
-        onLogout={signOut}
-      >
-        <Suspense fallback={<main className="page me-page"><LoadingState>正在载入终端…</LoadingState></main>}>
-          <InstanceTerminalPage instanceID={terminalInstanceID} instance={instances.find(item => item.id === terminalInstanceID)} onBack={() => navigate('/me/instances')} />
-        </Suspense>
-      </Shell>
+    return withSessionRestoreOverlay(
+      <Suspense fallback={<main className="min-h-dvh bg-slate-950 p-6"><LoadingState>正在载入终端…</LoadingState></main>}>
+        <InstanceTerminalPage instanceID={terminalInstanceID} instance={instances.find(item => item.id === terminalInstanceID)} onBack={() => navigate('/me/instances')} />
+      </Suspense>,
+      isLoading
     )
   }
   if (selectedTicketID) {
@@ -527,7 +517,7 @@ export default function App() {
           navigate(`/me/instances/${encodeURIComponent(instanceID)}/logs`)
         }
         onOpenTerminal={instanceID =>
-          navigate(`/me/instances/${encodeURIComponent(instanceID)}/terminal`)
+          navigate(`/terminal/${encodeURIComponent(instanceID)}`)
         }
         onOpenExecutions={instanceID =>
           navigate(`/me/instances/${encodeURIComponent(instanceID)}/executions`)

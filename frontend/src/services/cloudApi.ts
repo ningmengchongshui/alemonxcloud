@@ -27,7 +27,9 @@ import type {
   RechargeContact,
   BenefitProgram,
   PlanPriceTier,
-  PlanChangeQuote
+  PlanChangeQuote,
+  WorkspaceListing,
+  WorkspaceFile
 } from '@/types/cloud'
 
 interface SessionResponse {
@@ -142,6 +144,10 @@ export const cloudApi = createApi({
         params: { tail, ...(since ? { since } : {}) }
       })
     }),
+    getWorkspaceFiles: builder.query<WorkspaceListing, { id: string; path?: string }>({ query: ({ id, path = '' }) => ({ url: `/instances/${id}/files`, params: { path } }) }),
+    getWorkspaceFile: builder.query<WorkspaceFile, { id: string; path: string }>({ query: ({ id, path }) => ({ url: `/instances/${id}/files/content`, params: { path } }) }),
+    saveWorkspaceFile: builder.mutation<void, { id: string; path: string; content: string }>({ query: ({ id, ...body }) => ({ url: `/instances/${id}/files/content`, method: 'PUT', body }) }),
+    uploadWorkspaceFile: builder.mutation<void, { id: string; path: string; content: string }>({ query: ({ id, ...body }) => ({ url: `/instances/${id}/files/upload`, method: 'POST', body }) }),
     getCatalog: builder.query<Catalog, void>({
       query: () => '/catalog',
       providesTags: ['Catalog']
@@ -609,6 +615,10 @@ export const {
   useSubmitPlanChangeMutation,
   useGetInstanceLogsQuery,
   useLazyGetInstanceLogsQuery,
+  useGetWorkspaceFilesQuery,
+  useLazyGetWorkspaceFileQuery,
+  useSaveWorkspaceFileMutation,
+  useUploadWorkspaceFileMutation,
   useGetCatalogQuery,
   useGetWalletQuery,
   useGetWalletEntriesQuery,

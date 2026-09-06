@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -24,6 +25,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 	"github.com/gin-gonic/gin"
@@ -153,6 +155,10 @@ func runServer() {
 	control.GET("/:name/inspect", inspectContainer)
 	control.GET("/:name/logs", containerLogs)
 	control.GET("/:name/terminal", containerTerminal)
+	control.GET("/:name/files", listWorkspaceFiles)
+	control.GET("/:name/files/content", readWorkspaceFile)
+	control.PUT("/:name/files/content", writeWorkspaceFile)
+	control.POST("/:name/files/upload", uploadWorkspaceFile)
 	control.DELETE("/:name", deleteContainer)
 	// Nginx 在请求中写入实例路由键；控制接口会先于该路由命中。
 	r.NoRoute(proxyContainer)
@@ -1135,6 +1141,177 @@ func containerLogs(c *gin.Context) {
 		lines = strings.Split(trimmed, "\n")
 	}
 	c.JSON(http.StatusOK, gin.H{"lines": lines, "tail": tail, "truncated": len(output) >= 64*1024})
+}
+
+const workspaceFileLimit = 1024 * 1024
+const workspaceUploadLimit = 8 * 1024 * 1024
+
+type workspaceEntry struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Kind       string `json:"kind"`
+	Size       int64  `json:"size"`
+	ModifiedAt string `json:"modifiedAt"`
+}
+
+func workspacePath(name, raw string) (string, string, error) {
+	relative := filepath.Clean(filepath.FromSlash(strings.TrimSpace(raw)))
+	if relative == "." || relative == string(filepath.Separator) {
+		relative = ""
+	}
+	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", "", errors.New("工作区路径无效")
+	}
+	_, _, root := instancePaths(name)
+	target := filepath.Join(root, relative)
+	// Workspace files are owned by the tenant, but symbolic links can point at
+	// host paths because this directory is bind-mounted. Never follow them in a
+	// control-plane file request.
+	current := root
+	for _, segment := range strings.Split(relative, string(filepath.Separator)) {
+		if segment == "" {
+			continue
+		}
+		current = filepath.Join(current, segment)
+		info, statErr := os.Lstat(current)
+		if os.IsNotExist(statErr) {
+			break
+		}
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 {
+			return "", "", errors.New("工作区路径无效")
+		}
+	}
+	return root, target, nil
+}
+
+func listWorkspaceFiles(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	_, directory, err := workspacePath(name, c.Query("path"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "工作区路径无效"})
+		return
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "目录不存在或无法访问"})
+		return
+	}
+	items := make([]workspaceEntry, 0, len(entries))
+	for _, entry := range entries {
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		kind := "file"
+		if entry.IsDir() {
+			kind = "directory"
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			kind = "symlink"
+		}
+		_, path, _ := workspacePath(name, c.Query("path"))
+		relative, _ := filepath.Rel(filepath.Join(instancePathsForWorkspace(name)), filepath.Join(path, entry.Name()))
+		items = append(items, workspaceEntry{Name: entry.Name(), Path: filepath.ToSlash(relative), Kind: kind, Size: info.Size(), ModifiedAt: info.ModTime().UTC().Format(time.RFC3339)})
+	}
+	c.JSON(http.StatusOK, gin.H{"path": filepath.ToSlash(filepath.Clean(c.Query("path"))), "entries": items})
+}
+
+func instancePathsForWorkspace(name string) string {
+	_, _, workspace := instancePaths(name)
+	return workspace
+}
+
+func readWorkspaceFile(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	_, path, err := workspacePath(name, c.Query("path"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "工作区路径无效"})
+		return
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		c.JSON(http.StatusNotFound, gin.H{"message": "文件不存在或无法作为文本打开"})
+		return
+	}
+	if info.Size() > workspaceFileLimit {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": "文件超过 1 MB，无法在编辑器中打开"})
+		return
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || !utf8.Valid(content) {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"message": "仅支持打开 UTF-8 文本文件"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"path": filepath.ToSlash(filepath.Clean(c.Query("path"))), "content": string(content), "size": info.Size(), "modifiedAt": info.ModTime().UTC().Format(time.RFC3339)})
+}
+
+func writeWorkspaceFile(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	var input struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if c.ShouldBindJSON(&input) != nil || len(input.Content) > workspaceFileLimit {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "文件内容无效或超过 1 MB"})
+		return
+	}
+	_, path, err := workspacePath(name, input.Path)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "工作区路径无效"})
+		return
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法创建文件目录"})
+		return
+	}
+	if err = os.WriteFile(path, []byte(input.Content), 0600); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法保存文件"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"path": filepath.ToSlash(filepath.Clean(input.Path))})
+}
+
+func uploadWorkspaceFile(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	var input struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if c.ShouldBindJSON(&input) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "上传内容无效"})
+		return
+	}
+	content, err := base64.StdEncoding.DecodeString(input.Content)
+	if err != nil || len(content) > workspaceUploadLimit {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "上传文件无效或超过 8 MB"})
+		return
+	}
+	_, path, err := workspacePath(name, input.Path)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "工作区路径无效"})
+		return
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法创建文件目录"})
+		return
+	}
+	if err = os.WriteFile(path, content, 0600); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法保存上传文件"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"path": filepath.ToSlash(filepath.Clean(input.Path)), "size": len(content)})
 }
 
 // containerTerminal is intentionally reachable only through the control token.
