@@ -55,8 +55,18 @@ type instance struct {
 	CreatedAt     string     `json:"createdAt"`
 	// ContainerName is also the basename of this instance's persisted data
 	// directory on its assigned node (for example xcloud-a1b2c3d4).
-	ContainerName string `json:"containerName,omitempty"`
-	OwnerID       string `json:"-"`
+	ContainerName string              `json:"containerName,omitempty"`
+	ActiveTask    *instanceActiveTask `json:"activeTask,omitempty"`
+	OwnerID       string              `json:"-"`
+}
+
+// instanceActiveTask is deliberately the small, user-safe portion of a task
+// needed to render an instance card while a lifecycle operation is in flight.
+// It must never expose node ownership, execution tokens, or task payloads.
+type instanceActiveTask struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+	Status string `json:"status"`
 }
 type oidcUser struct {
 	ID          string   `json:"id"`

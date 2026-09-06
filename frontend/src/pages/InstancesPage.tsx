@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useDispatch } from 'react-redux'
 import { ActionDialog } from '@/components/ActionDialog'
 import { BalanceSettlement } from '@/components/BalanceSettlement'
@@ -34,6 +35,7 @@ type InstanceAction =
   | 'start'
   | 'stop'
   | 'restart'
+  | 'reinstall'
   | 'destroy'
   | 'destroy-now'
   | 'cancel-destroy'
@@ -56,6 +58,115 @@ function stateFor(status: string) {
   if (['failed', 'error', 'deployment_failed'].includes(value))
     return { label: '需要处理', tone: 'danger' as const }
   return { label: status || '状态同步中', tone: 'neutral' as const }
+}
+
+function taskLabel(action: string) {
+  return (
+    {
+      'create': '创建中',
+      'retry-deploy': '部署中',
+      'start': '启动中',
+      'stop': '关机中',
+      'restart': '重启中',
+      'update': '更新中',
+      'reinstall': '重装中',
+      'destroy': '销毁中',
+      'purge': '清理中'
+    }[action] ?? '处理中'
+  )
+}
+
+type MoreAction = {
+  action: InstanceAction
+  label: string
+  danger?: boolean
+}
+
+function MoreActionsMenu({
+  instanceID,
+  actions,
+  onSelect
+}: {
+  instanceID: string
+  actions: MoreAction[]
+  onSelect: (action: InstanceAction) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState({ top: 0, left: 0 })
+  useEffect(() => {
+    if (!open) return
+    const updatePosition = () => {
+      const bounds = root.current
+        ?.querySelector('button')
+        ?.getBoundingClientRect()
+      if (!bounds) return
+      setPosition({
+        top: bounds.bottom + 6,
+        left: Math.max(8, bounds.right - 112)
+      })
+    }
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node
+      if (!root.current?.contains(target) && !menu.current?.contains(target)) {
+        setOpen(false)
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    updatePosition()
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    document.addEventListener('keydown', closeOnEscape)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [open])
+  if (actions.length === 0) return null
+  return (
+    <div ref={root} className="relative">
+      <Button
+        tone="secondary"
+        aria-expanded={open}
+        aria-controls={`instance-actions-${instanceID}`}
+        onClick={() => setOpen(value => !value)}
+      >
+        更多
+      </Button>
+      {open &&
+        createPortal(
+          <div
+            ref={menu}
+            id={`instance-actions-${instanceID}`}
+            role="menu"
+            style={{ top: position.top, left: position.left }}
+            className="fixed z-[100] min-w-28 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-600 dark:bg-slate-800"
+          >
+            {actions.map(item => (
+              <button
+                key={item.action}
+                type="button"
+                role="menuitem"
+                className={`block w-full px-3 py-2 text-left text-xs font-bold hover:bg-slate-50 dark:hover:bg-slate-700 ${item.danger ? 'text-red-700 dark:text-red-200' : 'text-slate-700 dark:text-slate-100'}`}
+                onClick={() => {
+                  setOpen(false)
+                  onSelect(item.action)
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+    </div>
+  )
 }
 
 function imageName(image: string) {
@@ -98,13 +209,19 @@ function actionCopy(action: InstanceAction) {
                     '将按当前实例配置重新生成运行容器并保留数据目录；不会更新镜像版本。服务会短暂不可访问，确定继续吗？',
                     '确认重启'
                   ]
-                : action === 'stop'
+                : action === 'reinstall'
                   ? [
-                      '关闭实例',
-                      '服务将停止运行，但数据和订阅保留。确定继续吗？',
-                      '确认关机'
+                      '重装实例',
+                      '将永久删除此实例的数据目录和工作区，并按当前镜像重新部署。该操作不可恢复，服务会暂时不可访问。',
+                      '确认重装并清空数据'
                     ]
-                  : ['启动实例', '服务将恢复运行。确定继续吗？', '确认启动']
+                  : action === 'stop'
+                    ? [
+                        '关闭实例',
+                        '服务将停止运行，但数据和订阅保留。确定继续吗？',
+                        '确认关机'
+                      ]
+                    : ['启动实例', '服务将恢复运行。确定继续吗？', '确认启动']
 }
 
 export function InstancesPage({
@@ -127,6 +244,9 @@ export function InstancesPage({
     id: string
     action: InstanceAction
   } | null>(null)
+  const [submittedTasks, setSubmittedTasks] = useState<
+    Record<string, NonNullable<Instance['activeTask']>>
+  >({})
   const [renewing, setRenewing] = useState<Order | null>(null)
   const [months, setMonths] = useState('1')
   const [renewPromoCode, setRenewPromoCode] = useState('')
@@ -138,6 +258,15 @@ export function InstancesPage({
   const [quoteRenewal] = useQuoteRenewalMutation()
   const { data: wallet } = useGetWalletQuery()
   const dispatch = useDispatch()
+  useEffect(() => {
+    setSubmittedTasks(current => {
+      const next = { ...current }
+      for (const item of instances) {
+        if (next[item.id]) delete next[item.id]
+      }
+      return next
+    })
+  }, [instances])
   const sorted = [...instances].sort(
     (left, right) =>
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
@@ -220,9 +349,16 @@ export function InstancesPage({
           durationMs: performance.now() - started
         })
         if (response.task) {
-          dispatch(
-            watchTask({ id: response.task.id, action: response.task.action })
-          )
+          const task = response.task
+          setSubmittedTasks(current => ({
+            ...current,
+            [value.id]: {
+              id: task.id,
+              action: task.action,
+              status: task.status
+            }
+          }))
+          dispatch(watchTask({ id: task.id, action: task.action }))
         }
         setPending(null)
       })
@@ -267,18 +403,25 @@ export function InstancesPage({
             const renewalOrder = renewableOrderByInstance.get(item.id)
             const lifecycle = item.status.toLowerCase()
             const runtime = item.runtimeStatus?.toLowerCase() || lifecycle
-            const state =
-              runtime === 'missing'
+            const activeTask = item.activeTask ?? submittedTasks[item.id]
+            const state = activeTask
+              ? {
+                  label: taskLabel(activeTask.action),
+                  tone: 'progress' as const
+                }
+              : runtime === 'missing'
                 ? { label: '资源异常', tone: 'danger' as const }
                 : stateFor(item.status)
-            const canOperate = ![
-              'deploying',
-              'creating',
-              'pending',
-              'deployment_failed',
-              'destroyed',
-              'purged'
-            ].includes(lifecycle)
+            const canOperate =
+              !activeTask &&
+              ![
+                'deploying',
+                'creating',
+                'pending',
+                'deployment_failed',
+                'destroyed',
+                'purged'
+              ].includes(lifecycle)
             const destroyDate = item.destroyAt
               ? new Date(item.destroyAt).toLocaleString('zh-CN')
               : '同步中'
@@ -351,7 +494,9 @@ export function InstancesPage({
                   <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full">
                     <Button
                       tone="secondary"
-                      disabled={!item.ip}
+                      disabled={
+                        !item.ip || runtime !== 'running' || Boolean(activeTask)
+                      }
                       onClick={() =>
                         window.open(item.ip, '_blank', 'noopener,noreferrer')
                       }
@@ -372,51 +517,73 @@ export function InstancesPage({
                     >
                       执行记录
                     </Button>
-                    {runtime === 'stopped' && canOperate && (
-                      <Button
-                        tone="secondary"
-                        disabled={!canOperate || operating}
-                        onClick={() =>
-                          setPending({ id: item.id, action: 'start' })
-                        }
-                      >
-                        启动
-                      </Button>
-                    )}
-                    {runtime === 'running' && canOperate && (
-                      <>
+                    {runtime === 'stopped' &&
+                      lifecycle === 'stopped' &&
+                      canOperate && (
                         <Button
                           tone="secondary"
-                          disabled={!canOperate || operating}
+                          disabled={!canOperate}
                           onClick={() =>
-                            setPending({ id: item.id, action: 'restart' })
+                            setPending({ id: item.id, action: 'start' })
                           }
                         >
-                          重启
+                          启动
                         </Button>
-                        <Button
-                          tone="secondary"
-                          disabled={!canOperate || operating}
-                          onClick={() =>
-                            setPending({ id: item.id, action: 'stop' })
+                      )}
+                    {runtime === 'running' &&
+                      lifecycle === 'running' &&
+                      canOperate && (
+                        <>
+                          <Button
+                            tone="secondary"
+                            onClick={() =>
+                              setPending({ id: item.id, action: 'stop' })
+                            }
+                          >
+                            关机
+                          </Button>
+                        </>
+                      )}
+                    {lifecycle === 'running' &&
+                      runtime === 'running' &&
+                      canOperate && (
+                        <MoreActionsMenu
+                          instanceID={item.id}
+                          actions={[
+                            { action: 'restart', label: '重启' },
+                            { action: 'update', label: '更新' },
+                            {
+                              action: 'reinstall',
+                              label: '重装',
+                              danger: true
+                            },
+                            { action: 'destroy', label: '销毁', danger: true }
+                          ]}
+                          onSelect={action =>
+                            setPending({ id: item.id, action })
                           }
-                        >
-                          关机
-                        </Button>
-                        <Button
-                          tone="secondary"
-                          disabled={operating}
-                          onClick={() =>
-                            setPending({ id: item.id, action: 'update' })
+                        />
+                      )}
+                    {lifecycle === 'stopped' &&
+                      runtime === 'stopped' &&
+                      canOperate && (
+                        <MoreActionsMenu
+                          instanceID={item.id}
+                          actions={[
+                            {
+                              action: 'reinstall',
+                              label: '重装',
+                              danger: true
+                            },
+                            { action: 'destroy', label: '销毁', danger: true }
+                          ]}
+                          onSelect={action =>
+                            setPending({ id: item.id, action })
                           }
-                        >
-                          更新
-                        </Button>
-                      </>
-                    )}
+                        />
+                      )}
                     {renewalOrder &&
-                      lifecycle !== 'destroyed' &&
-                      lifecycle !== 'purged' &&
+                      ['running', 'stopped'].includes(lifecycle) &&
                       item.destroyReason !== 'refund' && (
                         <Button
                           tone={
@@ -424,29 +591,18 @@ export function InstancesPage({
                               ? 'primary'
                               : 'secondary'
                           }
-                          disabled={operating}
+                          disabled={Boolean(activeTask)}
                           onClick={() => openRenewal(renewalOrder)}
                         >
                           续费
                         </Button>
                       )}
-                    {(lifecycle === 'running' || lifecycle === 'stopped') && (
-                      <Button
-                        tone="danger"
-                        disabled={!canOperate || operating}
-                        onClick={() =>
-                          setPending({ id: item.id, action: 'destroy' })
-                        }
-                      >
-                        销毁
-                      </Button>
-                    )}
-                    {lifecycle === 'destroy_scheduled' && (
+                    {lifecycle === 'destroy_scheduled' && !activeTask && (
                       <>
                         {item.destroyReason === 'manual' && (
                           <Button
                             tone="secondary"
-                            disabled={operating}
+                            disabled={Boolean(activeTask)}
                             onClick={() =>
                               setPending({
                                 id: item.id,
@@ -459,7 +615,7 @@ export function InstancesPage({
                         )}
                         <Button
                           tone="danger"
-                          disabled={operating}
+                          disabled={Boolean(activeTask)}
                           onClick={() =>
                             setPending({ id: item.id, action: 'destroy-now' })
                           }
@@ -468,10 +624,10 @@ export function InstancesPage({
                         </Button>
                       </>
                     )}
-                    {lifecycle === 'destroyed' && (
+                    {lifecycle === 'destroyed' && !activeTask && (
                       <Button
                         tone="secondary"
-                        disabled={operating}
+                        disabled={Boolean(activeTask)}
                         onClick={() =>
                           setPending({ id: item.id, action: 'archive' })
                         }
@@ -479,10 +635,9 @@ export function InstancesPage({
                         移除
                       </Button>
                     )}
-                    {lifecycle === 'deployment_failed' && (
+                    {lifecycle === 'deployment_failed' && !activeTask && (
                       <Button
                         tone="secondary"
-                        disabled={operating}
                         onClick={() =>
                           setPending({ id: item.id, action: 'retry-deploy' })
                         }
@@ -502,9 +657,9 @@ export function InstancesPage({
           title={actionCopy(pending.action)[0]}
           description={actionCopy(pending.action)[1]}
           confirmLabel={actionCopy(pending.action)[2]}
-          danger={
-            pending.action === 'destroy' || pending.action === 'destroy-now'
-          }
+          danger={['destroy', 'destroy-now', 'reinstall'].includes(
+            pending.action
+          )}
           busy={operating}
           onCancel={() => setPending(null)}
           onConfirm={confirmAction}

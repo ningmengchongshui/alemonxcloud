@@ -142,6 +142,16 @@ export default function App() {
     skip: !session || !isUserArea,
     pollingInterval: session && isUserArea ? 15000 : 0
   })
+  const hasActiveInstanceTask = instances.some(instance =>
+    Boolean(instance.activeTask)
+  )
+  useEffect(() => {
+    if (!session || !isUserArea || !hasActiveInstanceTask) return
+    const interval = window.setInterval(() => {
+      void refetchInstances()
+    }, 2500)
+    return () => window.clearInterval(interval)
+  }, [hasActiveInstanceTask, isUserArea, refetchInstances, session])
   const {
     data: catalog,
     isLoading: catalogLoading,

@@ -13,6 +13,7 @@ function taskLabel(action: string) {
       start: '启动',
       stop: '关机',
       restart: '重启',
+      reinstall: '重装',
       update: '更新',
       delete: '删除',
       deploy: '部署'

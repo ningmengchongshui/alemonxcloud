@@ -59,6 +59,7 @@ var agentCapabilities = []string{
 	"container.list.v1",
 	"container.compose.v1",
 	"container.compose.restart.v1",
+	"container.reinstall.v1",
 	"container.destroy.v1",
 	"image.pull.v1",
 	"image.inspect.v1",
@@ -138,6 +139,7 @@ func runServer() {
 	control.POST("/:name/start", startContainer)
 	control.POST("/:name/stop", stopContainer)
 	control.POST("/:name/restart", restartContainer)
+	control.POST("/:name/reinstall", reinstallContainer)
 	control.POST("/:name/destroy", destroyContainer)
 	control.POST("/:name/bandwidth", applyContainerBandwidth)
 	control.GET("/:name/status", containerStatus)
@@ -813,6 +815,64 @@ func restartContainer(c *gin.Context) {
 	}
 	cacheRouteTarget(ctx, input.Name, input.Route)
 	respondWithBandwidthStatus(c, http.StatusOK, input.Name, "restarted", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
+}
+
+// reinstallContainer intentionally removes an instance's persistent state and
+// then creates it again from the control plane's current immutable runtime
+// payload. It is separate from restart so callers cannot erase data by
+// accident while reconciling a Compose configuration.
+func reinstallContainer(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	var input createRequest
+	if c.ShouldBindJSON(&input) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "重装需要当前实例配置"})
+		return
+	}
+	input.Name = name
+	if !validCreateRequest(input) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "实例重装配置无效"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
+	defer cancel()
+	instanceDir, homeDir, workspaceDir := instancePaths(input.Name)
+	composePath := filepath.Join(instanceDir, instanceComposeFile)
+	if _, err := os.Stat(composePath); err == nil {
+		if _, err := docker(ctx, "compose", "-f", composePath, "down", "--remove-orphans"); err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 清理重装资源失败"})
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法检查实例 Compose 配置"})
+		return
+	} else if _, inspectErr := docker(ctx, "inspect", input.Name); inspectErr == nil {
+		if _, removeErr := docker(ctx, "rm", "-f", input.Name); removeErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "Docker 清理重装容器失败"})
+			return
+		}
+	}
+	_ = clearBandwidthLimit(ctx, input.Name)
+	if err := os.RemoveAll(instanceDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法清理实例数据目录"})
+		return
+	}
+	if err := prepareInstanceDirs(instanceDir, homeDir, workspaceDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法准备重装后的实例数据目录"})
+		return
+	}
+	if err := writeFileAtomically(composePath, []byte(instanceCompose(input, homeDir, workspaceDir)), 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法写入重装后的 Compose 配置"})
+		return
+	}
+	if _, err := docker(ctx, "compose", "-p", composeProject(input.Route), "-f", composePath, "up", "-d", "--remove-orphans"); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "Docker Compose 重装容器失败"})
+		return
+	}
+	cacheRouteTarget(ctx, input.Name, input.Route)
+	respondWithBandwidthStatus(c, http.StatusOK, input.Name, "reinstalled", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
 }
 func deleteContainer(c *gin.Context) {
 	name, ok := checkedName(c)

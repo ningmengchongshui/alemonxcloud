@@ -14,7 +14,7 @@ func TestTaskWorkerConcurrencyUsesBoundedConfiguration(t *testing.T) {
 }
 
 func TestExpiredDangerousLifecycleTasksAreQuarantined(t *testing.T) {
-	for _, action := range []string{"stop", "update", "restart", "destroy", "purge", "retry-deploy"} {
+	for _, action := range []string{"stop", "update", "restart", "reinstall", "destroy", "purge", "retry-deploy"} {
 		if !dangerousRecoveredTask(action) {
 			t.Fatalf("%s must require administrator review after lease expiry", action)
 		}

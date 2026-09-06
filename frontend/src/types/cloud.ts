@@ -41,6 +41,7 @@ export interface Instance {
   image: string
   version: string
   containerName?: string
+  activeTask?: Pick<Task, 'id' | 'action' | 'status'>
   spec: string
   status: string
   runtimeStatus?: string

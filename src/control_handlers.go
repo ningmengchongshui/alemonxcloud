@@ -820,12 +820,16 @@ func queueInstanceAction(c *gin.Context) {
 		queueInstanceUpdate(c, item, user.ID)
 		return
 	}
-	if action != "start" && action != "stop" && action != "restart" {
+	if action != "start" && action != "stop" && action != "restart" && action != "reinstall" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的实例操作"})
 		return
 	}
 	if item.Status == "destroyed" || item.Status == "purged" {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例资源已销毁，不能执行运行操作"})
+		return
+	}
+	if action == "reinstall" && item.Status != "running" && item.Status != "stopped" {
+		c.JSON(http.StatusConflict, gin.H{"message": "仅运行中或已关机的实例可以重装"})
 		return
 	}
 	task, err := scheduleInstanceTask(c.Request.Context(), item.ID, action, user.ID)
@@ -847,7 +851,7 @@ func activeLifecycleTask(ctx context.Context, instanceID string) (*controlTask, 
 	var taskID string
 	err := instanceDB.QueryRowContext(ctx, `SELECT id FROM xcloud_tasks
 		WHERE instance_id=? AND status IN ('pending','running')
-		AND action IN ('create','retry-deploy','start','stop','update','restart','destroy','purge')
+		AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge')
 		ORDER BY created_at DESC LIMIT 1`, instanceID).Scan(&taskID)
 	if err == sql.ErrNoRows || taskID == "" {
 		return nil, nil

@@ -2,6 +2,8 @@ package cloud
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +38,24 @@ func TestMemoryInstanceStoreIsolatedByOwner(t *testing.T) {
 	}
 	if _, ok, err := getStoredInstance(ctx, first.ID, first.OwnerID); err != nil || ok {
 		t.Fatalf("instance should be removed: %t, %v", ok, err)
+	}
+}
+
+func TestInstanceActiveTaskJSONIsLimitedToCardSafeFields(t *testing.T) {
+	item := instance{ActiveTask: &instanceActiveTask{ID: "task-1", Action: "reinstall", Status: "running"}}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, expected := range []string{"\"activeTask\"", "\"id\":\"task-1\"", "\"action\":\"reinstall\"", "\"status\":\"running\""} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("active task field missing %q from %s", expected, text)
+		}
+	}
+	for _, forbidden := range []string{"executionToken", "workerId", "payload", "node"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("active task leaked internal field %q in %s", forbidden, text)
+		}
 	}
 }

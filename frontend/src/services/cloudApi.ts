@@ -76,6 +76,7 @@ export const cloudApi = createApi({
           | 'start'
           | 'stop'
           | 'restart'
+          | 'reinstall'
           | 'destroy'
           | 'destroy-now'
           | 'cancel-destroy'

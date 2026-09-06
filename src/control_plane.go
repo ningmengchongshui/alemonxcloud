@@ -826,7 +826,7 @@ func taskWorkerID() string {
 
 func lifecycleTask(action string) bool {
 	switch action {
-	case "create", "retry-deploy", "start", "stop", "update", "restart", "destroy", "purge":
+	case "create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge":
 		return true
 	}
 	return false
@@ -1032,6 +1032,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 		"stop":         {"running", "destroy_scheduled"},
 		"update":       {"running"},
 		"restart":      {"running", "destroy_scheduled"},
+		"reinstall":    {"running", "stopped"},
 		"destroy":      {"destroy_scheduled"},
 		"purge":        {"destroyed"},
 	}
@@ -1145,6 +1146,24 @@ func executeTask(ctx context.Context, task controlTask) error {
 				next = item.Status
 			}
 			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
+		}
+	case "reinstall":
+		if !n.supportsAgentCapability("container.reinstall.v1") {
+			return errors.New("节点 Agent 尚未支持实例重装，请先升级该节点 Agent")
+		}
+		payload, payloadErr := instanceRuntimePayload(ctx, item.ID, item.ContainerName, route)
+		if payloadErr != nil {
+			return payloadErr
+		}
+		if err = taskMayCallAgent(ctx, task, item.Status); err != nil {
+			return err
+		}
+		var lifecycleResult agentLifecycleResult
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/reinstall", payload, &lifecycleResult)
+		if err == nil {
+			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
+			runtime := "running"
+			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, "running", &runtime, "")
 		}
 	case "bandwidth":
 		var mbps int

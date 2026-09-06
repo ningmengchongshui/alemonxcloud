@@ -58,7 +58,15 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		}
 		return items, nil
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,image,version,spec,status,COALESCE(runtime_status,''),access_address,container_name,created_at,bandwidth_mbps,destroy_at,destroyed_at,purge_at,COALESCE(destroy_reason,''),archived_at FROM xcloud_instances WHERE owner_id=? AND archived_at IS NULL ORDER BY created_at DESC`, ownerID)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,i.bandwidth_mbps,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
+		FROM xcloud_instances i
+		LEFT JOIN xcloud_tasks active_task ON active_task.id=(
+			SELECT t.id FROM xcloud_tasks t
+			WHERE t.instance_id=i.id AND t.status IN ('pending','running')
+			AND t.action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge')
+			ORDER BY t.created_at DESC LIMIT 1
+		)
+		WHERE i.owner_id=? AND i.archived_at IS NULL ORDER BY i.created_at DESC`, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +75,14 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 	for rows.Next() {
 		var item instance
 		var created time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.BandwidthMbps, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt); err != nil {
+		var activeTask instanceActiveTask
+		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.BandwidthMbps, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Format("2006-01-02 15:04")
+		if activeTask.ID != "" {
+			item.ActiveTask = &activeTask
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
