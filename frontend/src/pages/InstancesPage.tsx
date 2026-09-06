@@ -701,29 +701,29 @@ export function InstancesPage({
                 </Button>
               ))}
             </div>
-            <small className="text-slate-500">
-              3、6、12 个月会自动使用对应的阶梯价。
-            </small>
           </fieldset>
-          <div className="mt-4">
-            <div className="rounded-xl border border-slate-200 p-4 text-sm">
-              <label className="grid gap-1.5 font-medium">
-                推广码（可选）
-                <div className="flex gap-2">
+          <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-700">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-300">有推广码？</span>
+              <span className="text-[11px] text-slate-400">可选填写</span>
+            </div>
+            <div className="mt-2 flex gap-2">
                   <input
+                    className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 shadow-none outline-none placeholder:text-slate-400 focus:border-blue-300 focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
                     value={renewPromoCode}
                     onChange={event => setRenewPromoCode(event.target.value)}
-                    placeholder="有推广码再输入"
+                    placeholder="输入推广码"
                   />
                   <Button
+                    className="h-10 px-4"
                     tone="secondary"
                     onClick={() => refreshRenewQuote(renewing, renewPromoCode)}
                   >
                     应用
                   </Button>
-                </div>
-              </label>
-              <div className="mt-3 flex justify-between">
+            </div>
+            <div className="mt-4 space-y-2 text-xs">
+              <div className="flex justify-between gap-3 text-slate-500 dark:text-slate-300">
                 <span>
                   套餐价格
                   {renewQuote?.tierMonths
@@ -737,7 +737,7 @@ export function InstancesPage({
                 </b>
               </div>
               {renewQuote?.program && (
-                <div className="mt-2 flex justify-between text-emerald-700">
+                <div className="flex justify-between gap-3 text-emerald-700">
                   <span>
                     已自动应用：{renewQuote.program.name}
                     {renewQuote.bonusDays

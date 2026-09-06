@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   useAuthorizeMutation,
   useCallbackMutation,
@@ -22,7 +22,35 @@ import { UserOverviewPage } from './pages/UserOverviewPage'
 import { LoginPage } from './pages/LoginPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { AdminPage } from './pages/AdminPage'
-import type { Page, SuperPage } from '@/types/cloud'
+import type { CurrentUser, Page, SuperPage } from '@/types/cloud'
+
+const sessionHintKey = 'alemonxcloud:session-hint'
+
+function readSessionHint(): CurrentUser | null {
+  try {
+    const value = window.sessionStorage.getItem(sessionHintKey)
+    if (!value) return null
+    const user: unknown = JSON.parse(value)
+    return typeof user === 'object' && user !== null && 'username' in user && 'isAdmin' in user &&
+      typeof user.username === 'string' && typeof user.isAdmin === 'boolean'
+      ? user as CurrentUser
+      : null
+  } catch {
+    return null
+  }
+}
+
+function SessionRestoreOverlay() {
+  return (
+    <div className="fixed inset-0 z-[100] grid cursor-wait place-items-center" aria-label="加载中" role="status">
+      <span className="size-5 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" aria-hidden="true" />
+    </div>
+  )
+}
+
+function withSessionRestoreOverlay(content: ReactNode, restoring: boolean) {
+  return <>{content}{restoring && <SessionRestoreOverlay />}</>
+}
 
 const userPaths = new Set([
   '/me',
@@ -126,6 +154,11 @@ export default function App() {
   const [path, setPath] = useState(currentPath)
   const [error, setError] = useState('')
   const { data: session, isLoading } = useGetSessionQuery()
+  const [sessionHint, setSessionHint] = useState<CurrentUser | null>(readSessionHint)
+  const activeSession = useMemo(
+    () => session ?? (isLoading && sessionHint ? { user: sessionHint } : null),
+    [isLoading, session, sessionHint]
+  )
   const logInstanceID = instanceLogID(path)
   const executionInstanceID = instanceExecutionID(path)
   const selectedTicketID = ticketID(path)
@@ -139,32 +172,32 @@ export default function App() {
     isLoading: instancesLoading,
     refetch: refetchInstances
   } = useGetInstancesQuery(undefined, {
-    skip: !session || !isUserArea,
-    pollingInterval: session && isUserArea ? 15000 : 0
+    skip: !activeSession || !isUserArea,
+    pollingInterval: activeSession && isUserArea ? 15000 : 0
   })
   const hasActiveInstanceTask = instances.some(instance =>
     Boolean(instance.activeTask)
   )
   useEffect(() => {
-    if (!session || !isUserArea || !hasActiveInstanceTask) return
+    if (!activeSession || !isUserArea || !hasActiveInstanceTask) return
     const interval = window.setInterval(() => {
       void refetchInstances()
     }, 2500)
     return () => window.clearInterval(interval)
-  }, [hasActiveInstanceTask, isUserArea, refetchInstances, session])
+  }, [activeSession, hasActiveInstanceTask, isUserArea, refetchInstances])
   const {
     data: catalog,
     isLoading: catalogLoading,
     isError: catalogError,
     refetch: refetchCatalog
-  } = useGetCatalogQuery(undefined, { skip: !session || !isUserArea })
+  } = useGetCatalogQuery(undefined, { skip: !activeSession || !isUserArea })
   const {
     data: orders = [],
     isLoading: ordersLoading,
     refetch: refetchOrders
   } = useGetOrdersQuery(undefined, {
-    skip: !session || !isUserArea,
-    pollingInterval: session && isUserArea ? 15000 : 0
+    skip: !activeSession || !isUserArea,
+    pollingInterval: activeSession && isUserArea ? 15000 : 0
   })
   const [authorize] = useAuthorizeMutation()
   const [callback] = useCallbackMutation()
@@ -176,6 +209,18 @@ export default function App() {
     window.history[replace ? 'replaceState' : 'pushState']({}, '', nextPath)
     setPath(nextPath)
   }
+
+  useEffect(() => {
+    if (session?.user) {
+      window.sessionStorage.setItem(sessionHintKey, JSON.stringify(session.user))
+      setSessionHint(session.user)
+      return
+    }
+    if (!isLoading) {
+      window.sessionStorage.removeItem(sessionHintKey)
+      setSessionHint(null)
+    }
+  }, [isLoading, session])
 
   useEffect(() => {
     const onPopState = () => setPath(currentPath())
@@ -199,7 +244,7 @@ export default function App() {
   }, [callback])
 
   useEffect(() => {
-    if (!session || !isUserArea) return
+    if (!activeSession || !isUserArea) return
     // These queries live above the page switch and otherwise remain subscribed
     // while a user moves between /me routes. Revalidate on every route entry
     // instead of showing a previous route's cached snapshot.
@@ -212,7 +257,7 @@ export default function App() {
     refetchCatalog,
     refetchInstances,
     refetchOrders,
-    session
+    activeSession
   ])
 
   async function login() {
@@ -248,19 +293,10 @@ export default function App() {
     navigate('/login', true)
   }
 
-  if (isLoading)
-    return (
-      <main className="auth">
-        <section className="login">
-          <div className="login-card">
-            <h2>正在恢复登录状态…</h2>
-          </div>
-        </section>
-      </main>
-    )
-  if (!session)
-    return (
-      <LoginPage error={error} onLogin={login} onDevLogin={loginAsDeveloper} />
+  if (!activeSession)
+    return withSessionRestoreOverlay(
+      <LoginPage error={error} onLogin={login} onDevLogin={loginAsDeveloper} />,
+      isLoading
     )
   if (path === '/' || path === '/login' || path === '/callback') {
     navigate('/me', true)
@@ -269,13 +305,14 @@ export default function App() {
   const walletUserID = walletHistoryUserID(path)
   const superPage = superPageFor(path)
   if (superPage || walletUserID) {
-    if (!session.user.isAdmin) {
+    if (!activeSession.user.isAdmin) {
       navigate('/me', true)
       return null
     }
     return (
       <Shell
-        user={session.user}
+        user={activeSession.user}
+        restoringSession={isLoading}
         area="super"
         superPage={superPage ?? 'benefits'}
         onSuperPageChange={next => navigate(superPaths[next])}
@@ -301,7 +338,8 @@ export default function App() {
   if (logInstanceID) {
     return (
       <Shell
-        user={session.user}
+        user={activeSession.user}
+        restoringSession={isLoading}
         area="me"
         page="instances"
         onPageChange={next =>
@@ -319,7 +357,7 @@ export default function App() {
         }
         onGoToMe={() => navigate('/me')}
         onGoToSuper={
-          session.user.isAdmin ? () => navigate('/super') : undefined
+          activeSession.user.isAdmin ? () => navigate('/super') : undefined
         }
         onLogout={signOut}
       >
@@ -334,7 +372,8 @@ export default function App() {
   if (executionInstanceID) {
     return (
       <Shell
-        user={session.user}
+        user={activeSession.user}
+        restoringSession={isLoading}
         area="me"
         page="instances"
         onPageChange={next =>
@@ -352,7 +391,7 @@ export default function App() {
         }
         onGoToMe={() => navigate('/me')}
         onGoToSuper={
-          session.user.isAdmin ? () => navigate('/super') : undefined
+          activeSession.user.isAdmin ? () => navigate('/super') : undefined
         }
         onLogout={signOut}
       >
@@ -367,7 +406,8 @@ export default function App() {
   if (selectedTicketID) {
     return (
       <Shell
-        user={session.user}
+        user={activeSession.user}
+        restoringSession={isLoading}
         area="me"
         page="tickets"
         onPageChange={next =>
@@ -385,7 +425,7 @@ export default function App() {
         }
         onGoToMe={() => navigate('/me')}
         onGoToSuper={
-          session.user.isAdmin ? () => navigate('/super') : undefined
+          activeSession.user.isAdmin ? () => navigate('/super') : undefined
         }
         onLogout={signOut}
       >
@@ -466,12 +506,13 @@ export default function App() {
     )
   return (
     <Shell
-      user={session.user}
+      user={activeSession.user}
+      restoringSession={isLoading}
       area="me"
       page={page}
       onPageChange={next => navigate(routeForPage[next])}
       onGoToMe={() => navigate('/me')}
-      onGoToSuper={session.user.isAdmin ? () => navigate('/super') : undefined}
+      onGoToSuper={activeSession.user.isAdmin ? () => navigate('/super') : undefined}
       onLogout={signOut}
     >
       {content}

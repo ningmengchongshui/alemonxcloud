@@ -284,7 +284,6 @@ export function CreateServicePage({
               <span className="selection-number">3</span>
               <div>
                 <h2>选择周期</h2>
-                <p>选择 1、3、6 或 12 个月，阶梯方案会自动计价。</p>
               </div>
             </div>
             <div className="period-controls" role="group" aria-label="订阅周期">
@@ -335,40 +334,44 @@ export function CreateServicePage({
               <dd>{months} 个月</dd>
             </div>
           </dl>
-          <div className="mt-5 rounded-xl border border-slate-200 p-4 text-sm">
-            <label className="grid gap-1.5 font-medium">
-              推广码（可选）
-              <div className="flex gap-2">
+          <div className="mt-5 border-t border-slate-100 pt-4 text-sm dark:border-slate-700">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-300">有推广码？</span>
+              <span className="text-[11px] text-slate-400">可选填写</span>
+            </div>
+            <div className="mt-2 flex gap-2">
                 <input
+                  className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 shadow-none outline-none placeholder:text-slate-400 focus:border-blue-300 focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
                   value={promoCode}
                   onChange={event => setPromoCode(event.target.value)}
-                  placeholder="有推广码再输入"
+                  placeholder="输入推广码"
                 />
-                <Button tone="secondary" onClick={() => preview(promoCode)}>
+                <Button className="h-10 px-4" tone="secondary" onClick={() => preview(promoCode)}>
                   应用
                 </Button>
-              </div>
-            </label>
-            <div className="mt-3 flex justify-between">
-              <span>
+            </div>
+            <div className="mt-4 space-y-2 text-xs">
+              <div className="flex justify-between gap-3 text-slate-500 dark:text-slate-300">
+                <span>
                 套餐价格
                 {quote?.tierMonths ? `（${quote.tierMonths} 个月）` : ''}
-              </span>
-              <b>{quote ? money(quote.listAmountFen) : '—'}</b>
-            </div>
-            {quote?.program && (
-              <div className="mt-2 flex justify-between text-emerald-700">
-                <span>
-                  已自动应用：{quote.program.name}
-                  {quote.bonusDays ? ` · 赠送 ${quote.bonusDays} 天` : ''}
                 </span>
-                <b>
-                  {quote.discountAmountFen
-                    ? `-${money(quote.discountAmountFen)}`
-                    : '权益已生效'}
-                </b>
+                <b>{quote ? money(quote.listAmountFen) : '—'}</b>
               </div>
-            )}
+              {quote?.program && (
+                <div className="flex justify-between gap-3 text-emerald-700">
+                  <span>
+                    已自动应用：{quote.program.name}
+                    {quote.bonusDays ? ` · 赠送 ${quote.bonusDays} 天` : ''}
+                  </span>
+                  <b>
+                    {quote.discountAmountFen
+                      ? `-${money(quote.discountAmountFen)}`
+                      : '权益已生效'}
+                  </b>
+                </div>
+              )}
+            </div>
           </div>
           <div className="my-4">
             <BalanceSettlement

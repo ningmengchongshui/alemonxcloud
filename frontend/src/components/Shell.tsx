@@ -23,6 +23,7 @@ interface ShellProps {
   onGoToMe: () => void
   onGoToSuper?: () => void
   onLogout: () => void
+  restoringSession?: boolean
 }
 type NavItem = { key: Page | SuperPage; icon: string; label: string }
 type NavGroup = { label?: string; items: NavItem[] }
@@ -46,7 +47,8 @@ export function Shell({
   onSuperPageChange,
   onGoToMe,
   onGoToSuper,
-  onLogout
+  onLogout,
+  restoringSession = false
 }: PropsWithChildren<ShellProps>) {
   const displayName = user.username?.trim() || '未命名用户'
   const [profileOpen, setProfileOpen] = useState(false)
@@ -481,6 +483,11 @@ export function Shell({
         )}
         {children}
       </main>
+      {restoringSession && (
+        <div className="fixed inset-0 z-[100] grid cursor-wait place-items-center" aria-label="加载中" role="status">
+          <span className="size-5 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" aria-hidden="true" />
+        </div>
+      )}
     </div>
   )
 }

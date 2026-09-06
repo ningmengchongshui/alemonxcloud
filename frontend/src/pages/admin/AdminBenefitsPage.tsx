@@ -111,6 +111,8 @@ export function AdminBenefitsPage() {
     skip: !grantProgram
   })
   const plans = catalog?.plans ?? []
+  const [filter, setFilter] = useState<'all' | BenefitProgram['triggerType']>('all')
+  const visiblePrograms = filter === 'all' ? programs : programs.filter(program => program.triggerType === filter)
 
   const closeEditor = () => {
     setEditing(null)
@@ -249,7 +251,7 @@ export function AdminBenefitsPage() {
       <PageHeader
         eyebrow="营销运营"
         title="商业权益方案"
-        description="设置自动、推广码或定向权益；系统在结算时匹配最优方案，已生成订单不受后续修改影响。"
+        description="统一管理自动权益、推广码和定向权益；系统在结算时自动匹配一个最优方案。"
         actions={
           <Button
             onClick={() => {
@@ -264,7 +266,7 @@ export function AdminBenefitsPage() {
       />
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-        <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-700 max-[560px]:items-start">
+          <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-700 max-[560px]:items-start">
           <div>
             <h2 className="m-0 text-sm font-bold text-slate-800 dark:text-white">
               方案列表
@@ -273,14 +275,19 @@ export function AdminBenefitsPage() {
               按优先级与适用条件自动参与结算。
             </p>
           </div>
+          <div className="flex flex-wrap gap-2 border-b border-slate-100 px-5 py-3 dark:border-slate-700">
+            {([['all', '全部'], ['automatic', '自动权益'], ['promo_code', '推广码'], ['targeted', '定向权益']] as const).map(([value, label]) => (
+              <button key={value} type="button" onClick={() => setFilter(value)} className={`rounded-md border px-3 py-1.5 text-xs font-bold ${filter === value ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 text-slate-600 dark:border-slate-600 dark:text-slate-200'}`}>{label}</button>
+            ))}
+          </div>
           <span className="shrink-0 text-[11px] font-bold text-slate-500 dark:text-slate-300">
-            共 {programs.length} 个
+            共 {visiblePrograms.length} 个
           </span>
         </div>
-        {programs.length === 0 ? (
+        {visiblePrograms.length === 0 ? (
           <EmptyState
             title="还没有权益方案"
-            description="创建首购、多月购买、续费挽回或渠道推广方案。"
+            description="创建首购、多月购买、续费挽回、渠道推广或定向权益方案。"
             action={
               <Button
                 onClick={() => {
@@ -294,7 +301,7 @@ export function AdminBenefitsPage() {
           />
         ) : (
           <div className="divide-y divide-slate-100 dark:divide-slate-700">
-            {programs.map(program => (
+            {visiblePrograms.map(program => (
               <article
                 key={program.id}
                 className="flex items-center justify-between gap-5 px-5 py-4 max-[760px]:items-start max-[760px]:flex-col"
@@ -323,6 +330,7 @@ export function AdminBenefitsPage() {
                     · 已使用 {program.usedCount}
                     {program.totalLimit ? ` / ${program.totalLimit}` : ''}
                   </p>
+                  {program.triggerType === 'promo_code' && <p className="mb-0 mt-0.5 text-[11px] text-slate-400 dark:text-slate-400">推广码：<b className="text-slate-600 dark:text-slate-200">{program.codeMask || '未配置'}</b> · 渠道：{program.channelLabel || '未标记'} · 每人 {program.codePerUserLimit || '不限'} 次</p>}
                   <p className="mb-0 mt-0.5 text-[11px] text-slate-400 dark:text-slate-400">
                     预算 {money(program.cashSpentFen)} /{' '}
                     {program.cashBudgetFen
