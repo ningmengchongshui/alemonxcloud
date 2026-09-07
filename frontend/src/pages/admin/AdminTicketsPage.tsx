@@ -52,20 +52,6 @@ export function AdminTicketsPage() {
     )
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="支持运营"
-        title="工单管理"
-        description="紧急与高优先级工单优先展示；管理员回复会自动将待受理工单标为处理中。"
-        actions={
-          <Button
-            tone="secondary"
-            loading={tickets.isFetching}
-            onClick={() => void tickets.refetch()}
-          >
-            ↻ 刷新
-          </Button>
-        }
-      />
       <div className="mb-4 grid gap-3">
         <FilterTabs
           value={status}

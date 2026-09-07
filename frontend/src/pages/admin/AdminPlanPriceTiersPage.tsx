@@ -4,7 +4,6 @@ import {
   Button,
   EmptyState,
   LoadingState,
-  PageHeader
 } from '@/components/ui'
 import {
   useGetAdminCatalogQuery,
@@ -73,23 +72,6 @@ export function AdminPlanPriceTiersPage() {
 
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="营销运营"
-        title="套餐"
-        description="设置 3、6、12 个月的折扣值；例如 8.5 表示 8.5 折，未设置时按原价计算。"
-        actions={
-          <Button
-            tone="secondary"
-            loading={catalog.isFetching || tiers.isFetching}
-            onClick={() => {
-              void catalog.refetch()
-              void tiers.refetch()
-            }}
-          >
-            ↻ 刷新
-          </Button>
-        }
-      />
       {error && <Alert tone="error">{error}</Alert>}
       {success && <Alert tone="success">{success}</Alert>}
       {catalog.isLoading || tiers.isLoading ? (

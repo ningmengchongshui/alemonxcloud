@@ -4,7 +4,6 @@ import {
   Button,
   EmptyState,
   LoadingState,
-  PageHeader,
   StatusBadge
 } from '@/components/ui'
 import type { Node } from '@/types/cloud'
@@ -87,20 +86,6 @@ export function AdminNodesPage() {
 
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="资源运营"
-        title="节点管理"
-        description="监控可调度容量、Agent 连通性与运行资源；新实例只会调度到健康节点。"
-        actions={
-          <Button
-            tone="secondary"
-            loading={nodes.isFetching}
-            onClick={() => void nodes.refetch()}
-          >
-            ↻ 刷新
-          </Button>
-        }
-      />
       <div className="mb-5 flex flex-wrap items-center justify-between gap-x-5 gap-y-3 border-y border-slate-200 py-3 text-xs dark:border-slate-700">
         <p className="m-0 text-slate-500 dark:text-slate-300">
           <b className="text-slate-900 dark:text-white">

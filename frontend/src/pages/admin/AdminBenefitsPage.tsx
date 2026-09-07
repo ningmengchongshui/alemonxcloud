@@ -5,7 +5,6 @@ import {
   Dialog,
   DialogFooter,
   EmptyState,
-  PageHeader,
   StatusBadge,
   dialogFieldClass,
   dialogLabelClass
@@ -253,22 +252,17 @@ export function AdminBenefitsPage() {
 
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="营销运营"
-        title="商业权益方案"
-        description="统一管理自动权益、推广码和定向权益；系统在结算时自动匹配一个最优方案。"
-        actions={
-          <Button
-            onClick={() => {
-              setEditing(fresh())
-              setStep(1)
-              setMessage('')
-            }}
-          >
-            新建权益方案
-          </Button>
-        }
-      />
+      <div className="mb-4 flex items-center justify-end gap-2">
+        <Button
+          onClick={() => {
+            setEditing(fresh())
+            setStep(1)
+            setMessage('')
+          }}
+        >
+          新建权益方案
+        </Button>
+      </div>
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
         <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-700 max-[560px]:items-start">

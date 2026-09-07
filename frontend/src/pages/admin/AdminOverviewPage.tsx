@@ -4,7 +4,7 @@ import {
   useGetAdminOrdersQuery,
   useGetAdminTasksQuery
 } from '@/services/cloudApi'
-import { Alert, Button, PageHeader } from '@/components/ui'
+import { Alert, Button } from '@/components/ui'
 
 export function AdminOverviewPage() {
   const orders = useGetAdminOrdersQuery()
@@ -58,35 +58,9 @@ export function AdminOverviewPage() {
       '按任务去重统计，不会把同一任务的重复恢复记录放大为实例风险。请检查消费者进程与 RabbitMQ 连接。'
     ]
   ].filter(([, count]) => Number(count) > 0)
-  async function refresh() {
-    await Promise.all([
-      orders.refetch(),
-      nodes.refetch(),
-      tasks.refetch(),
-      metrics.refetch()
-    ])
-  }
+
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="平台运营"
-        title="超级管理台"
-        description="监控自动交付、资源健康和需要人工处理的任务。"
-        actions={
-          <Button
-            tone="secondary"
-            loading={
-              orders.isFetching ||
-              nodes.isFetching ||
-              tasks.isFetching ||
-              metrics.isFetching
-            }
-            onClick={() => void refresh()}
-          >
-            ↻ 刷新
-          </Button>
-        }
-      />
       <section
         className="flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-slate-200 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-300"
         aria-label="平台概览"

@@ -234,7 +234,7 @@
 
   .me-page,
   .super-page {
-    @apply max-w-screen-xl pt-12;
+    @apply max-w-screen-xl ;
   }
 
   .create-action {

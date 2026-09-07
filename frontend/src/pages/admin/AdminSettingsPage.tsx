@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, LoadingState, PageHeader } from '@/components/ui'
+import { Alert, Button, LoadingState } from '@/components/ui'
 import {
   useGetAdminRechargeContactQuery,
   useSaveAdminRechargeContactMutation
@@ -28,10 +28,6 @@ export function AdminSettingsPage() {
     )
   return (
     <section className="page super-page">
-      <PageHeader
-        title="平台设置"
-        description="管理用户端可见的联系与服务信息。"
-      />
       <section className="max-w-2xl rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
         <h2 className="m-0 text-base font-bold text-slate-900 dark:text-white">
           人工充值咨询

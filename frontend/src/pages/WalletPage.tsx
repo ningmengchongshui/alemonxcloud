@@ -1,4 +1,4 @@
-import { EmptyState, LoadingState, PageHeader } from '@/components/ui'
+import { EmptyState, LoadingState } from '@/components/ui'
 import { XCoinAmount } from '@/components/XCoinMark'
 import {
   useGetWalletEntriesQuery,
@@ -25,10 +25,6 @@ export function WalletPage() {
     useGetWalletEntriesQuery()
   return (
     <section className="page me-page">
-      <PageHeader
-        title="钱包"
-        description="每一笔充值、扣减、购买和续费都可追溯。"
-      />
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
         <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 dark:border-slate-700 max-[560px]:items-start">
           <div>

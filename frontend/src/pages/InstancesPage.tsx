@@ -9,7 +9,6 @@ import {
   Dialog,
   EmptyState,
   LoadingState,
-  PageHeader,
   StatusBadge
 } from '@/components/ui'
 import {
@@ -410,15 +409,7 @@ export function InstancesPage({
 
   return (
     <section className="page me-page">
-      <PageHeader
-        title="运行环境"
-        description="管理服务运行状态、销毁计划和数据保留期。"
-        actions={
-          <Button onClick={onCreate}>
-            <span aria-hidden="true">＋</span> 创建服务
-          </Button>
-        }
-      />
+  
       {error && <Alert tone="error">{error}</Alert>}
       {loading ? (
         <LoadingState>正在同步实例状态…</LoadingState>

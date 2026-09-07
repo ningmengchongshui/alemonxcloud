@@ -5,7 +5,6 @@ import {
   useGetAdminCatalogQuery,
   useSaveAdminPlanMutation
 } from '@/services/cloudApi'
-import { Button, PageHeader } from '@/components/ui'
 
 export function AdminCatalogPage() {
   const catalog = useGetAdminCatalogQuery()
@@ -19,20 +18,6 @@ export function AdminCatalogPage() {
   }
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="商品管理"
-        title="商品目录"
-        description="仅管理用户可购买的计算套餐、资源规格和月度价格。镜像来源请前往独立页面维护。"
-        actions={
-          <Button
-            tone="secondary"
-            loading={catalog.isFetching}
-            onClick={() => void catalog.refetch()}
-          >
-            ↻ 刷新
-          </Button>
-        }
-      />
       <div className="mb-5 flex justify-end">
         <PlanEditor />
       </div>

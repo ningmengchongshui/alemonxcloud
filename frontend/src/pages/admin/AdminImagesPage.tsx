@@ -15,7 +15,6 @@ import {
   DialogFooter,
   dialogFieldClass,
   dialogLabelClass,
-  PageHeader
 } from '@/components/ui'
 import type { CatalogImage } from '@/types/cloud'
 
@@ -51,20 +50,6 @@ export function AdminImagesPage() {
   }
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="镜像管理"
-        title="软件与版本"
-        description="配置可信软件、可购买版本与访问能力；镜像默认使用终端，可按需启用 Web 服务。"
-        actions={
-          <Button
-            tone="secondary"
-            loading={catalog.isFetching}
-            onClick={() => void catalog.refetch()}
-          >
-            ↻ 刷新
-          </Button>
-        }
-      />
       <div className="mb-5 flex justify-end">
         <ImageSourceEditor />
       </div>

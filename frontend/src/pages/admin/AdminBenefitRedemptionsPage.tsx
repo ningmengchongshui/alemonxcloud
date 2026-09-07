@@ -2,7 +2,6 @@ import {
   DataTable,
   EmptyState,
   LoadingState,
-  PageHeader,
   StatusBadge
 } from '@/components/ui'
 import {
@@ -20,11 +19,6 @@ export function AdminBenefitRedemptionsPage() {
 
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="营销运营"
-        title="权益核销记录"
-        description="查看已生效权益对应的订单、优惠金额与赠送天数。"
-      />
       {isLoading ? (
         <LoadingState>正在加载核销记录…</LoadingState>
       ) : items.length === 0 ? (

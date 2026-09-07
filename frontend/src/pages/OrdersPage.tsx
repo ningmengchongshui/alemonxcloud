@@ -11,7 +11,6 @@ import {
   FilterTabs,
   InlineAction,
   LoadingState,
-  PageHeader,
   StatusBadge
 } from '@/components/ui'
 import { XCoinAmount } from '@/components/XCoinMark'
@@ -100,15 +99,6 @@ export function OrdersPage({
 
   return (
     <section className="page me-page">
-      <PageHeader
-        title="服务订阅"
-        description="在这里查看部署进度和订阅记录；续费请前往对应实例。"
-        actions={
-          <Button onClick={onCreate}>
-            <span aria-hidden="true">＋</span> 创建服务
-          </Button>
-        }
-      />
       {!loading && orders.length > 0 && (
         <div className="mb-4 flex items-center justify-between gap-4 border-y border-slate-200 py-3 dark:border-slate-700 max-[700px]:flex-col max-[700px]:items-start">
           <p className="m-0 text-xs text-slate-500 dark:text-slate-300">

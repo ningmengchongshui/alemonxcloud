@@ -1,5 +1,5 @@
 import { useGetWalletQuery } from '@/services/cloudApi'
-import { Button, InlineAction, PageHeader } from '@/components/ui'
+import { Button, InlineAction } from '@/components/ui'
 import { XCoinAmount } from '@/components/XCoinMark'
 import type { Instance } from '@/types/cloud'
 
@@ -29,16 +29,7 @@ export function UserOverviewPage({
     isProgressing(item.status)
   ).length
   return (
-    <section className="page me-page dashboard-page">
-      <PageHeader
-        title="工作台"
-        description="服务状态、余额和待处理事项一目了然。"
-        actions={
-          <Button onClick={onCreate}>
-            <span aria-hidden="true">＋</span>创建服务
-          </Button>
-        }
-      />
+    <section className="page me-page dashboard-page flex justify-between">
       <section
         className="flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-slate-200 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-300"
         aria-label="服务概览"
@@ -69,6 +60,9 @@ export function UserOverviewPage({
           {progressing ? `${progressing} 个服务部署中` : '没有待处理服务'}
         </span>
       </section>
+      <Button onClick={onCreate}>
+        <span aria-hidden="true">＋</span>创建服务
+      </Button>
     </section>
   )
 }

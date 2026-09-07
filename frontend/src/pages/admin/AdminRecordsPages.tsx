@@ -37,20 +37,6 @@ export function AdminOrdersPage() {
   const orders = useGetAdminOrdersQuery()
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="订单记录"
-        title="自动购买订单"
-        description="钱包扣款后自动校验资源并进入部署。"
-        actions={
-          <Button
-            tone="secondary"
-            loading={orders.isFetching}
-            onClick={() => void orders.refetch()}
-          >
-            ↻ 刷新
-          </Button>
-        }
-      />
       <div className="admin-table-wrap">
         <table>
           <thead>
@@ -245,11 +231,6 @@ export function AdminUsersPage({
   }
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="用户运营"
-        title="用户与钱包"
-        description="仅可为已经登录过 xCloud 的用户管理余额；账本流水不可修改。"
-      />
       <div className="mb-4 flex justify-end">
         <input
           value={query}
@@ -439,20 +420,6 @@ export function AdminAuditPage() {
   const audit = useGetAdminAuditLogsQuery()
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="安全审计"
-        title="平台操作记录"
-        description="记录管理员配置、余额和实例生命周期操作。"
-        actions={
-          <Button
-            tone="secondary"
-            loading={audit.isFetching}
-            onClick={() => void audit.refetch()}
-          >
-            ↻ 刷新
-          </Button>
-        }
-      />
       <div className="admin-table-wrap">
         <table>
           <thead>

@@ -3,7 +3,7 @@ import {
   useReadAllNotificationsMutation,
   useReadNotificationMutation
 } from '@/services/cloudApi'
-import { Button, EmptyState, LoadingState, PageHeader } from '@/components/ui'
+import { Button, EmptyState, LoadingState } from '@/components/ui'
 
 export function NotificationsPage({
   onOpenTicket
@@ -19,21 +19,17 @@ export function NotificationsPage({
   const unread = notifications.filter(item => !item.readAt).length
   return (
     <section className="page me-page">
-      <PageHeader
-        title="通知"
-        description="购买、部署、到期和钱包变动都会在这里留下记录。"
-        actions={
-          unread > 0 ? (
-            <Button
-              tone="secondary"
-              loading={markingAll}
-              onClick={() => void readAll()}
-            >
-              全部标为已读
-            </Button>
-          ) : undefined
-        }
-      />
+      <div className="flex items-center justify-end mb-4">
+        {unread > 0 ? (
+          <Button
+            tone="secondary"
+            loading={markingAll}
+            onClick={() => void readAll()}
+          >
+            全部标为已读
+          </Button>
+        ) : undefined}
+      </div>
       {isLoading ? (
         <LoadingState>正在加载站内通知…</LoadingState>
       ) : notifications.length === 0 ? (

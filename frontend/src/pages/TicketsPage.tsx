@@ -97,12 +97,9 @@ export function TicketsPage({
   if (selected) return selected
   return (
     <section className="page me-page">
-      <PageHeader
-        eyebrow="支持中心"
-        title="工单支持"
-        description="提交服务、账务或账号问题；管理员回复会通过站内通知提醒你。"
-        actions={<Button onClick={() => setCreating(true)}>＋ 新建工单</Button>}
-      />
+      <div className="flex items-center justify-end mb-4">
+        <Button onClick={() => setCreating(true)}>＋ 新建工单</Button>
+      </div>
       {tickets.isLoading ? (
         <LoadingState>正在加载工单…</LoadingState>
       ) : (tickets.data ?? []).length === 0 ? (
