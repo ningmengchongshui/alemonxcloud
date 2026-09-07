@@ -383,7 +383,11 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 
 func nodeByID(ctx context.Context, id string) (node, error) {
 	var n node
-	err := instanceDB.QueryRowContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,'') FROM xcloud_nodes WHERE id=?`, id).Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt, &n.AgentToken)
+	var capabilities []byte
+	err := instanceDB.QueryRowContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE id=?`, id).Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt, &n.AgentToken, &capabilities)
+	if err == nil {
+		_ = json.Unmarshal(capabilities, &n.AgentCapabilities)
+	}
 	return n, err
 }
 

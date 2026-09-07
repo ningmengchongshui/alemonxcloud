@@ -23,6 +23,28 @@ func TestIntegrationSchema(t *testing.T) {
 	}
 }
 
+func TestIntegrationNodeByIDLoadsAgentCapabilities(t *testing.T) {
+	setupIntegrationDB(t)
+	ctx := context.Background()
+	nodeID := "node_capability_lookup"
+	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,agent_capabilities,created_at,updated_at)
+		VALUES (?,?,?, ?,?,?,JSON_ARRAY('container.reinstall.v1'),NOW(),NOW())
+		ON DUPLICATE KEY UPDATE agent_capabilities=VALUES(agent_capabilities),updated_at=NOW()`,
+		nodeID, nodeID, "http://agent.invalid", 1, 1024, true)
+	if err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	t.Cleanup(func() { _, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_nodes WHERE id=?`, nodeID) })
+
+	n, err := nodeByID(ctx, nodeID)
+	if err != nil {
+		t.Fatalf("load node: %v", err)
+	}
+	if !n.supportsAgentCapability("container.reinstall.v1") {
+		t.Fatalf("node lookup dropped agent capabilities: %#v", n.AgentCapabilities)
+	}
+}
+
 func TestIntegrationConcurrentRefundCreditsOnce(t *testing.T) {
 	setupIntegrationDB(t)
 	ctx := context.Background()

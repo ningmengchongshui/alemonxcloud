@@ -221,10 +221,6 @@ export function InstanceExecutionPage({
           ))}
         </div>
       )}
-      <p className="mt-3 text-xs text-slate-500 dark:text-slate-300">
-        页面每 5
-        秒刷新一次。容器运行输出请在“日志”页查看；这里记录控制面与生命周期任务的决策和结果。
-      </p>
     </section>
   )
 }
