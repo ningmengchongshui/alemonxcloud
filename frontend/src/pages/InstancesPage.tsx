@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { useDispatch } from 'react-redux'
 import { ActionDialog } from '@/components/ActionDialog'
 import { BalanceSettlement } from '@/components/BalanceSettlement'
-import { SelfHostedControlPanel } from '@/components/SelfHostedControlPanel'
 import {
   Alert,
   Button,
@@ -251,7 +250,6 @@ export function InstancesPage({
   onOpenLogs,
   onOpenTerminal,
   onOpenExecutions
-  ,onOpenControlNode
 }: {
   instances: Instance[]
   orders: Order[]
@@ -260,7 +258,6 @@ export function InstancesPage({
   onOpenLogs: (instanceID: string) => void
   onOpenTerminal: (instanceID: string) => void
   onOpenExecutions: (instanceID: string) => void
-  onOpenControlNode: (nodeID: string) => void
 }) {
   const [error, setError] = useState('')
   const [pending, setPending] = useState<{
@@ -498,7 +495,6 @@ export function InstancesPage({
 
   return (
     <section className="page me-page">
-      <SelfHostedControlPanel onOpen={onOpenControlNode} />
       {error && <Alert tone="error">{error}</Alert>}
       {loading ? (
         <LoadingState>正在同步实例状态…</LoadingState>

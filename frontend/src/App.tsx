@@ -77,6 +77,7 @@ function withSessionRestoreOverlay(content: ReactNode, restoring: boolean) {
 const userPaths = new Set([
   '/me',
   '/me/instances',
+  '/me/nodes',
   '/me/create',
   '/me/orders',
   '/me/wallet',
@@ -104,6 +105,7 @@ function currentPath() {
 }
 function userPageFor(path: string): Page {
   if (path === '/me/instances') return 'instances'
+  if (path === '/me/nodes') return 'selfhosted'
   if (path === '/me/create') return 'create'
   if (path === '/me/orders') return 'orders'
   if (path === '/me/wallet') return 'wallet'
@@ -367,6 +369,7 @@ export default function App() {
             {
               overview: '/me',
               instances: '/me/instances',
+              selfhosted: '/me/nodes',
               create: '/me/create',
               orders: '/me/orders',
               wallet: '/me/wallet',
@@ -401,6 +404,7 @@ export default function App() {
             {
               overview: '/me',
               instances: '/me/instances',
+              selfhosted: '/me/nodes',
               create: '/me/create',
               orders: '/me/orders',
               wallet: '/me/wallet',
@@ -437,13 +441,13 @@ export default function App() {
         user={activeSession.user}
         restoringSession={isLoading}
         area="me"
-        page="instances"
-        onPageChange={next => navigate({ overview: '/me', instances: '/me/instances', create: '/me/create', orders: '/me/orders', wallet: '/me/wallet', notifications: '/me/notifications', tickets: '/me/tickets' }[next])}
+        page="selfhosted"
+        onPageChange={next => navigate({ overview: '/me', instances: '/me/instances', selfhosted: '/me/nodes', create: '/me/create', orders: '/me/orders', wallet: '/me/wallet', notifications: '/me/notifications', tickets: '/me/tickets' }[next])}
         onGoToMe={() => navigate('/me')}
         onGoToSuper={activeSession.user.isAdmin ? () => navigate('/super') : undefined}
         onLogout={signOut}
       >
-        <SelfHostedControlPanel detail nodeID={selectedControlNodeID} onBack={() => navigate('/me/instances')} />
+        <SelfHostedControlPanel detail nodeID={selectedControlNodeID} onBack={() => navigate('/me/nodes')} />
       </Shell>
     )
   }
@@ -459,6 +463,7 @@ export default function App() {
             {
               overview: '/me',
               instances: '/me/instances',
+              selfhosted: '/me/nodes',
               create: '/me/create',
               orders: '/me/orders',
               wallet: '/me/wallet',
@@ -493,6 +498,7 @@ export default function App() {
   const routeForPage: Record<Page, string> = {
     overview: '/me',
     instances: '/me/instances',
+    selfhosted: '/me/nodes',
     create: '/me/create',
     orders: '/me/orders',
     wallet: '/me/wallet',
@@ -521,7 +527,10 @@ export default function App() {
         onOpenExecutions={instanceID =>
           navigate(`/me/instances/${encodeURIComponent(instanceID)}/executions`)
         }
-        onOpenControlNode={nodeID => navigate(`/me/nodes/${encodeURIComponent(nodeID)}`)}
+      />
+    ) : page === 'selfhosted' ? (
+      <SelfHostedControlPanel
+        onOpen={nodeID => navigate(`/me/nodes/${encodeURIComponent(nodeID)}`)}
       />
     ) : page === 'wallet' ? (
       <WalletPage />

@@ -1,6 +1,7 @@
 export type Page =
   | 'overview'
   | 'instances'
+  | 'selfhosted'
   | 'create'
   | 'orders'
   | 'wallet'

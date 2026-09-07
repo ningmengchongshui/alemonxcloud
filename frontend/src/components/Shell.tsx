@@ -71,6 +71,7 @@ export function Shell({
       items: [
         { key: 'overview', icon: '◇', label: '控制台总览' },
         { key: 'instances', icon: '▦', label: '我的实例' },
+        { key: 'selfhosted', icon: '◌', label: '自建节点' },
         { key: 'create', icon: '＋', label: '创建服务' },
         { key: 'orders', icon: '□', label: '订单中心' }
       ]
