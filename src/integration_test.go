@@ -82,6 +82,53 @@ func TestIntegrationConcurrentRefundCreditsOnce(t *testing.T) {
 	}
 }
 
+func TestIntegrationRefundSucceedsAfterManualPurge(t *testing.T) {
+	setupIntegrationDB(t)
+	ctx := context.Background()
+	suffix := newID("purged-refund")
+	ownerID, instanceID, orderID := "user_"+suffix, "ins_"+suffix, "ord_"+suffix
+	now := time.Now().UTC().Truncate(time.Second)
+	start, end := now.Add(-5*24*time.Hour), now.Add(10*24*time.Hour)
+	defer func() {
+		for _, table := range []string{"xcloud_wallet_entries", "xcloud_orders", "xcloud_instances", "xcloud_wallets", "xcloud_users"} {
+			_, _ = instanceDB.Exec(`DELETE FROM `+table+` WHERE `+map[string]string{"xcloud_wallet_entries": "user_id", "xcloud_orders": "owner_id", "xcloud_instances": "owner_id", "xcloud_wallets": "user_id", "xcloud_users": "id"}[table]+`=?`, ownerID)
+		}
+	}()
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_users (id,username,email,last_login_at,created_at) VALUES (?,?,?,?,?)`, ownerID, ownerID, ownerID+"@example.test", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_wallets (user_id,balance_fen,updated_at) VALUES (?,0,?)`, ownerID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, "purged", "example/test", "v1", "1 核 / 1 GB", "purged", "https://example.test", "xcloud-purged", now, end); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_source,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, orderID, ownerID, "plan", "image", instanceID, 1500, orderActive, "wallet", start, end, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := refundOrder(ctx, ownerID, orderID); err != nil {
+		t.Fatalf("refund after purge: %v", err)
+	}
+	var status string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_instances WHERE id=?`, instanceID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "purged" {
+		t.Fatalf("purged instance must remain purged, got %q", status)
+	}
+	var orderStatus string
+	var balance int
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_orders WHERE id=?`, orderID).Scan(&orderStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=?`, ownerID).Scan(&balance); err != nil {
+		t.Fatal(err)
+	}
+	if orderStatus != orderRefund || balance <= 0 {
+		t.Fatalf("purged refund did not settle: status=%q balance=%d", orderStatus, balance)
+	}
+}
+
 func TestIntegrationLifecycleTransitionAndLeaseRecovery(t *testing.T) {
 	setupIntegrationDB(t)
 	ctx := context.Background()

@@ -168,13 +168,6 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 	if instanceID == "" {
 		return refundQuote{}, walletEntry{}, errors.New("订单尚未生成可退款服务")
 	}
-	var lockedInstanceID string
-	if err = tx.QueryRowContext(ctx, `SELECT id FROM xcloud_instances WHERE id=? AND owner_id=? FOR UPDATE`, instanceID, ownerID).Scan(&lockedInstanceID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return refundQuote{}, walletEntry{}, errors.New("实例不存在或已清理")
-		}
-		return refundQuote{}, walletEntry{}, err
-	}
 	segments, err := refundSegments(ctx, tx, instanceID, ownerID, true)
 	if err != nil {
 		return refundQuote{}, walletEntry{}, err
@@ -216,22 +209,33 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 			return refundQuote{}, walletEntry{}, err
 		}
 	}
+	// A user may manually destroy an instance before requesting a refund. The
+	// financial settlement is still determined by the immutable order service
+	// periods; there is simply no remaining runtime to schedule for destruction.
+	// A missing row is treated the same way so an already-purged legacy record
+	// cannot trap a legitimate wallet refund.
+	instanceAlreadyGone := false
 	var runtimeStatus, instanceStatus string
-	if err = tx.QueryRowContext(ctx, `SELECT status,COALESCE(runtime_status,status) FROM xcloud_instances WHERE id=? FOR UPDATE`, instanceID).Scan(&instanceStatus, &runtimeStatus); err != nil {
+	err = tx.QueryRowContext(ctx, `SELECT status,COALESCE(runtime_status,status) FROM xcloud_instances WHERE id=? AND owner_id=? FOR UPDATE`, instanceID, ownerID).Scan(&instanceStatus, &runtimeStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		instanceAlreadyGone = true
+	} else if err != nil {
 		return refundQuote{}, walletEntry{}, err
-	}
-	if instanceStatus != "running" && instanceStatus != "stopped" {
+	} else if instanceStatus == "destroyed" || instanceStatus == "purged" {
+		instanceAlreadyGone = true
+	} else if instanceStatus != "running" && instanceStatus != "stopped" {
 		return refundQuote{}, walletEntry{}, errors.New("实例当前不可退款")
-	}
-	if runtimeStatus != "running" && runtimeStatus != "stopped" {
-		runtimeStatus = "stopped"
-	}
-	changed, err := transitionInstance(ctx, tx, instanceID, []string{instanceStatus}, "destroy_scheduled", &runtimeStatus, "expires_at=?,destroy_at=?,destroy_reason='refund',destroyed_at=NULL,purge_at=NULL,retention_days=?", quote.ServiceEndsAt, quote.ServiceEndsAt, refundRetentionDays)
-	if err != nil {
-		return refundQuote{}, walletEntry{}, err
-	}
-	if !changed {
-		return refundQuote{}, walletEntry{}, errInstanceStateConflict
+	} else {
+		if runtimeStatus != "running" && runtimeStatus != "stopped" {
+			runtimeStatus = "stopped"
+		}
+		changed, transitionErr := transitionInstance(ctx, tx, instanceID, []string{instanceStatus}, "destroy_scheduled", &runtimeStatus, "expires_at=?,destroy_at=?,destroy_reason='refund',destroyed_at=NULL,purge_at=NULL,retention_days=?", quote.ServiceEndsAt, quote.ServiceEndsAt, refundRetentionDays)
+		if transitionErr != nil {
+			return refundQuote{}, walletEntry{}, transitionErr
+		}
+		if !changed {
+			return refundQuote{}, walletEntry{}, errInstanceStateConflict
+		}
 	}
 	if err = writeAuditTx(ctx, tx, ownerID, "order.refund", "order", orderID, map[string]any{"refundAmountFen": quote.RefundAmountFen, "refundableDays": quote.RefundableDays, "serviceEndsAt": quote.ServiceEndsAt, "walletEntryId": entry.ID}); err != nil {
 		return refundQuote{}, walletEntry{}, err
@@ -239,6 +243,10 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 	if err = tx.Commit(); err != nil {
 		return refundQuote{}, walletEntry{}, err
 	}
-	_ = createNotification(ctx, ownerID, "refund", "订单退款已到账", fmt.Sprintf("已退回 %.2f XCoin。服务将继续可用至 %s；届时销毁容器资源，数据再保留 30 天。", float64(entry.AmountFen)/100, quote.ServiceEndsAt.Format("2006-01-02 15:04")), map[string]any{"orderId": orderID, "walletEntryId": entry.ID, "serviceEndsAt": quote.ServiceEndsAt, "dataPurgeAt": quote.DataPurgeAt})
+	message := fmt.Sprintf("已退回 %.2f XCoin。服务将继续可用至 %s；届时销毁容器资源，数据再保留 30 天。", float64(entry.AmountFen)/100, quote.ServiceEndsAt.Format("2006-01-02 15:04"))
+	if instanceAlreadyGone {
+		message = fmt.Sprintf("已退回 %.2f XCoin。实例资源已由此前操作销毁或清理，本次退款不会再执行容器操作。", float64(entry.AmountFen)/100)
+	}
+	_ = createNotification(ctx, ownerID, "refund", "订单退款已到账", message, map[string]any{"orderId": orderID, "walletEntryId": entry.ID, "serviceEndsAt": quote.ServiceEndsAt, "dataPurgeAt": quote.DataPurgeAt, "instanceAlreadyGone": instanceAlreadyGone})
 	return quote, entry, nil
 }
