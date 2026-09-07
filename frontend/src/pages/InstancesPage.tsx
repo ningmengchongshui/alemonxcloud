@@ -31,6 +31,16 @@ import type {
 } from '@/types/cloud'
 
 const subscriptionMonths = [1, 3, 6, 12]
+const serviceTime = (value?: string) =>
+  value
+    ? new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(new Date(value))
+    : '—'
 const renewDiscountLabel = (plan: Plan | undefined, months: number) => {
   const bps = plan?.tierDiscounts?.[months]
   return months > 1 && bps !== undefined && bps < 10000
@@ -603,9 +613,9 @@ export function InstancesPage({
                 )}
                 <div className="flex items-center justify-between gap-4 border-t border-slate-100 px-5 py-3.5 dark:border-slate-700 max-[760px]:items-start max-[760px]:flex-col">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                    <span className="text-slate-500 dark:text-slate-300">
-                      创建于 {new Date(item.createdAt).toLocaleString('zh-CN')}
-                    </span>
+					<span className="text-slate-500 dark:text-slate-300">
+					  服务期：{serviceTime(item.serviceStartsAt)} — {serviceTime(item.serviceExpiresAt)}
+					</span>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full">
                     {!item.terminalOnly && (
@@ -1079,11 +1089,6 @@ export function InstancesPage({
               <div className="mt-2 border-t border-slate-200 pt-2 dark:border-slate-700">
                 <div className="flex justify-between"><span>旧订单退款合计</span><b className="text-emerald-600">¥{(resizeQuote.refundFen / 100).toFixed(2)}</b></div>
                 <div className="mt-1 flex justify-between"><span>新套餐购买合计</span><b>¥{(resizeQuote.chargeFen / 100).toFixed(2)}</b></div>
-                {resizeQuote.items.map(item => (
-                  <p key={item.sourceOrderId} className="mb-0 mt-2 text-[11px] text-slate-500">
-                    {item.sourcePlanName} 订单：退 ¥{(item.refundFen / 100).toFixed(2)}，按新套餐当前价格购入 ¥{(item.replacementChargeFen / 100).toFixed(2)}。
-                  </p>
-                ))}
               </div>
               <p className="mb-0 mt-2 text-slate-500">{resizeQuote.summary}</p>
             </div>

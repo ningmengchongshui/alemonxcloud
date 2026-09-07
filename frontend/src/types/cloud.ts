@@ -54,6 +54,8 @@ export interface Instance {
   archivedAt?: string
   ip: string
   createdAt: string
+	serviceStartsAt?: string
+	serviceExpiresAt?: string
   currentPlanId?: string
   currentPlanName?: string
   planChangeStatus?: 'processing' | 'succeeded' | 'failed' | 'needs_review'

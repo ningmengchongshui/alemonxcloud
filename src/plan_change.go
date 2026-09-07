@@ -281,7 +281,7 @@ func buildPlanChangeQuote(ctx context.Context, ownerID, instanceID, targetPlanID
 	}
 	now := time.Now()
 	seconds, _ := calculatePlanDelta(monthly, targetMonthly, expiry, now)
-	quote := planChangeQuote{QuoteID: newID("quote"), InstanceID: instanceID, CurrentPlanID: currentID, CurrentPlanName: currentName, TargetPlanID: targetPlanID, TargetPlanName: targetName, CurrentCPU: currentCPU, CurrentMemoryMB: currentMemory, TargetCPU: targetCPU, TargetMemoryMB: targetMemory, RemainingSeconds: seconds, ExpiresAt: now.Add(5 * time.Minute), OperationCutoffAt: planChangeRefundAfter(now), Summary: "套餐立即切换并立即结算；旧套餐保留一整天费用后退款，新套餐从当前时刻开始计费"}
+	quote := planChangeQuote{QuoteID: newID("quote"), InstanceID: instanceID, CurrentPlanID: currentID, CurrentPlanName: currentName, TargetPlanID: targetPlanID, TargetPlanName: targetName, CurrentCPU: currentCPU, CurrentMemoryMB: currentMemory, TargetCPU: targetCPU, TargetMemoryMB: targetMemory, RemainingSeconds: seconds, ExpiresAt: now.Add(5 * time.Minute), OperationCutoffAt: planChangeRefundAfter(now), Summary: ""}
 	rows, queryErr := tx.QueryContext(ctx, `SELECT o.id,o.plan_id,p.name,o.amount_fen,o.service_starts_at,o.expires_at
 		FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id
 		WHERE o.owner_id=? AND o.instance_id=? AND o.status=? AND o.service_starts_at IS NOT NULL AND o.expires_at>? ORDER BY o.service_starts_at,o.id`, ownerID, instanceID, orderActive, now)

@@ -53,6 +53,8 @@ type instance struct {
 	ArchivedAt       *time.Time `json:"archivedAt,omitempty"`
 	IP               string     `json:"ip"`
 	CreatedAt        string     `json:"createdAt"`
+	ServiceStartsAt  *time.Time `json:"serviceStartsAt,omitempty"`
+	ServiceExpiresAt *time.Time `json:"serviceExpiresAt,omitempty"`
 	CurrentPlanID    string     `json:"currentPlanId,omitempty"`
 	CurrentPlanName  string     `json:"currentPlanName,omitempty"`
 	PlanChangeStatus string     `json:"planChangeStatus,omitempty"`
