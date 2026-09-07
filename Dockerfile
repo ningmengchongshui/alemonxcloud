@@ -21,7 +21,10 @@ RUN sed -i "s/dl-cdn.alpinelinux.org/${ALPINE_MIRROR}/g" /etc/apk/repositories \
 WORKDIR /app
 ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct
 ENV GOPRIVATE=github.com/xiuxianjs/*
+# The root module locally replaces agent-core. Copy its module definition
+# before resolving dependencies, then copy source after the cacheable download.
 COPY go.mod go.sum ./
+COPY agent-core/go.mod ./agent-core/go.mod
 # The token is only needed when a private GitHub module is present.  Mark the
 # mount optional so ordinary public-module builds do not require a secret.
 RUN --mount=type=secret,id=github_token,required=false \
@@ -36,6 +39,7 @@ RUN --mount=type=secret,id=github_token,required=false \
     else \
         go mod download; \
     fi
+COPY agent-core ./agent-core
 COPY src ./src
 COPY main.go ./
 # 从前端阶段拷贝构建产物
