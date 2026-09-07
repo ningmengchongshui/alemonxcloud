@@ -75,7 +75,6 @@ export function CreateServicePage({
   const [imageVersion, setImageVersion] = useState('')
   const [planID, setPlanID] = useState('')
   const [months, setMonths] = useState(1)
-  const [error, setError] = useState('')
   const [promoCode, setPromoCode] = useState('')
   const [quote, setQuote] = useState<PriceQuote | null>(null)
   const [purchase, { isLoading: saving }] = usePurchaseMutation()
@@ -105,7 +104,6 @@ export function CreateServicePage({
   const preview = useCallback(
     (code = promoCode) => {
       if (!selectedImage || !selectedPlan) return
-      setError('')
       void quotePurchase({
         planId: selectedPlan.id,
         imageId: selectedImage.id,
@@ -116,13 +114,7 @@ export function CreateServicePage({
         .then(value => {
           setQuote(value)
         })
-        .catch(value =>
-          setError(
-            typeof value?.data?.message === 'string'
-              ? value.data.message
-              : '暂时无法计算优惠'
-          )
-        )
+        .catch(() => undefined)
     },
     [months, promoCode, quotePurchase, selectedImage, selectedPlan]
   )
@@ -133,7 +125,6 @@ export function CreateServicePage({
 
   function submit() {
     if (!selectedImage || !selectedPlan) return
-    setError('')
     const started = performance.now()
     trackConsoleEvent('create_service', 'me', 'create', { result: 'started' })
     void purchase({
@@ -152,16 +143,11 @@ export function CreateServicePage({
         dispatch(watchTask({ id: value.task.id, action: value.task.action }))
         onCreated()
       })
-      .catch(value => {
+      .catch(() => {
         trackConsoleEvent('create_service', 'me', 'create', {
           result: 'error',
           durationMs: performance.now() - started
         })
-        setError(
-          typeof value?.data?.message === 'string'
-            ? value.data.message
-            : '购买未完成：余额或可用资源不足时，系统不会扣款，也不会创建订单。'
-        )
       })
   }
 
@@ -217,7 +203,6 @@ export function CreateServicePage({
                           versions.find(version => version.tag.toLowerCase() === 'latest')
                             ?.tag ?? versions[0]?.tag ?? ''
                         )
-                        setError('')
                       }}
                     >
                       <span className="choice-mark">
@@ -241,7 +226,6 @@ export function CreateServicePage({
                       disabled={imageVersions.length === 0}
                       onChange={event => {
                         setImageVersion(event.target.value)
-                        setError('')
                       }}
                     >
                       {imageVersions.length === 0 ? (
@@ -285,7 +269,6 @@ export function CreateServicePage({
                     selected={selectedPlanID === plan.id}
                     onSelect={() => {
                       setPlanID(plan.id)
-                      setError('')
                     }}
                   />
                 ))}
@@ -398,7 +381,6 @@ export function CreateServicePage({
               payableFen={payableFen}
             />
           </div>
-          {error && <Alert tone="error">{error}</Alert>}
           <Button
             className="w-full"
             loading={saving}

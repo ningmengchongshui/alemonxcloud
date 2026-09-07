@@ -9,7 +9,6 @@ import {
   useReplyTicketMutation
 } from '@/services/cloudApi'
 import {
-  Alert,
   Button,
   Dialog,
   EmptyState,
@@ -58,13 +57,11 @@ export function TicketsPage({
   const [body, setBody] = useState('')
   const [instanceID, setInstanceID] = useState('')
   const [orderID, setOrderID] = useState('')
-  const [error, setError] = useState('')
   const [createTicket, { isLoading: saving }] = useCreateTicketMutation()
   const selected = selectedID ? (
     <TicketConversation id={selectedID} onBack={() => onSelect()} />
   ) : null
   async function submit() {
-    setError('')
     try {
       const ticket = await createTicket({
         category,
@@ -80,19 +77,7 @@ export function TicketsPage({
       setInstanceID('')
       setOrderID('')
       onSelect(ticket.id)
-    } catch (value: unknown) {
-      const message =
-        typeof value === 'object' &&
-        value !== null &&
-        'data' in value &&
-        typeof value.data === 'object' &&
-        value.data !== null &&
-        'message' in value.data &&
-        typeof value.data.message === 'string'
-          ? value.data.message
-          : '工单提交失败，请稍后重试'
-      setError(message)
-    }
+    } catch { /* cloudApi already presents the request failure as a Toast. */ }
   }
   if (selected) return selected
   return (
@@ -152,7 +137,6 @@ export function TicketsPage({
           description="请尽量提供可复现的信息，便于管理员快速处理。"
           onClose={() => {
             setCreating(false)
-            setError('')
           }}
           className="max-w-2xl"
         >
@@ -281,14 +265,12 @@ export function TicketsPage({
                 placeholder="请描述现象、发生时间及已尝试的操作"
               />
             </label>
-            {error && <Alert tone="error">{error}</Alert>}
             <div className="flex justify-end gap-2">
               <Button
                 type="button"
                 tone="secondary"
                 onClick={() => {
                   setCreating(false)
-                  setError('')
                 }}
               >
                 取消
@@ -317,7 +299,6 @@ function TicketConversation({
 }) {
   const detail = useGetTicketQuery(id)
   const [reply, setReply] = useState('')
-  const [error, setError] = useState('')
   const [send, { isLoading: sending }] = useReplyTicketMutation()
   const [reopen, { isLoading: reopening }] = useReopenTicketMutation()
   if (detail.isLoading)
@@ -389,9 +370,7 @@ function TicketConversation({
             onClick={() =>
               void reopen(id)
                 .unwrap()
-                .catch(value =>
-                  setError(value?.data?.message ?? '重新打开失败')
-                )
+                .catch(() => undefined)
             }
           >
             重新打开工单
@@ -403,17 +382,13 @@ function TicketConversation({
           helper="补充现象、操作结果或继续回复管理员，便于快速处理。"
           placeholder="请补充问题信息或回复管理员"
           value={reply}
-          error={error}
           sending={sending}
-          onChange={value => {
-            setReply(value)
-            setError('')
-          }}
+          onChange={setReply}
           onSubmit={() =>
             void send({ id, body: reply })
               .unwrap()
               .then(() => setReply(''))
-              .catch(value => setError(value?.data?.message ?? '回复失败'))
+              .catch(() => undefined)
           }
         />
       )}

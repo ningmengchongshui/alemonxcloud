@@ -35,7 +35,7 @@ export function InstanceLogsPage({
   const [filter, setFilter] = useState<LogFilter>('all')
   const [copied, setCopied] = useState(false)
   const viewport = useRef<HTMLDivElement>(null)
-  const { data, isLoading, isFetching, isError, refetch } =
+  const { data, isLoading, isFetching, refetch } =
     useGetInstanceLogsQuery(
       { id: instanceID, tail: 300 },
       { pollingInterval: live ? 5000 : 0, refetchOnFocus: true }
@@ -161,10 +161,6 @@ export function InstanceLogsPage({
       </div>
       {isLoading ? (
         <LoadingState>正在加载容器日志…</LoadingState>
-      ) : isError ? (
-        <Alert tone="error">
-          日志加载失败。实例若正在更新或节点暂时离线，请稍后刷新；生命周期错误可到“执行记录”查看。
-        </Alert>
       ) : (
         <div
           ref={viewport}

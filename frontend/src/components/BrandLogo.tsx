@@ -3,7 +3,7 @@ export function BrandLogo() {
     <span
       className="inline-flex items-center gap-1.5 text-blue-600"
       role="img"
-      aria-label="ALemonX Cloud"
+      aria-label="AlemonX Cloud"
     >
       <span className="text-2xl leading-none font-extrabold tracking-tighter">
         X

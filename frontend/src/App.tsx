@@ -98,17 +98,6 @@ const superPaths: Record<SuperPage, string> = {
   'settings': '/super/settings'
 }
 
-function message(error: unknown, fallback: string) {
-  return typeof error === 'object' &&
-    error !== null &&
-    'data' in error &&
-    typeof error.data === 'object' &&
-    error.data !== null &&
-    'message' in error.data &&
-    typeof error.data.message === 'string'
-    ? error.data.message
-    : fallback
-}
 function currentPath() {
   return window.location.pathname.replace(/\/+$/, '') || '/'
 }
@@ -182,7 +171,6 @@ function safeReturnPath() {
 
 export default function App() {
   const [path, setPath] = useState(currentPath)
-  const [error, setError] = useState('')
   const { data: session, isLoading } = useGetSessionQuery()
   const [sessionHint, setSessionHint] = useState<CurrentUser | null>(
     readSessionHint
@@ -273,10 +261,9 @@ export default function App() {
     void callback({ code, state })
       .unwrap()
       .then(() => navigate(safeReturnPath(), true))
-      .catch(value => {
+      .catch(() => {
         window.history.replaceState({}, '', '/login')
         setPath('/login')
-        setError(message(value, '统一认证失败'))
       })
   }, [callback])
 
@@ -298,31 +285,19 @@ export default function App() {
   ])
 
   async function login() {
-    setError('')
     window.sessionStorage.setItem(
       'alemonxcloud:return-to',
       path === '/super' ? '/super' : '/me'
     )
-    try {
-      window.location.assign(
-        (await authorize(`${window.location.origin}/callback`).unwrap())
-          .authorizeURL
-      )
-    } catch (value) {
-      setError(message(value, '无法发起登录'))
-      throw value
-    }
+    window.location.assign(
+      (await authorize(`${window.location.origin}/callback`).unwrap())
+        .authorizeURL
+    )
   }
 
   async function loginAsDeveloper() {
-    setError('')
-    try {
-      await devLogin().unwrap()
-      navigate(safeReturnPath(), true)
-    } catch (value) {
-      setError(message(value, '开发登录不可用'))
-      throw value
-    }
+    await devLogin().unwrap()
+    navigate(safeReturnPath(), true)
   }
 
   async function signOut() {
@@ -332,7 +307,7 @@ export default function App() {
 
   if (!activeSession)
     return withSessionRestoreOverlay(
-      <LoginPage error={error} onLogin={login} onDevLogin={loginAsDeveloper} />,
+      <LoginPage onLogin={login} onDevLogin={loginAsDeveloper} />,
       isLoading
     )
   if (path === '/' || path === '/login' || path === '/callback') {

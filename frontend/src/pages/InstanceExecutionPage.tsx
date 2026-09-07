@@ -53,7 +53,6 @@ export function InstanceExecutionPage({
   onBack: () => void
 }) {
   const [onlyProblems, setOnlyProblems] = useState(false)
-  const [operationError, setOperationError] = useState('')
   const tasks = useGetInstanceTasksQuery(instanceID, {
     pollingInterval: 5000,
     refetchOnFocus: true
@@ -73,13 +72,10 @@ export function InstanceExecutionPage({
   ).length
 
   async function cancelOne(taskID: string) {
-    setOperationError('')
     try {
       await cancelTask({ instanceId: instanceID, taskId: taskID }).unwrap()
       await tasks.refetch()
-    } catch {
-      setOperationError('任务状态已变化，无法取消；请刷新后确认执行记录。')
-    }
+    } catch { /* cloudApi already presents the request failure as a Toast. */ }
   }
 
   async function cancelPendingTasks() {
@@ -89,13 +85,10 @@ export function InstanceExecutionPage({
       )
     )
       return
-    setOperationError('')
     try {
       await cancelAll(instanceID).unwrap()
       await tasks.refetch()
-    } catch {
-      setOperationError('取消任务失败，请刷新后重试。')
-    }
+    } catch { /* cloudApi already presents the request failure as a Toast. */ }
   }
 
   return (
@@ -137,7 +130,6 @@ export function InstanceExecutionPage({
           条需要关注的执行记录。失败或“待人工复核”不会被静默忽略。
         </Alert>
       )}
-      {operationError && <Alert tone="error">{operationError}</Alert>}
       <div className="mb-4 flex rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <button
           className={`rounded-md px-3 py-1.5 text-sm ${onlyProblems ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-100'}`}
@@ -149,8 +141,6 @@ export function InstanceExecutionPage({
       </div>
       {tasks.isLoading ? (
         <LoadingState>正在读取执行记录…</LoadingState>
-      ) : tasks.isError ? (
-        <Alert tone="error">执行记录加载失败，请稍后刷新。</Alert>
       ) : visible.length === 0 ? (
         <EmptyState
           title="暂无异常记录"
