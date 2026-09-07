@@ -2,6 +2,10 @@ module xcloud
 
 go 1.24.4
 
+require xcloud/agent-core v0.0.0
+
+replace xcloud/agent-core => ./agent-core
+
 toolchain go1.24.9
 
 require (

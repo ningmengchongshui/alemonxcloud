@@ -9,7 +9,10 @@ require (
 	github.com/gin-gonic/gin v1.11.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
+	xcloud/agent-core v0.0.0
 )
+
+replace xcloud/agent-core => ../agent-core
 
 require (
 	github.com/bytedance/sonic v1.14.0 // indirect

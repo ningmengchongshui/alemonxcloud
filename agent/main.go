@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -25,7 +24,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode/utf8"
+
+	agentcore "xcloud/agent-core"
 
 	"github.com/creack/pty"
 	"github.com/gin-gonic/gin"
@@ -688,34 +688,13 @@ func reconcileBandwidth(ctx context.Context) {
 // from callers: the control plane supplies only approved image/tag and plan
 // limits, while the Agent owns all host-facing security and network settings.
 func instanceCompose(input createRequest, homeDir, workspaceDir string) string {
-	cpu := strconv.FormatFloat(input.CPU, 'f', -1, 64)
-	nodeHeap := input.MemoryMB * 3 / 4
-	if nodeHeap < 128 {
-		nodeHeap = 128
+	// Compose policy is shared with self-hosted control. Keeping the platform
+	// adapter here preserves its HTTP API while preventing two policy forks.
+	compose, err := agentcore.Compose(agentcore.ComposeInput{Name: input.Name, Image: input.Image, Route: input.Route, DataDir: homeDir, WorkspaceDir: workspaceDir, Network: envString("XCLOUD_DOCKER_NETWORK", "xcloud_network"), CPU: input.CPU, MemoryMB: input.MemoryMB, BandwidthMbps: input.BandwidthMbps, TerminalMode: input.TerminalMode})
+	if err != nil {
+		return ""
 	}
-	env := map[string]string{
-		"TZ": "Asia/Shanghai", "HOME": "/root", "XDG_CONFIG_HOME": "/root/config", "XDG_CACHE_HOME": "/root/cache",
-		"ALX_DEPLOYMENT": "production", "ALX_OPS_STORAGE": "sqlite", "ALX_CONTAINER": "1", "ALX_WORKSPACE": "/app/workspace", "ALEMONJS_SETUP_ROOTS": "/app/workspace", "ALX_PRIVILEGED_MODE": "enabled",
-		"GOMAXPROCS": cpu, "NODE_OPTIONS": fmt.Sprintf("--max-old-space-size=%d", nodeHeap), "UV_THREADPOOL_SIZE": cpu,
-		"OMP_NUM_THREADS": cpu, "MKL_NUM_THREADS": cpu, "OPENBLAS_NUM_THREADS": cpu, "NUMEXPR_MAX_THREADS": cpu, "PYTHONUNBUFFERED": "1",
-	}
-	keys := []string{"TZ", "HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "ALX_DEPLOYMENT", "ALX_OPS_STORAGE", "ALX_CONTAINER", "ALX_WORKSPACE", "ALEMONJS_SETUP_ROOTS", "ALX_PRIVILEGED_MODE", "GOMAXPROCS", "NODE_OPTIONS", "UV_THREADPOOL_SIZE", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_MAX_THREADS", "PYTHONUNBUFFERED"}
-	var out strings.Builder
-	// Keep the runtime compatible with AlemonX's published Compose contract.
-	// In particular, do not drop every Linux capability: the official image runs
-	// as root and Git must retain normal access to its bind-mounted workspace.
-	fmt.Fprintf(&out, "# Managed by xcloud-agent. Manual edits apply on the next compose up.\nname: %s\nservices:\n  alemonx:\n    container_name: %s\n    image: %s\n    restart: unless-stopped\n    init: true\n    cpus: %s\n    mem_limit: %s\n    memswap_limit: %s\n    shm_size: 1g\n", composeProject(input.Route), yamlString(input.Name), yamlString(input.Image), yamlString(cpu), yamlString(memory(input.MemoryMB)), yamlString(memory(input.MemoryMB)))
-	if input.TerminalMode {
-		// Terminal-mode images run interactively. Without these flags, a command
-		// such as `node` has no TTY and exits instead of keeping its REPL alive.
-		out.WriteString("    stdin_open: true\n    tty: true\n")
-	}
-	out.WriteString("    healthcheck:\n      test: [\"CMD-SHELL\", \"curl -fsS http://127.0.0.1:17390/healthz >/dev/null\"]\n      interval: 30s\n      timeout: 5s\n      retries: 3\n      start_period: 20s\n    environment:\n")
-	for _, key := range keys {
-		fmt.Fprintf(&out, "      %s: %s\n", key, yamlString(env[key]))
-	}
-	fmt.Fprintf(&out, "    volumes:\n      - %s\n      - %s\n    labels:\n      xcloud.managed: \"true\"\n      xcloud.route: %s\n      xcloud.bandwidth_mbps: %q\n    networks:\n      - xcloud_network\nnetworks:\n  xcloud_network:\n    external: true\n    name: %s\n", yamlString(homeDir+":/root"), yamlString(workspaceDir+":/app/workspace"), yamlString(input.Route), strconv.Itoa(input.BandwidthMbps), yamlString(envString("XCLOUD_DOCKER_NETWORK", "xcloud_network")))
-	return out.String()
+	return compose
 }
 
 func instancePaths(name string) (instanceDir, homeDir, workspaceDir string) {
@@ -1145,6 +1124,7 @@ func containerLogs(c *gin.Context) {
 
 const workspaceFileLimit = 1024 * 1024
 const workspaceUploadLimit = 8 * 1024 * 1024
+const terminalResizePrefix = "__XCLOUD_TERM_RESIZE__:"
 
 type workspaceEntry struct {
 	Name       string `json:"name"`
@@ -1155,33 +1135,9 @@ type workspaceEntry struct {
 }
 
 func workspacePath(name, raw string) (string, string, error) {
-	relative := filepath.Clean(filepath.FromSlash(strings.TrimSpace(raw)))
-	if relative == "." || relative == string(filepath.Separator) {
-		relative = ""
-	}
-	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", "", errors.New("工作区路径无效")
-	}
 	_, _, root := instancePaths(name)
-	target := filepath.Join(root, relative)
-	// Workspace files are owned by the tenant, but symbolic links can point at
-	// host paths because this directory is bind-mounted. Never follow them in a
-	// control-plane file request.
-	current := root
-	for _, segment := range strings.Split(relative, string(filepath.Separator)) {
-		if segment == "" {
-			continue
-		}
-		current = filepath.Join(current, segment)
-		info, statErr := os.Lstat(current)
-		if os.IsNotExist(statErr) {
-			break
-		}
-		if statErr != nil || info.Mode()&os.ModeSymlink != 0 {
-			return "", "", errors.New("工作区路径无效")
-		}
-	}
-	return root, target, nil
+	target, _, err := agentcore.WorkspacePath(root, raw)
+	return root, target, err
 }
 
 func listWorkspaceFiles(c *gin.Context) {
@@ -1189,34 +1145,17 @@ func listWorkspaceFiles(c *gin.Context) {
 	if !ok {
 		return
 	}
-	_, directory, err := workspacePath(name, c.Query("path"))
+	_, _, err := workspacePath(name, c.Query("path"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "工作区路径无效"})
 		return
 	}
-	entries, err := os.ReadDir(directory)
+	_, entries, err := agentcore.ListWorkspace(instancePathsForWorkspace(name), c.Query("path"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "目录不存在或无法访问"})
 		return
 	}
-	items := make([]workspaceEntry, 0, len(entries))
-	for _, entry := range entries {
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			continue
-		}
-		kind := "file"
-		if entry.IsDir() {
-			kind = "directory"
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			kind = "symlink"
-		}
-		_, path, _ := workspacePath(name, c.Query("path"))
-		relative, _ := filepath.Rel(filepath.Join(instancePathsForWorkspace(name)), filepath.Join(path, entry.Name()))
-		items = append(items, workspaceEntry{Name: entry.Name(), Path: filepath.ToSlash(relative), Kind: kind, Size: info.Size(), ModifiedAt: info.ModTime().UTC().Format(time.RFC3339)})
-	}
-	c.JSON(http.StatusOK, gin.H{"path": filepath.ToSlash(filepath.Clean(c.Query("path"))), "entries": items})
+	c.JSON(http.StatusOK, gin.H{"path": filepath.ToSlash(filepath.Clean(c.Query("path"))), "entries": entries})
 }
 
 func instancePathsForWorkspace(name string) string {
@@ -1229,26 +1168,12 @@ func readWorkspaceFile(c *gin.Context) {
 	if !ok {
 		return
 	}
-	_, path, err := workspacePath(name, c.Query("path"))
+	content, size, modifiedAt, err := agentcore.ReadWorkspaceText(instancePathsForWorkspace(name), c.Query("path"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "工作区路径无效"})
-		return
-	}
-	info, err := os.Lstat(path)
-	if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		c.JSON(http.StatusNotFound, gin.H{"message": "文件不存在或无法作为文本打开"})
 		return
 	}
-	if info.Size() > workspaceFileLimit {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": "文件超过 1 MB，无法在编辑器中打开"})
-		return
-	}
-	content, err := os.ReadFile(path)
-	if err != nil || !utf8.Valid(content) {
-		c.JSON(http.StatusUnsupportedMediaType, gin.H{"message": "仅支持打开 UTF-8 文本文件"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"path": filepath.ToSlash(filepath.Clean(c.Query("path"))), "content": string(content), "size": info.Size(), "modifiedAt": info.ModTime().UTC().Format(time.RFC3339)})
+	c.JSON(http.StatusOK, gin.H{"path": filepath.ToSlash(filepath.Clean(c.Query("path"))), "content": content, "size": size, "modifiedAt": modifiedAt})
 }
 
 func writeWorkspaceFile(c *gin.Context) {
@@ -1260,24 +1185,16 @@ func writeWorkspaceFile(c *gin.Context) {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	}
-	if c.ShouldBindJSON(&input) != nil || len(input.Content) > workspaceFileLimit {
+	if c.ShouldBindJSON(&input) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "文件内容无效或超过 1 MB"})
 		return
 	}
-	_, path, err := workspacePath(name, input.Path)
+	path, err := agentcore.WriteWorkspaceText(instancePathsForWorkspace(name), input.Path, input.Content)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "工作区路径无效"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0750); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法创建文件目录"})
-		return
-	}
-	if err = os.WriteFile(path, []byte(input.Content), 0600); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法保存文件"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"path": filepath.ToSlash(filepath.Clean(input.Path))})
+	c.JSON(http.StatusOK, gin.H{"path": path})
 }
 
 func uploadWorkspaceFile(c *gin.Context) {
@@ -1293,25 +1210,12 @@ func uploadWorkspaceFile(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "上传内容无效"})
 		return
 	}
-	content, err := base64.StdEncoding.DecodeString(input.Content)
-	if err != nil || len(content) > workspaceUploadLimit {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "上传文件无效或超过 8 MB"})
-		return
-	}
-	_, path, err := workspacePath(name, input.Path)
+	path, size, err := agentcore.UploadWorkspaceBase64(instancePathsForWorkspace(name), input.Path, input.Content)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "工作区路径无效"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0750); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法创建文件目录"})
-		return
-	}
-	if err = os.WriteFile(path, content, 0600); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法保存上传文件"})
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"path": filepath.ToSlash(filepath.Clean(input.Path)), "size": len(content)})
+	c.JSON(http.StatusCreated, gin.H{"path": path, "size": size})
 }
 
 // containerTerminal is intentionally reachable only through the control token.
@@ -1332,7 +1236,12 @@ func containerTerminal(c *gin.Context) {
 	// Use Bash when an image provides it: its interactive line editor supplies
 	// history navigation and completion. Minimal images still fall back to sh
 	// rather than making terminal access depend on a particular base image.
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "-t", "-e", "TERM=xterm-256color", "-e", "COLORTERM=truecolor", name, "/bin/sh", "-c", "if [ -x /bin/bash ]; then exec /bin/bash -i; elif [ -x /usr/bin/bash ]; then exec /usr/bin/bash -i; else exec /bin/sh -i; fi")
+	args, argsErr := agentcore.TerminalDockerArgs(name)
+	if argsErr != nil {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("\r\n受管实例标识无效。\r\n"))
+		return
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	terminal, err := pty.Start(cmd)
 	if err != nil {
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("\r\n无法启动容器终端。\r\n"))
@@ -1367,6 +1276,16 @@ func containerTerminal(c *gin.Context) {
 		if readErr != nil {
 			_ = terminal.Close()
 			return
+		}
+		if strings.HasPrefix(string(data), terminalResizePrefix) {
+			var size struct {
+				Columns uint16 `json:"columns"`
+				Rows    uint16 `json:"rows"`
+			}
+			if json.Unmarshal(data[len(terminalResizePrefix):], &size) == nil && size.Columns > 0 && size.Rows > 0 {
+				_ = pty.Setsize(terminal, &pty.Winsize{Cols: size.Columns, Rows: size.Rows})
+			}
+			continue
 		}
 		if len(data) > 0 {
 			if _, writeErr := terminal.Write(data); writeErr != nil {
@@ -1474,7 +1393,7 @@ func containerAction(c *gin.Context, action string) {
 }
 
 func validCreateRequest(input createRequest) bool {
-	return safeContainerName.MatchString(input.Name) && safeRouteKey.MatchString(input.Route) && validManagedImage(input.Image) && input.CPU > 0 && input.CPU <= 64 && input.MemoryMB >= 256 && input.MemoryMB <= 262144 && input.BandwidthMbps >= 1 && input.BandwidthMbps <= 10000
+	return agentcore.ValidName(input.Name) && agentcore.ValidRoute(input.Route) && validManagedImage(input.Image) && input.CPU > 0 && input.CPU <= 64 && input.MemoryMB >= 256 && input.MemoryMB <= 262144 && input.BandwidthMbps >= 1 && input.BandwidthMbps <= 10000
 }
 func checkedName(c *gin.Context) (string, bool) {
 	name := c.Param("name")

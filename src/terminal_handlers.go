@@ -113,12 +113,28 @@ func instanceTerminalSocket(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "终端节点暂不可用"})
 		return
 	}
-	token, err := decryptNodeToken(node.AgentToken)
-	if err != nil {
-		internalError(c, err)
-		return
+	var agentURL *url.URL
+	var agentHeader http.Header
+	if node.NodeKind == selfHostedNodeKind {
+		base := tunnelInternalURL()
+		token := env("XCLOUD_TUNNEL_COMMAND_TOKEN", "")
+		if base == "" || token == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"message": "自建节点终端网关尚未配置"})
+			return
+		}
+		route := ""
+		_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT route_key FROM xcloud_instances WHERE id=?`, c.Param("id")).Scan(&route)
+		agentURL, err = url.Parse(base + "/terminal?deviceId=" + url.QueryEscape(node.ControlDeviceID) + "&name=" + url.QueryEscape(containerName) + "&route=" + url.QueryEscape(route))
+		agentHeader = http.Header{"Authorization": []string{"Bearer " + token}}
+	} else {
+		token, tokenErr := decryptNodeToken(node.AgentToken)
+		if tokenErr != nil {
+			internalError(c, tokenErr)
+			return
+		}
+		agentURL, err = url.Parse(strings.TrimRight(node.AgentURL, "/") + "/container/" + url.PathEscape(containerName) + "/terminal")
+		agentHeader = http.Header{"Authorization": []string{"Bearer " + token}}
 	}
-	agentURL, err := url.Parse(strings.TrimRight(node.AgentURL, "/") + "/container/" + url.PathEscape(containerName) + "/terminal")
 	if err != nil {
 		internalError(c, err)
 		return
@@ -128,7 +144,6 @@ func instanceTerminalSocket(c *gin.Context) {
 	} else {
 		agentURL.Scheme = "ws"
 	}
-	agentHeader := http.Header{"Authorization": []string{"Bearer " + token}}
 	agentConn, _, err := websocket.DefaultDialer.DialContext(c.Request.Context(), agentURL.String(), agentHeader)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "终端服务暂不可用"})

@@ -330,7 +330,7 @@ func appendTaskEvent(ctx context.Context, id, event, detail string) {
 	_, _ = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_task_events (task_id,event_type,detail,created_at) VALUES (?,?,?,NOW())`, id, event, truncateError(detail))
 }
 func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND last_heartbeat_at>=? FOR UPDATE`, time.Now().Add(-nodeHeartbeatTTL()))
+	rows, err := tx.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND node_kind='platform' AND last_heartbeat_at>=? FOR UPDATE`, time.Now().Add(-nodeHeartbeatTTL()))
 	if err != nil {
 		return node{}, err
 	}
@@ -384,7 +384,7 @@ func selectNodeForPlan(ctx context.Context, tx *sql.Tx, p plan) (node, error) {
 func nodeByID(ctx context.Context, id string) (node, error) {
 	var n node
 	var capabilities []byte
-	err := instanceDB.QueryRowContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE id=?`, id).Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt, &n.AgentToken, &capabilities)
+	err := instanceDB.QueryRowContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_capabilities,JSON_ARRAY()),COALESCE(node_kind,'platform'),COALESCE(control_device_id,'') FROM xcloud_nodes WHERE id=?`, id).Scan(&n.ID, &n.Name, &n.AgentURL, &n.CPUTotal, &n.MemoryTotalMB, &n.Enabled, &n.LastHeartbeatAt, &n.AgentToken, &capabilities, &n.NodeKind, &n.ControlDeviceID)
 	if err == nil {
 		_ = json.Unmarshal(capabilities, &n.AgentCapabilities)
 	}
@@ -392,6 +392,9 @@ func nodeByID(ctx context.Context, id string) (node, error) {
 }
 
 func nodeRequest(ctx context.Context, n node, method, path string, payload any, result any) error {
+	if n.NodeKind == selfHostedNodeKind {
+		return selfHostedNodeRequest(ctx, n, method, path, payload, result)
+	}
 	token, err := decryptNodeToken(n.AgentToken)
 	if err != nil {
 		return fmt.Errorf("读取节点控制令牌: %w", err)

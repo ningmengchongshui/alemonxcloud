@@ -38,21 +38,8 @@ agent-run: ## Build the bare-metal systemd agent
 agent-test: ## Run the bare-metal agent tests
 	cd agent && go test ./...
 
-docker-build: ## Build the container image
-	@if [ -n "$$GITHUB_TOKEN" ]; then \
-		docker build --secret id=github_token,env=GITHUB_TOKEN -t alemonxcloud:latest .; \
-	else \
-		docker build -t alemonxcloud:latest .; \
-	fi
+docker-build: ## Run the container image locally
+	docker compose up -d --build
 
-docker-run: ## Run the container image locally
-	docker run --rm -p 8082:8082 alemonxcloud:latest
-
-integration-up: ## Start the isolated MySQL, Redis, RabbitMQ and Agent test stack
-	docker compose -f compose.integration.yml up -d --build --wait
-
-test-integration: ## Run opt-in integration tests against the isolated stack
-	XCLOUD_INTEGRATION_MYSQL_DSN='xcloud:xcloud-test-only@tcp(127.0.0.1:23306)/xcloud_integration?parseTime=true' go test -tags=integration ./src/...
-
-integration-down: ## Stop and remove only the xcloud-integration test stack and volumes
-	docker compose -f compose.integration.yml down --volumes --remove-orphans
+gateway-build:
+    #

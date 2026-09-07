@@ -135,7 +135,36 @@ func Run() {
 	router.GET("/readyz", readiness)
 	router.GET("/metrics", metrics)
 	router.Any("/__instance_proxy", instanceGateway)
+	// The old target-url tunnel could expose an arbitrary localhost service.
+	// Keep its address as an explicit migration response instead of retaining a
+	// hidden compatibility path; public self-hosted routes now terminate at the
+	// Tunnel Gateway and carry an approved managed-instance route.
+	router.Any("/__control_proxy", func(c *gin.Context) {
+		c.JSON(http.StatusGone, gin.H{"message": "旧版自建反代已下线，请重新接入新版自建 Agent"})
+	})
 	router.GET("/api/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"message": "pong"}) })
+	router.POST("/api/control/authorizations", controlAuthorizationCreate)
+	router.POST("/api/control/enrollment-tokens", requireSession, controlEnrollmentTokenCreate)
+	router.GET("/api/control/enrollment-tokens", requireSession, controlEnrollmentTokens)
+	router.POST("/api/control/enrollment-tokens/:id/revoke", requireSession, controlEnrollmentTokenRevoke)
+	router.GET("/api/control/authorizations/:id", controlAuthorizationPoll)
+	router.GET("/api/control/authorizations/:id/approve", requireSession, controlAuthorizationPage)
+	router.POST("/api/control/authorizations/:id/approve", requireSession, controlAuthorizationApprove)
+	// The v1 in-process target URL tunnel was retired. Device connections must
+	// use the Gateway v3 endpoint; retain this route only as a clear migration
+	// response for old clients.
+	router.GET("/api/control/connect", func(c *gin.Context) {
+		c.JSON(http.StatusGone, gin.H{"message": "xcloud-control v1 已下线，请重新接入新版自建 Agent"})
+	})
+	router.GET("/api/control/selfhosted", requireSession, controlSelfHosted)
+	router.GET("/api/selfhosted/nodes", requireSession, selfHostedNodes)
+	router.GET("/api/selfhosted/nodes/:nodeID", requireSession, selfHostedNodeDetail)
+	router.PUT("/api/selfhosted/nodes/:nodeID/quota", requireSession, updateSelfHostedNodeQuota)
+	router.GET("/api/selfhosted/nodes/:nodeID/instances", requireSession, selfHostedNodeInstances)
+	router.POST("/api/selfhosted/nodes/:nodeID/instances", requireSession, createSelfHostedInstance)
+	router.PUT("/api/control/selfhosted/route", requireSession, controlRouteUpdate)
+	router.POST("/api/control/selfhosted/route/:action", requireSession, controlRouteAction)
+	router.POST("/api/control/selfhosted/revoke", requireSession, controlDeviceRevoke)
 	router.GET("/api/instances", requireSession, listInstances)
 	router.POST("/api/instances", requireSession, createInstance)
 	router.POST("/api/instances/:id/:action", requireSession, queueInstanceAction)
@@ -358,6 +387,30 @@ func instanceGateway(c *gin.Context) {
 	n, err := nodeByID(c.Request.Context(), nodeID)
 	if err != nil || !n.Enabled {
 		c.JSON(http.StatusBadGateway, gin.H{"message": "实例节点不可用"})
+		return
+	}
+	if n.NodeKind == selfHostedNodeKind {
+		gatewayURL := tunnelInternalURL()
+		if gatewayURL == "" {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "自建节点网关尚未配置"})
+			return
+		}
+		target, parseErr := url.Parse(gatewayURL + "/proxy")
+		if parseErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"message": "自建节点网关地址无效"})
+			return
+		}
+		if original := c.GetHeader("X-Forwarded-Uri"); strings.HasPrefix(original, "/") {
+			c.Request.URL.Path, c.Request.URL.RawQuery = original, ""
+		}
+		c.Request.Header.Set("X-Instance-Route-Key", route)
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.FlushInterval = -1
+		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
+			log.Printf("selfhosted instance gateway %s: %v", route, e)
+			http.Error(w, "自建实例暂不可用", http.StatusBadGateway)
+		}
+		proxy.ServeHTTP(c.Writer, c.Request)
 		return
 	}
 	target, err := url.Parse(strings.TrimRight(n.AgentURL, "/"))

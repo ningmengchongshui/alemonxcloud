@@ -22,6 +22,7 @@ import { UserOverviewPage } from './pages/UserOverviewPage'
 import { LoginPage } from './pages/LoginPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { AdminPage } from './pages/AdminPage'
+import { SelfHostedControlPanel } from './components/SelfHostedControlPanel'
 import type { CurrentUser, Page, SuperPage } from '@/types/cloud'
 import { LoadingState } from '@/components/ui'
 
@@ -152,6 +153,11 @@ function instanceTerminalID(path: string) {
     return null
   }
 }
+function controlNodeID(path: string) {
+  const match = path.match(/^\/me\/nodes\/([^/]+)$/)
+  if (!match) return null
+  try { return decodeURIComponent(match[1]) } catch { return null }
+}
 function ticketID(path: string) {
   const match = path.match(/^\/me\/tickets\/([^/]+)$/)
   if (!match) return null
@@ -182,12 +188,14 @@ export default function App() {
   const logInstanceID = instanceLogID(path)
   const executionInstanceID = instanceExecutionID(path)
   const terminalInstanceID = instanceTerminalID(path)
+  const selectedControlNodeID = controlNodeID(path)
   const selectedTicketID = ticketID(path)
   const isUserArea =
     userPaths.has(path) ||
     Boolean(logInstanceID) ||
     Boolean(executionInstanceID) ||
     Boolean(terminalInstanceID) ||
+    Boolean(selectedControlNodeID) ||
     Boolean(selectedTicketID)
   const {
     data: instances = [],
@@ -423,6 +431,22 @@ export default function App() {
       isLoading
     )
   }
+  if (selectedControlNodeID) {
+    return (
+      <Shell
+        user={activeSession.user}
+        restoringSession={isLoading}
+        area="me"
+        page="instances"
+        onPageChange={next => navigate({ overview: '/me', instances: '/me/instances', create: '/me/create', orders: '/me/orders', wallet: '/me/wallet', notifications: '/me/notifications', tickets: '/me/tickets' }[next])}
+        onGoToMe={() => navigate('/me')}
+        onGoToSuper={activeSession.user.isAdmin ? () => navigate('/super') : undefined}
+        onLogout={signOut}
+      >
+        <SelfHostedControlPanel detail nodeID={selectedControlNodeID} onBack={() => navigate('/me/instances')} />
+      </Shell>
+    )
+  }
   if (selectedTicketID) {
     return (
       <Shell
@@ -497,6 +521,7 @@ export default function App() {
         onOpenExecutions={instanceID =>
           navigate(`/me/instances/${encodeURIComponent(instanceID)}/executions`)
         }
+        onOpenControlNode={nodeID => navigate(`/me/nodes/${encodeURIComponent(nodeID)}`)}
       />
     ) : page === 'wallet' ? (
       <WalletPage />

@@ -139,6 +139,8 @@ type plan struct {
 
 type node struct {
 	ID                    string     `json:"id"`
+	NodeKind              string     `json:"nodeKind,omitempty"`
+	ControlDeviceID       string     `json:"controlDeviceId,omitempty"`
 	Name                  string     `json:"name"`
 	AgentURL              string     `json:"agentURL"`
 	CPUTotal              float64    `json:"cpuTotal"`

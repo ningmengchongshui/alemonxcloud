@@ -61,6 +61,28 @@ export interface Instance {
   planChangeStatus?: 'processing' | 'succeeded' | 'failed' | 'needs_review'
   planChangeId?: string
 }
+
+export interface SelfHostedControl {
+  device: { id: string; name: string; version: string; lastHeartbeatAt?: string } | null
+  route: { id: string; routeKey: string; targetURL: string; status: 'enabled' | 'paused' | 'disabled'; accessAddress: string } | null
+  online: boolean
+  bandwidthMbps: number
+}
+export interface SelfHostedNode {
+  id: string
+  name: string
+  deviceId: string
+  status: 'online' | 'offline'
+  lastHeartbeatAt?: string
+  cpuDetected: number
+  memoryDetectedMB: number
+  cpuQuota: number
+  memoryQuotaMB: number
+  cpuUsed: number
+  memoryUsedMB: number
+  agentVersion?: string
+  capabilities: string[]
+}
 export interface WorkspaceEntry { name: string; path: string; kind: 'file' | 'directory' | 'symlink'; size: number; modifiedAt: string }
 export interface WorkspaceListing { path: string; entries: WorkspaceEntry[] }
 export interface WorkspaceFile { path: string; content: string; size: number; modifiedAt: string }

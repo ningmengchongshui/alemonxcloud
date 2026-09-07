@@ -20,6 +20,8 @@ ALemonX Cloud 是 ALemonX 容器实例的自建控制面。用户登录后选择
 | `src/` | Go 控制面、业务 API、任务队列和数据库逻辑 |
 | `frontend/` | React 用户台和超级管理台 |
 | `agent/` | 裸机节点上的 Docker 管理 Agent |
+| `control/` | 用户自建服务的反向代理客户端（xcloud-control） |
+| `gateway/` | 双活 Tunnel Gateway 数据平面 |
 | `deploy/` | Nginx、systemd 和 Prometheus 示例配置 |
 | `docker-compose/` | 用户实例容器模板 |
 

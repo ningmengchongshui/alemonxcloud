@@ -29,7 +29,9 @@ import type {
   PlanPriceTier,
   PlanChangeQuote,
   WorkspaceListing,
-  WorkspaceFile
+  WorkspaceFile,
+  SelfHostedControl
+  , SelfHostedNode
 } from '@/types/cloud'
 
 interface SessionResponse {
@@ -85,6 +87,46 @@ export const cloudApi = createApi({
     getInstances: builder.query<Instance[], void>({
       query: () => '/instances',
       providesTags: ['Instances']
+    }),
+    getSelfHostedControl: builder.query<SelfHostedControl, void>({
+      query: () => '/control/selfhosted',
+      providesTags: ['Instances']
+    }),
+    getSelfHostedNodes: builder.query<SelfHostedNode[], void>({
+      query: () => '/selfhosted/nodes',
+      providesTags: ['Instances']
+    }),
+    getSelfHostedNode: builder.query<SelfHostedNode, string>({
+      query: id => `/selfhosted/nodes/${id}`,
+      providesTags: ['Instances']
+    }),
+    getSelfHostedNodeInstances: builder.query<Instance[], string>({
+      query: id => `/selfhosted/nodes/${id}/instances`,
+      providesTags: ['Instances']
+    }),
+    createSelfHostedNodeInstance: builder.mutation<{ instanceId: string; task?: Task; message?: string }, { nodeID: string; name: string; imageId: string; imageVersion: string; cpu: number; memoryMB: number }>({
+      query: ({ nodeID, ...body }) => ({ url: `/selfhosted/nodes/${nodeID}/instances`, method: 'POST', body }),
+      invalidatesTags: ['Instances']
+    }),
+    updateSelfHostedNodeQuota: builder.mutation<void, { id: string; cpuQuota: number; memoryQuotaMB: number }>({
+      query: ({ id, ...body }) => ({ url: `/selfhosted/nodes/${id}/quota`, method: 'PUT', body }),
+      invalidatesTags: ['Instances']
+    }),
+    saveSelfHostedRoute: builder.mutation<void, { targetURL: string; enabled: boolean }>({
+      query: body => ({ url: '/control/selfhosted/route', method: 'PUT', body }),
+      invalidatesTags: ['Instances', 'Notifications']
+    }),
+    selfHostedRouteAction: builder.mutation<void, 'pause' | 'resume'>({
+      query: action => ({ url: `/control/selfhosted/route/${action}`, method: 'POST' }),
+      invalidatesTags: ['Instances', 'Notifications']
+    }),
+    revokeSelfHostedControl: builder.mutation<void, void>({
+      query: () => ({ url: '/control/selfhosted/revoke', method: 'POST' }),
+      invalidatesTags: ['Instances', 'Notifications']
+    }),
+    createControlEnrollmentToken: builder.mutation<{ id: string; token: string; expiresAt: string }, void>({
+      query: () => ({ url: '/control/enrollment-tokens', method: 'POST' }),
+      invalidatesTags: ['Instances']
     }),
     instanceAction: builder.mutation<
       { task?: Task; message?: string; destroyAt?: string },
@@ -616,6 +658,16 @@ export const cloudApi = createApi({
 export const {
   useGetSessionQuery,
   useGetInstancesQuery,
+  useGetSelfHostedControlQuery,
+  useGetSelfHostedNodesQuery,
+  useGetSelfHostedNodeQuery,
+  useGetSelfHostedNodeInstancesQuery,
+  useCreateSelfHostedNodeInstanceMutation,
+  useUpdateSelfHostedNodeQuotaMutation,
+  useSaveSelfHostedRouteMutation,
+  useSelfHostedRouteActionMutation,
+  useRevokeSelfHostedControlMutation,
+  useCreateControlEnrollmentTokenMutation,
   useInstanceActionMutation,
   useQuotePlanChangeMutation,
   useSubmitPlanChangeMutation,

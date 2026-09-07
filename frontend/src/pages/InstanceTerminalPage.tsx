@@ -72,7 +72,13 @@ export function InstanceTerminalPage({
     const input = terminal.onData(data => {
       if (socket.readyState === WebSocket.OPEN) socket.send(data)
     })
-    const resize = () => fit.fit()
+    const resize = () => {
+      fit.fit()
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(`__XCLOUD_TERM_RESIZE__:${JSON.stringify({ columns: terminal.cols, rows: terminal.rows })}`)
+      }
+    }
+    socket.onopen = resize
     window.addEventListener('resize', resize)
     return () => {
       input.dispose()

@@ -1,0 +1,15 @@
+[Unit]
+Description=xCloud Control reverse proxy client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/xcloud-control run --config /etc/xcloud-control/config.json
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

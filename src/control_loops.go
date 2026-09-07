@@ -114,7 +114,7 @@ func reconcileBandwidthTasks(ctx context.Context) {
 	}
 }
 func enabledNodes(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND last_heartbeat_at>=?`, time.Now().Add(-nodeHeartbeatTTL()))
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND node_kind='platform' AND last_heartbeat_at>=?`, time.Now().Add(-nodeHeartbeatTTL()))
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func enabledNodes(ctx context.Context) ([]node, error) {
 // probed again, otherwise a stale or NULL heartbeat would make it permanently
 // impossible for the control plane to mark that node healthy.
 func heartbeatNodes(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND node_kind='platform'`)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +212,7 @@ func syncInstanceStates(ctx context.Context) {
 	if instanceDB == nil {
 		return
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.container_name,i.status,COALESCE(i.runtime_status,''),n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.agent_token_ciphertext,'') FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('deploying','running','stopped','destroy_scheduled') AND COALESCE(i.runtime_status,'')<>'updating'`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.container_name,i.status,COALESCE(i.runtime_status,''),n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.agent_token_ciphertext,'') FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE n.node_kind='platform' AND i.status IN ('deploying','running','stopped','destroy_scheduled') AND COALESCE(i.runtime_status,'')<>'updating'`)
 	if err != nil {
 		log.Printf("load instance state: %v", err)
 		return

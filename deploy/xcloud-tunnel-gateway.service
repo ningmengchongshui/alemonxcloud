@@ -1,0 +1,16 @@
+[Unit]
+Description=xCloud Tunnel Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xcloud
+EnvironmentFile=/etc/xcloud-tunnel/gateway.env
+ExecStart=/opt/xcloud-tunnel-gateway/xcloud-tunnel-gateway
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
