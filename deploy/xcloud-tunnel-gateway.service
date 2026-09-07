@@ -5,7 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=xcloud
 EnvironmentFile=/etc/xcloud-tunnel/gateway.env
 ExecStart=/opt/xcloud-tunnel-gateway/xcloud-tunnel-gateway
 Restart=always
