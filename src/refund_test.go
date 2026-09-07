@@ -58,3 +58,23 @@ func TestQuoteRefundRejectsDiscontinuousServiceChain(t *testing.T) {
 		t.Fatal("discontinuous order service chain must require manual handling")
 	}
 }
+
+func TestRefundDeductsAlreadySettledDowngradeForSameServiceWindow(t *testing.T) {
+	segment := refundSegment{ID: "order", Status: orderActive, AmountFen: 2000, Start: refundTime(1), End: refundTime(31), Source: "wallet"}
+	now := refundTime(2)
+	quote, _, _, err := quoteRefund([]refundSegment{segment}, segment.ID, now)
+	if err != nil {
+		t.Fatalf("quote refund: %v", err)
+	}
+	quote, err = applyPlanChangeRefundAdjustments(quote, segment, []refundPlanChangeAdjustment{{
+		DeltaFen:         -1000,
+		RemainingSeconds: int64(29 * 24 * 60 * 60),
+		EffectiveAt:      now,
+	}}, now)
+	if err != nil {
+		t.Fatalf("apply downgrade adjustment: %v", err)
+	}
+	if quote.BaseRefundAmountFen != 1733 || quote.PlanChangeAdjustmentFen != -897 || quote.RefundAmountFen != 836 {
+		t.Fatalf("downgrade must reduce, not duplicate, the order refund: %#v", quote)
+	}
+}

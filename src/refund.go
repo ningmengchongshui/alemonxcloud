@@ -17,16 +17,27 @@ const (
 // refundQuote is computed exclusively by the control plane.  The client only
 // displays it; confirmation always repeats the same calculation under locks.
 type refundQuote struct {
-	OrderID         string    `json:"orderId"`
-	Eligible        bool      `json:"eligible"`
-	Reason          string    `json:"reason,omitempty"`
-	TotalDays       int       `json:"totalDays"`
-	RemainingDays   int       `json:"remainingDays"`
-	PrepaidDays     int       `json:"prepaidDays"`
-	RefundableDays  int       `json:"refundableDays"`
-	RefundAmountFen int       `json:"refundAmountFen"`
-	ServiceEndsAt   time.Time `json:"serviceEndsAt"`
-	DataPurgeAt     time.Time `json:"dataPurgeAt"`
+	OrderID                 string    `json:"orderId"`
+	Eligible                bool      `json:"eligible"`
+	Reason                  string    `json:"reason,omitempty"`
+	TotalDays               int       `json:"totalDays"`
+	RemainingDays           int       `json:"remainingDays"`
+	PrepaidDays             int       `json:"prepaidDays"`
+	RefundableDays          int       `json:"refundableDays"`
+	BaseRefundAmountFen     int       `json:"baseRefundAmountFen"`
+	PlanChangeAdjustmentFen int       `json:"planChangeAdjustmentFen"`
+	RefundAmountFen         int       `json:"refundAmountFen"`
+	ServiceEndsAt           time.Time `json:"serviceEndsAt"`
+	DataPurgeAt             time.Time `json:"dataPurgeAt"`
+}
+
+// refundPlanChangeAdjustment is a resource-price delta already settled by a
+// successful plan change. A final order refund must not refund that same
+// service window a second time.
+type refundPlanChangeAdjustment struct {
+	DeltaFen         int
+	RemainingSeconds int64
+	EffectiveAt      time.Time
 }
 
 type refundSegment struct {
@@ -80,18 +91,99 @@ func quoteRefund(segments []refundSegment, orderID string, now time.Time) (refun
 		}
 		finalEnd = finalEnd.Add(-shift)
 		return refundQuote{
-			OrderID:         item.ID,
-			Eligible:        true,
-			TotalDays:       totalDays,
-			RemainingDays:   remainingDays,
-			PrepaidDays:     refundPrepaidDays,
-			RefundableDays:  refundableDays,
-			RefundAmountFen: amount,
-			ServiceEndsAt:   finalEnd,
-			DataPurgeAt:     finalEnd.Add(refundRetentionDays * refundDay),
+			OrderID:             item.ID,
+			Eligible:            true,
+			TotalDays:           totalDays,
+			RemainingDays:       remainingDays,
+			PrepaidDays:         refundPrepaidDays,
+			RefundableDays:      refundableDays,
+			BaseRefundAmountFen: amount,
+			RefundAmountFen:     amount,
+			ServiceEndsAt:       finalEnd,
+			DataPurgeAt:         finalEnd.Add(refundRetentionDays * refundDay),
 		}, shift, index, nil
 	}
 	return refundQuote{}, 0, 0, errors.New("订单不存在或不具备可退款服务期")
+}
+
+func refundPlanChangeAdjustments(ctx context.Context, queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, instanceID, ownerID string, lock bool) ([]refundPlanChangeAdjustment, error) {
+	statement := `SELECT delta_fen,remaining_seconds,COALESCE(completed_at,updated_at)
+		FROM xcloud_instance_plan_changes
+		WHERE instance_id=? AND owner_id=? AND status='succeeded' AND remaining_seconds>0
+		ORDER BY completed_at,created_at`
+	if lock {
+		statement += " FOR UPDATE"
+	}
+	rows, err := queryer.QueryContext(ctx, statement, instanceID, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []refundPlanChangeAdjustment{}
+	for rows.Next() {
+		var item refundPlanChangeAdjustment
+		if err := rows.Scan(&item.DeltaFen, &item.RemainingSeconds, &item.EffectiveAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func applyPlanChangeRefundAdjustments(quote refundQuote, segment refundSegment, changes []refundPlanChangeAdjustment, now time.Time) (refundQuote, error) {
+	if quote.BaseRefundAmountFen == 0 {
+		quote.BaseRefundAmountFen = quote.RefundAmountFen
+	}
+	refundableStart := segment.Start
+	if now.After(refundableStart) {
+		refundableStart = now
+	}
+	refundableEnd := refundableStart.Add(time.Duration(quote.RefundableDays) * refundDay)
+	adjustment := 0
+	for _, change := range changes {
+		if change.DeltaFen == 0 || change.RemainingSeconds <= 0 {
+			continue
+		}
+		coverageStart := change.EffectiveAt
+		if segment.Start.After(coverageStart) {
+			coverageStart = segment.Start
+		}
+		coverageEnd := change.EffectiveAt.Add(time.Duration(change.RemainingSeconds) * time.Second)
+		if segment.End.Before(coverageEnd) {
+			coverageEnd = segment.End
+		}
+		start := refundableStart
+		if coverageStart.After(start) {
+			start = coverageStart
+		}
+		end := refundableEnd
+		if coverageEnd.Before(end) {
+			end = coverageEnd
+		}
+		if !end.After(start) {
+			continue
+		}
+		overlapSeconds := int64(end.Sub(start) / time.Second)
+		if overlapSeconds <= 0 {
+			continue
+		}
+		if change.DeltaFen > 0 {
+			adjustment += int(int64(change.DeltaFen) * overlapSeconds / change.RemainingSeconds)
+			continue
+		}
+		// Round a prior downgrade deduction up so fractional cents cannot cause
+		// another over-refund.
+		magnitude := int64(-change.DeltaFen) * overlapSeconds
+		adjustment -= int((magnitude + change.RemainingSeconds - 1) / change.RemainingSeconds)
+	}
+	quote.PlanChangeAdjustmentFen = adjustment
+	quote.RefundAmountFen = quote.BaseRefundAmountFen + adjustment
+	if quote.RefundAmountFen < 1 {
+		return refundQuote{}, errors.New("已结算的套餐变更已覆盖可退款服务期")
+	}
+	return quote, nil
 }
 
 func validateRefundSegments(segments []refundSegment) error {
@@ -144,7 +236,15 @@ func refundQuoteForOrder(ctx context.Context, ownerID, orderID string) (refundQu
 	if err != nil {
 		return refundQuote{}, err
 	}
-	quote, _, _, err := quoteRefund(segments, orderID, time.Now())
+	now := time.Now()
+	quote, _, targetIndex, err := quoteRefund(segments, orderID, now)
+	if err != nil {
+		return refundQuote{OrderID: orderID, Eligible: false, Reason: err.Error(), PrepaidDays: refundPrepaidDays}, nil
+	}
+	changes, err := refundPlanChangeAdjustments(ctx, instanceDB, instanceID, ownerID, false)
+	if err == nil {
+		quote, err = applyPlanChangeRefundAdjustments(quote, segments[targetIndex], changes, now)
+	}
 	if err != nil {
 		return refundQuote{OrderID: orderID, Eligible: false, Reason: err.Error(), PrepaidDays: refundPrepaidDays}, nil
 	}
@@ -174,6 +274,14 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 	}
 	now := time.Now()
 	quote, shift, targetIndex, err := quoteRefund(segments, orderID, now)
+	if err != nil {
+		return refundQuote{}, walletEntry{}, err
+	}
+	changes, err := refundPlanChangeAdjustments(ctx, tx, instanceID, ownerID, true)
+	if err != nil {
+		return refundQuote{}, walletEntry{}, err
+	}
+	quote, err = applyPlanChangeRefundAdjustments(quote, segments[targetIndex], changes, now)
 	if err != nil {
 		return refundQuote{}, walletEntry{}, err
 	}
@@ -237,7 +345,7 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 			return refundQuote{}, walletEntry{}, errInstanceStateConflict
 		}
 	}
-	if err = writeAuditTx(ctx, tx, ownerID, "order.refund", "order", orderID, map[string]any{"refundAmountFen": quote.RefundAmountFen, "refundableDays": quote.RefundableDays, "serviceEndsAt": quote.ServiceEndsAt, "walletEntryId": entry.ID}); err != nil {
+	if err = writeAuditTx(ctx, tx, ownerID, "order.refund", "order", orderID, map[string]any{"refundAmountFen": quote.RefundAmountFen, "baseRefundAmountFen": quote.BaseRefundAmountFen, "planChangeAdjustmentFen": quote.PlanChangeAdjustmentFen, "refundableDays": quote.RefundableDays, "serviceEndsAt": quote.ServiceEndsAt, "walletEntryId": entry.ID}); err != nil {
 		return refundQuote{}, walletEntry{}, err
 	}
 	if err = tx.Commit(); err != nil {
