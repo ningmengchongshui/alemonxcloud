@@ -563,19 +563,13 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	var img catalogImage
 	var instanceStatus, runtimeStatus, destroyReason string
 	var currentExpiry, activeTaskExpiresAt sql.NullTime
-	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at,ins.status,COALESCE(ins.runtime_status,''),COALESCE(ins.destroy_reason,''),ins.expires_at,ins.active_task_expires_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id JOIN xcloud_instances ins ON ins.id=o.instance_id WHERE o.id=? AND o.owner_id=? AND o.status IN (?,?,?) FOR UPDATE`, sourceOrderID, ownerID, orderActive, orderExpired, orderRefund).Scan(&source.ID, &source.OwnerID, &source.PlanID, &source.ImageID, &source.InstanceID, &source.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt, &instanceStatus, &runtimeStatus, &destroyReason, &currentExpiry, &activeTaskExpiresAt)
+	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at,ins.status,COALESCE(ins.runtime_status,''),COALESCE(ins.destroy_reason,''),ins.expires_at,ins.active_task_expires_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id JOIN xcloud_instances ins ON ins.id=o.instance_id WHERE o.id=? AND o.owner_id=? AND o.status IN (?,?) FOR UPDATE`, sourceOrderID, ownerID, orderActive, orderExpired).Scan(&source.ID, &source.OwnerID, &source.PlanID, &source.ImageID, &source.InstanceID, &source.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt, &instanceStatus, &runtimeStatus, &destroyReason, &currentExpiry, &activeTaskExpiresAt)
 	if err != nil {
 		return order{}, nil, errors.New("订单不可续费")
 	}
-	// A successful immediate plan change supersedes the original order's
-	// resource plan for future renewals without rewriting that historical order.
-	var changedPlanID string
-	if err = tx.QueryRowContext(ctx, `SELECT target_plan_id FROM xcloud_instance_plan_changes WHERE instance_id=? AND status='succeeded' ORDER BY completed_at DESC, created_at DESC LIMIT 1`, source.InstanceID).Scan(&changedPlanID); err == nil && changedPlanID != "" && changedPlanID != source.PlanID {
-		if err = tx.QueryRowContext(ctx, `SELECT id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans WHERE id=?`, changedPlanID).Scan(&p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt); err != nil {
-			return order{}, nil, errors.New("实例当前套餐不可用")
-		}
-		source.PlanID = changedPlanID
-	}
+	// A successful plan change creates replacement orders, so the active source
+	// order is the current package. Historical plan-change rows never override
+	// an order selected for renewal.
 	if !p.Enabled {
 		return order{}, nil, errors.New("套餐已下架，无法续费")
 	}

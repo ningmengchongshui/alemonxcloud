@@ -235,6 +235,11 @@ func containsMonth(items []int, value int) bool {
 }
 
 func programEligible(ctx context.Context, tx *sql.Tx, p benefitProgram, ownerID, scope, planID, renewalInstanceID string, months, list int, grantID *string, lock bool) (bool, error) {
+	// A package replacement is a fresh purchase for pricing and eligibility,
+	// but it deliberately has no promotion-code input and no bonus-day carry.
+	if scope == "plan_change" {
+		scope = "purchase"
+	}
 	now := time.Now()
 	if (p.Status != "active" && p.Status != "scheduled") || (p.OrderScope != "both" && p.OrderScope != scope) || (p.StartsAt != nil && now.Before(*p.StartsAt)) || (p.EndsAt != nil && !now.Before(*p.EndsAt)) || list < p.MinAmountFen || !containsString(p.PlanIDs, planID) || !containsMonth(p.MonthValues, months) || (p.TotalLimit > 0 && p.UsedCount >= p.TotalLimit) {
 		return false, nil
@@ -317,6 +322,7 @@ func quoteCommercialBenefit(ctx context.Context, ownerID, scope, planID, renewal
 	if tx == nil {
 		return benefitQuote{}, errors.New("权益报价需要事务上下文")
 	}
+	planChange := scope == "plan_change"
 	list, tiered, tierDiscountBps, err := tierPrice(ctx, tx, planID, months, monthly, lock)
 	if err != nil {
 		return benefitQuote{}, err
@@ -386,7 +392,7 @@ func quoteCommercialBenefit(ctx context.Context, ownerID, scope, planID, renewal
 		matches := []benefitQuote{}
 		for i := range programs {
 			p := &programs[i]
-			if p.TriggerType == "promo_code" {
+			if p.TriggerType == "promo_code" || (planChange && (p.TriggerType != "automatic" || p.BenefitType == "bonus_days")) {
 				continue
 			}
 			grantID := ""
@@ -428,8 +434,16 @@ func quoteCommercialBenefit(ctx context.Context, ownerID, scope, planID, renewal
 }
 
 func consumeCommercialBenefitTx(ctx context.Context, tx *sql.Tx, ownerID, orderID string, q benefitQuote) error {
+	// The price tier is an immutable order fact even when no marketing benefit
+	// applies. Package replacement later relies on this exact payable rate.
+	tierBps := q.TierDiscountBps
+	if tierBps == 0 {
+		tierBps = 10000
+	}
+	tierSnapshot, _ := json.Marshal(map[string]any{"months": q.TierMonths, "listAmountFen": q.ListAmountFen, "tierDiscountBps": tierBps})
 	if q.program == nil {
-		return nil
+		_, err := tx.ExecContext(ctx, `UPDATE xcloud_orders SET price_tier_snapshot=? WHERE id=?`, tierSnapshot, orderID)
+		return err
 	}
 	p := q.program
 	if p.PerUserLimit > 0 {
@@ -480,9 +494,36 @@ func consumeCommercialBenefitTx(ctx context.Context, tx *sql.Tx, ownerID, orderI
 	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_benefit_redemptions (id,program_id,code_id,grant_id,owner_id,order_id,discount_amount_fen,bonus_days,created_at) VALUES (?,?,?,?,?,?,?,?,NOW())`, redemptionID, p.ID, nullableString(q.codeID), nullableString(q.grantID), ownerID, orderID, q.DiscountAmountFen, q.BonusDays); err != nil {
 		return err
 	}
-	tierSnapshot, _ := json.Marshal(map[string]any{"months": q.TierMonths, "listAmountFen": q.ListAmountFen})
 	_, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET benefit_program_id=?,benefit_snapshot=?,price_tier_snapshot=?,benefit_trigger=?,benefit_priority=?,benefit_channel_label=?,bonus_days=?,promo_code_mask=? WHERE id=?`, p.ID, snapshot, tierSnapshot, p.TriggerType, p.Priority, nullableString(p.ChannelLabel), q.BonusDays, nullableString(p.CodeMask), orderID)
 	return err
+}
+
+// consumePlanChangeAutomaticBenefitTx consumes only the automatic monetary
+// program captured in a replacement quote. Promotion codes, grants and bonus
+// days are intentionally unavailable during a package change.
+func consumePlanChangeAutomaticBenefitTx(ctx context.Context, tx *sql.Tx, ownerID, orderID, programID string, q benefitQuote) error {
+	if programID == "" {
+		return consumeCommercialBenefitTx(ctx, tx, ownerID, orderID, benefitQuote{ListAmountFen: q.ListAmountFen, TierMonths: q.TierMonths, TierDiscountBps: q.TierDiscountBps})
+	}
+	row := tx.QueryRowContext(ctx, benefitProgramSelect+` WHERE p.id=? FOR UPDATE`, programID)
+	p, err := scanBenefitProgram(row)
+	if err != nil {
+		return errors.New("套餐变更权益已不存在，请人工复核")
+	}
+	if p.TriggerType != "automatic" || p.BenefitType == "bonus_days" || (p.OrderScope != "purchase" && p.OrderScope != "both") {
+		return errors.New("套餐变更权益状态已变化，请人工复核")
+	}
+	q.program = &p
+	q.Program = &struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Goal        string `json:"goal"`
+		BenefitType string `json:"benefitType"`
+		TriggerType string `json:"triggerType"`
+		CodeMask    string `json:"codeMask,omitempty"`
+	}{p.ID, p.Name, p.Goal, p.BenefitType, p.TriggerType, p.CodeMask}
+	q.BonusDays = 0
+	return consumeCommercialBenefitTx(ctx, tx, ownerID, orderID, q)
 }
 
 func fmtBenefit(p *benefitProgram) string {

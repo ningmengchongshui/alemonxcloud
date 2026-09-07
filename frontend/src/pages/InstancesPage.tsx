@@ -1063,18 +1063,27 @@ export function InstancesPage({
               </div>
               <div className="mt-2 flex justify-between">
                 <span>
-                  {resizeQuote.chargeFen
-                    ? '需补差价'
-                    : resizeQuote.refundFen
-                      ? '退回钱包'
-                      : '本次应付'}
+                  {resizeQuote.deltaFen > 0
+                    ? '钱包需补'
+                    : resizeQuote.deltaFen < 0
+                      ? '钱包退回'
+                      : '无需补退'}
                 </span>
-                <b className={resizeQuote.refundFen ? 'text-emerald-600' : ''}>
+                <b className={resizeQuote.deltaFen < 0 ? 'text-emerald-600' : ''}>
                   ¥
                   {(
-                    (resizeQuote.chargeFen || resizeQuote.refundFen) / 100
+                    Math.abs(resizeQuote.deltaFen) / 100
                   ).toFixed(2)}
                 </b>
+              </div>
+              <div className="mt-2 border-t border-slate-200 pt-2 dark:border-slate-700">
+                <div className="flex justify-between"><span>旧订单退款合计</span><b className="text-emerald-600">¥{(resizeQuote.refundFen / 100).toFixed(2)}</b></div>
+                <div className="mt-1 flex justify-between"><span>新套餐购买合计</span><b>¥{(resizeQuote.chargeFen / 100).toFixed(2)}</b></div>
+                {resizeQuote.items.map(item => (
+                  <p key={item.sourceOrderId} className="mb-0 mt-2 text-[11px] text-slate-500">
+                    {item.sourcePlanName} 订单：退 ¥{(item.refundFen / 100).toFixed(2)}，按新套餐当前价格购入 ¥{(item.replacementChargeFen / 100).toFixed(2)}。
+                  </p>
+                ))}
               </div>
               <p className="mb-0 mt-2 text-slate-500">{resizeQuote.summary}</p>
             </div>

@@ -1288,6 +1288,13 @@ func queueImmediateDestroy(c *gin.Context, item instance, actorID string) {
 	if item.DestroyAt != nil {
 		at = *item.DestroyAt
 	}
+	// A user explicitly choosing immediate destruction is an intentional waiver
+	// of a refund. Keep this separate from missing containers and other runtime
+	// faults, which must never silently remove refund eligibility.
+	if _, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET destroy_reason='user_no_refund' WHERE id=? AND owner_id=? AND status='destroy_scheduled' AND destroy_reason='manual'`, item.ID, item.OwnerID); err != nil {
+		internalError(c, err)
+		return
+	}
 	task, err := scheduleLifecycleTask(c.Request.Context(), item.ID, "destroy", at)
 	if err != nil {
 		businessError(c, err)

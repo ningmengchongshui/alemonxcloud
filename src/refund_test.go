@@ -9,72 +9,39 @@ func refundTime(day int) time.Time {
 	return time.Date(2026, time.January, day, 12, 0, 0, 0, time.UTC)
 }
 
-func TestQuoteRefundKeepsThreeFullDaysAndMovesRenewals(t *testing.T) {
-	segments := []refundSegment{
-		{ID: "first", Status: orderActive, AmountFen: 3100, Start: refundTime(1), End: time.Date(2026, time.February, 1, 12, 0, 0, 0, time.UTC), Source: "wallet"},
-		{ID: "renewal", Status: orderActive, AmountFen: 2800, Start: time.Date(2026, time.February, 1, 12, 0, 0, 0, time.UTC), End: time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC), Source: "wallet"},
-	}
-	quote, shift, index, err := quoteRefund(segments, "first", refundTime(11))
+func TestInstanceRefundStartsOnFourthShanghaiCalendarDay(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Date(2026, time.September, 7, 23, 59, 0, 0, loc)
+	start := time.Date(2026, time.September, 1, 0, 0, 0, 0, loc)
+	end := time.Date(2026, time.September, 20, 0, 0, 0, 0, loc)
+	quote, err := quoteInstanceRefund([]refundSegment{{ID: "current", Status: orderActive, AmountFen: 1900, Start: start, End: end, Source: "wallet"}}, "current", now)
 	if err != nil {
-		t.Fatalf("quote refund: %v", err)
+		t.Fatalf("instance quote: %v", err)
 	}
-	if index != 0 || quote.TotalDays != 31 || quote.RemainingDays != 21 || quote.RefundableDays != 18 {
-		t.Fatalf("unexpected quote: %#v, index=%d", quote, index)
-	}
-	if shift != 18*refundDay || quote.RefundAmountFen != 1800 {
-		t.Fatalf("unexpected refund calculation: shift=%s, amount=%d", shift, quote.RefundAmountFen)
-	}
-	if want := time.Date(2026, time.February, 11, 12, 0, 0, 0, time.UTC); !quote.ServiceEndsAt.Equal(want) {
-		t.Fatalf("final service end = %s, want %s", quote.ServiceEndsAt, want)
+	want := time.Date(2026, time.September, 10, 0, 0, 0, 0, loc)
+	if !quote.ServiceEndsAt.Equal(want) || quote.RefundAmountFen != 1000 {
+		t.Fatalf("quote = %#v, want cutoff %s and 1000", quote, want)
 	}
 }
 
-func TestQuoteRefundRejectsThreeDaysOrLess(t *testing.T) {
-	segments := []refundSegment{{ID: "order", Status: orderActive, AmountFen: 1000, Start: refundTime(1), End: refundTime(10), Source: "wallet"}}
-	if _, _, _, err := quoteRefund(segments, "order", refundTime(7)); err == nil {
-		t.Fatal("expected remaining three days to be non-refundable")
-	}
-}
-
-func TestQuoteRefundUsesWholeTwentyFourHourDays(t *testing.T) {
-	start := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
-	end := start.Add(10*refundDay + 23*time.Hour)
-	segments := []refundSegment{{ID: "order", Status: orderActive, AmountFen: 1000, Start: start, End: end, Source: "wallet"}}
-	quote, _, _, err := quoteRefund(segments, "order", start.Add(4*refundDay+23*time.Hour))
-	if err != nil {
-		t.Fatalf("quote refund: %v", err)
-	}
-	if quote.TotalDays != 10 || quote.RemainingDays != 6 || quote.RefundableDays != 3 || quote.RefundAmountFen != 300 {
-		t.Fatalf("must use complete 24-hour periods: %#v", quote)
-	}
-}
-
-func TestQuoteRefundRejectsDiscontinuousServiceChain(t *testing.T) {
+func TestQuoteInstanceRefundRejectsDiscontinuousServiceChain(t *testing.T) {
 	segments := []refundSegment{
 		{ID: "first", Status: orderActive, AmountFen: 1000, Start: refundTime(1), End: refundTime(20), Source: "wallet"},
 		{ID: "renewal", Status: orderActive, AmountFen: 1000, Start: refundTime(21), End: refundTime(31), Source: "wallet"},
 	}
-	if _, _, _, err := quoteRefund(segments, "first", refundTime(5)); err == nil {
+	if _, err := quoteInstanceRefund(segments, "first", refundTime(5)); err == nil {
 		t.Fatal("discontinuous order service chain must require manual handling")
 	}
 }
 
-func TestRefundDeductsAlreadySettledDowngradeForSameServiceWindow(t *testing.T) {
-	segment := refundSegment{ID: "order", Status: orderActive, AmountFen: 2000, Start: refundTime(1), End: refundTime(31), Source: "wallet"}
-	now := refundTime(2)
-	quote, _, _, err := quoteRefund([]refundSegment{segment}, segment.ID, now)
-	if err != nil {
-		t.Fatalf("quote refund: %v", err)
+func TestRefundAmountForSegmentUsesItsOwnActualPayment(t *testing.T) {
+	segment := refundSegment{ID: "order", Status: orderActive, AmountFen: 3000, Start: refundTime(1), End: refundTime(31), Source: "wallet"}
+	if got := refundAmountForSegment(segment, refundTime(16)); got != 1500 {
+		t.Fatalf("refund amount = %d, want 1500", got)
 	}
-	quote, err = applyPlanChangeRefundAdjustments(quote, segment, []refundPlanChangeAdjustment{{
-		DeltaFen:         -1000,
-		RemainingSeconds: int64(29 * 24 * 60 * 60),
-		EffectiveAt:      now,
-	}}, now)
-	if err != nil {
-		t.Fatalf("apply downgrade adjustment: %v", err)
-	}
-	if quote.BaseRefundAmountFen != 1733 || quote.PlanChangeAdjustmentFen != -897 || quote.RefundAmountFen != 836 {
-		t.Fatalf("downgrade must reduce, not duplicate, the order refund: %#v", quote)
+	free := segment
+	free.AmountFen = 0
+	if got := refundAmountForSegment(free, refundTime(16)); got != 0 {
+		t.Fatalf("free order refund = %d, want 0", got)
 	}
 }

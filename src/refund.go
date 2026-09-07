@@ -17,27 +17,17 @@ const (
 // refundQuote is computed exclusively by the control plane.  The client only
 // displays it; confirmation always repeats the same calculation under locks.
 type refundQuote struct {
-	OrderID                 string    `json:"orderId"`
-	Eligible                bool      `json:"eligible"`
-	Reason                  string    `json:"reason,omitempty"`
-	TotalDays               int       `json:"totalDays"`
-	RemainingDays           int       `json:"remainingDays"`
-	PrepaidDays             int       `json:"prepaidDays"`
-	RefundableDays          int       `json:"refundableDays"`
-	BaseRefundAmountFen     int       `json:"baseRefundAmountFen"`
-	PlanChangeAdjustmentFen int       `json:"planChangeAdjustmentFen"`
-	RefundAmountFen         int       `json:"refundAmountFen"`
-	ServiceEndsAt           time.Time `json:"serviceEndsAt"`
-	DataPurgeAt             time.Time `json:"dataPurgeAt"`
-}
-
-// refundPlanChangeAdjustment is a resource-price delta already settled by a
-// successful plan change. A final order refund must not refund that same
-// service window a second time.
-type refundPlanChangeAdjustment struct {
-	DeltaFen         int
-	RemainingSeconds int64
-	EffectiveAt      time.Time
+	OrderID             string    `json:"orderId"`
+	Eligible            bool      `json:"eligible"`
+	Reason              string    `json:"reason,omitempty"`
+	TotalDays           int       `json:"totalDays"`
+	RemainingDays       int       `json:"remainingDays"`
+	PrepaidDays         int       `json:"prepaidDays"`
+	RefundableDays      int       `json:"refundableDays"`
+	BaseRefundAmountFen int       `json:"baseRefundAmountFen"`
+	RefundAmountFen     int       `json:"refundAmountFen"`
+	ServiceEndsAt       time.Time `json:"serviceEndsAt"`
+	DataPurgeAt         time.Time `json:"dataPurgeAt"`
 }
 
 type refundSegment struct {
@@ -49,141 +39,65 @@ type refundSegment struct {
 	Source    string
 }
 
-func quoteRefund(segments []refundSegment, orderID string, now time.Time) (refundQuote, time.Duration, int, error) {
-	if err := validateRefundSegments(segments); err != nil {
-		return refundQuote{}, 0, 0, err
-	}
-	for index, item := range segments {
-		if item.ID != orderID {
-			continue
-		}
-		if item.Source != "wallet" {
-			return refundQuote{}, 0, 0, errors.New("仅钱包购买的订单支持自助退款")
-		}
-		if item.Status == orderRefund {
-			return refundQuote{}, 0, 0, errors.New("该订单已退款")
-		}
-		if item.Status != orderActive {
-			return refundQuote{}, 0, 0, errors.New("订单当前不可退款")
-		}
-		if !item.End.After(item.Start) {
-			return refundQuote{}, 0, 0, errors.New("订单服务期无效")
-		}
-
-		eligibleFrom := item.Start
-		if now.After(eligibleFrom) {
-			eligibleFrom = now
-		}
-		totalDays := int(item.End.Sub(item.Start) / refundDay)
-		remainingDays := int(item.End.Sub(eligibleFrom) / refundDay)
-		if totalDays < 1 || remainingDays <= refundPrepaidDays {
-			return refundQuote{}, 0, 0, errors.New("剩余服务期不足 3 个完整自然日，暂不可退款")
-		}
-		refundableDays := remainingDays - refundPrepaidDays
-		amount := int(int64(item.AmountFen) * int64(refundableDays) / int64(totalDays))
-		if amount < 1 {
-			return refundQuote{}, 0, 0, errors.New("可退款金额不足 0.01 XCoin")
-		}
-		shift := time.Duration(refundableDays) * refundDay
-		finalEnd := segments[len(segments)-1].End
-		if index == len(segments)-1 {
-			finalEnd = item.End
-		}
-		finalEnd = finalEnd.Add(-shift)
-		return refundQuote{
-			OrderID:             item.ID,
-			Eligible:            true,
-			TotalDays:           totalDays,
-			RemainingDays:       remainingDays,
-			PrepaidDays:         refundPrepaidDays,
-			RefundableDays:      refundableDays,
-			BaseRefundAmountFen: amount,
-			RefundAmountFen:     amount,
-			ServiceEndsAt:       finalEnd,
-			DataPurgeAt:         finalEnd.Add(refundRetentionDays * refundDay),
-		}, shift, index, nil
-	}
-	return refundQuote{}, 0, 0, errors.New("订单不存在或不具备可退款服务期")
-}
-
-func refundPlanChangeAdjustments(ctx context.Context, queryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, instanceID, ownerID string, lock bool) ([]refundPlanChangeAdjustment, error) {
-	statement := `SELECT delta_fen,remaining_seconds,COALESCE(completed_at,updated_at)
-		FROM xcloud_instance_plan_changes
-		WHERE instance_id=? AND owner_id=? AND status='succeeded' AND remaining_seconds>0
-		ORDER BY completed_at,created_at`
-	if lock {
-		statement += " FOR UPDATE"
-	}
-	rows, err := queryer.QueryContext(ctx, statement, instanceID, ownerID)
+// refundCutoffAt keeps the operation day and the following two natural days.
+// A request on any time of day is therefore refundable from the fourth
+// Asia/Shanghai calendar day at 00:00, never from an arbitrary 72-hour point.
+func refundCutoffAt(now time.Time) time.Time {
+	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
-		return nil, err
+		loc = time.FixedZone("CST", 8*60*60)
 	}
-	defer rows.Close()
-	items := []refundPlanChangeAdjustment{}
-	for rows.Next() {
-		var item refundPlanChangeAdjustment
-		if err := rows.Scan(&item.DeltaFen, &item.RemainingSeconds, &item.EffectiveAt); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	local := now.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day()+refundPrepaidDays, 0, 0, 0, 0, loc)
 }
 
-func applyPlanChangeRefundAdjustments(quote refundQuote, segment refundSegment, changes []refundPlanChangeAdjustment, now time.Time) (refundQuote, error) {
-	if quote.BaseRefundAmountFen == 0 {
-		quote.BaseRefundAmountFen = quote.RefundAmountFen
+// quoteInstanceRefund settles every active service order for an instance at
+// one cutoff. It deliberately does not look at exchanged source orders:
+// replacement orders are now the sole financial fact after a plan change.
+func quoteInstanceRefund(segments []refundSegment, orderID string, now time.Time) (refundQuote, error) {
+	if err := validateRefundSegments(segments); err != nil {
+		return refundQuote{}, err
 	}
-	refundableStart := segment.Start
-	if now.After(refundableStart) {
-		refundableStart = now
-	}
-	refundableEnd := refundableStart.Add(time.Duration(quote.RefundableDays) * refundDay)
-	adjustment := 0
-	for _, change := range changes {
-		if change.DeltaFen == 0 || change.RemainingSeconds <= 0 {
+	cutoff := refundCutoffAt(now)
+	var amount, totalDays, remainingDays, refundableDays int
+	active := 0
+	for _, segment := range segments {
+		if segment.Status != orderActive {
 			continue
 		}
-		coverageStart := change.EffectiveAt
-		if segment.Start.After(coverageStart) {
-			coverageStart = segment.Start
+		active++
+		if segment.Source != "wallet" {
+			return refundQuote{}, errors.New("仅钱包购买的订单支持自助退款")
 		}
-		coverageEnd := change.EffectiveAt.Add(time.Duration(change.RemainingSeconds) * time.Second)
-		if segment.End.Before(coverageEnd) {
-			coverageEnd = segment.End
+		if !segment.End.After(segment.Start) {
+			return refundQuote{}, errors.New("订单服务期无效")
 		}
-		start := refundableStart
-		if coverageStart.After(start) {
-			start = coverageStart
-		}
-		end := refundableEnd
-		if coverageEnd.Before(end) {
-			end = coverageEnd
-		}
-		if !end.After(start) {
+		totalDays += int(segment.End.Sub(segment.Start) / refundDay)
+		if !segment.End.After(cutoff) {
 			continue
 		}
-		overlapSeconds := int64(end.Sub(start) / time.Second)
-		if overlapSeconds <= 0 {
+		start := cutoff
+		if segment.Start.After(start) {
+			start = segment.Start
+		}
+		days := int(segment.End.Sub(start) / refundDay)
+		if days <= 0 {
 			continue
 		}
-		if change.DeltaFen > 0 {
-			adjustment += int(int64(change.DeltaFen) * overlapSeconds / change.RemainingSeconds)
-			continue
-		}
-		// Round a prior downgrade deduction up so fractional cents cannot cause
-		// another over-refund.
-		magnitude := int64(-change.DeltaFen) * overlapSeconds
-		adjustment -= int((magnitude + change.RemainingSeconds - 1) / change.RemainingSeconds)
+		remainingDays += days
+		refundableDays += days
+		amount += prorateFen(segment.AmountFen, segment.Start, segment.End, start)
 	}
-	quote.PlanChangeAdjustmentFen = adjustment
-	quote.RefundAmountFen = quote.BaseRefundAmountFen + adjustment
-	if quote.RefundAmountFen < 1 {
-		return refundQuote{}, errors.New("已结算的套餐变更已覆盖可退款服务期")
+	if active == 0 || amount < 1 {
+		return refundQuote{}, errors.New("剩余服务期不足 3 个自然日，暂不可退款")
 	}
-	return quote, nil
+	return refundQuote{
+		OrderID: orderID, Eligible: true, TotalDays: totalDays,
+		RemainingDays: remainingDays, PrepaidDays: refundPrepaidDays,
+		RefundableDays: refundableDays, BaseRefundAmountFen: amount,
+		RefundAmountFen: amount, ServiceEndsAt: cutoff,
+		DataPurgeAt: cutoff.Add(refundRetentionDays * refundDay),
+	}, nil
 }
 
 func validateRefundSegments(segments []refundSegment) error {
@@ -201,7 +115,10 @@ func validateRefundSegments(segments []refundSegment) error {
 func refundSegments(ctx context.Context, queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, instanceID, ownerID string, lock bool) ([]refundSegment, error) {
-	statement := `SELECT id,status,amount_fen,service_starts_at,expires_at,COALESCE(payment_source,'') FROM xcloud_orders WHERE instance_id=? AND owner_id=? AND service_starts_at IS NOT NULL AND expires_at IS NOT NULL ORDER BY service_starts_at,id`
+	// Exchanged source orders intentionally overlap their replacement service
+	// windows in history. Refund settlement must therefore read only the
+	// current active chain, not every historical order attached to the instance.
+	statement := `SELECT id,status,amount_fen,service_starts_at,expires_at,COALESCE(payment_source,'') FROM xcloud_orders WHERE instance_id=? AND owner_id=? AND status='active' AND service_starts_at IS NOT NULL AND expires_at IS NOT NULL ORDER BY service_starts_at,id`
 	if lock {
 		statement += " FOR UPDATE"
 	}
@@ -221,6 +138,17 @@ func refundSegments(ctx context.Context, queryer interface {
 	return items, rows.Err()
 }
 
+func refundAmountForSegment(segment refundSegment, cutoff time.Time) int {
+	if segment.AmountFen <= 0 || !segment.End.After(cutoff) {
+		return 0
+	}
+	start := cutoff
+	if segment.Start.After(start) {
+		start = segment.Start
+	}
+	return prorateFen(segment.AmountFen, segment.Start, segment.End, start)
+}
+
 func refundQuoteForOrder(ctx context.Context, ownerID, orderID string) (refundQuote, error) {
 	var instanceID string
 	if err := instanceDB.QueryRowContext(ctx, `SELECT COALESCE(instance_id,'') FROM xcloud_orders WHERE id=? AND owner_id=?`, orderID, ownerID).Scan(&instanceID); err != nil {
@@ -232,19 +160,15 @@ func refundQuoteForOrder(ctx context.Context, ownerID, orderID string) (refundQu
 	if instanceID == "" {
 		return refundQuote{}, errors.New("订单尚未生成可退款服务")
 	}
+	var destroyReason string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT COALESCE(destroy_reason,'') FROM xcloud_instances WHERE id=? AND owner_id=?`, instanceID, ownerID).Scan(&destroyReason); err == nil && destroyReason == "user_no_refund" {
+		return refundQuote{OrderID: orderID, Eligible: false, Reason: "该实例已由用户选择直接销毁，不能申请退款", PrepaidDays: refundPrepaidDays}, nil
+	}
 	segments, err := refundSegments(ctx, instanceDB, instanceID, ownerID, false)
 	if err != nil {
 		return refundQuote{}, err
 	}
-	now := time.Now()
-	quote, _, targetIndex, err := quoteRefund(segments, orderID, now)
-	if err != nil {
-		return refundQuote{OrderID: orderID, Eligible: false, Reason: err.Error(), PrepaidDays: refundPrepaidDays}, nil
-	}
-	changes, err := refundPlanChangeAdjustments(ctx, instanceDB, instanceID, ownerID, false)
-	if err == nil {
-		quote, err = applyPlanChangeRefundAdjustments(quote, segments[targetIndex], changes, now)
-	}
+	quote, err := quoteInstanceRefund(segments, orderID, time.Now())
 	if err != nil {
 		return refundQuote{OrderID: orderID, Eligible: false, Reason: err.Error(), PrepaidDays: refundPrepaidDays}, nil
 	}
@@ -273,49 +197,53 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 		return refundQuote{}, walletEntry{}, err
 	}
 	now := time.Now()
-	quote, shift, targetIndex, err := quoteRefund(segments, orderID, now)
-	if err != nil {
-		return refundQuote{}, walletEntry{}, err
-	}
-	changes, err := refundPlanChangeAdjustments(ctx, tx, instanceID, ownerID, true)
-	if err != nil {
-		return refundQuote{}, walletEntry{}, err
-	}
-	quote, err = applyPlanChangeRefundAdjustments(quote, segments[targetIndex], changes, now)
+	quote, err := quoteInstanceRefund(segments, orderID, now)
 	if err != nil {
 		return refundQuote{}, walletEntry{}, err
 	}
 
+	settlementID := newID("refund")
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instance_refund_settlements (id,instance_id,owner_id,requested_order_id,total_refund_fen,service_ends_at,data_purge_at,idempotency_key,created_at) VALUES (?,?,?,?,?,?,?,?,?)`, settlementID, instanceID, ownerID, orderID, quote.RefundAmountFen, quote.ServiceEndsAt, quote.DataPurgeAt, "instance-refund:"+instanceID+":"+orderID, now); err != nil {
+		return refundQuote{}, walletEntry{}, err
+	}
 	var balance int
 	if err = tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {
 		return refundQuote{}, walletEntry{}, errors.New("钱包账户不可用，请重新登录后重试")
 	}
-	nextBalance := balance + quote.RefundAmountFen
-	entry := walletEntry{ID: newID("wal"), UserID: ownerID, AmountFen: quote.RefundAmountFen, BalanceAfterFen: nextBalance, Type: "refund", Note: "订单退款 " + orderID, ActorID: ownerID, OrderID: orderID, CreatedAt: now}
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=?,updated_at=? WHERE user_id=?`, nextBalance, now, ownerID); err != nil {
-		return refundQuote{}, walletEntry{}, err
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,order_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)`, entry.ID, entry.UserID, entry.AmountFen, entry.BalanceAfterFen, entry.Type, entry.Note, entry.ActorID, entry.OrderID, entry.CreatedAt); err != nil {
-		return refundQuote{}, walletEntry{}, err
-	}
-
-	for index, segment := range segments {
-		if index < targetIndex {
+	entry := walletEntry{ID: settlementID, UserID: ownerID, AmountFen: quote.RefundAmountFen, BalanceAfterFen: balance + quote.RefundAmountFen, Type: "refund", Note: "实例退款 " + orderID, ActorID: ownerID, OrderID: orderID, CreatedAt: now}
+	currentBalance := balance
+	for _, segment := range segments {
+		if segment.Status != orderActive {
 			continue
 		}
-		start, end := segment.Start, segment.End.Add(-shift)
-		if index > targetIndex {
-			start = start.Add(-shift)
+		refundAmount := refundAmountForSegment(segment, quote.ServiceEndsAt)
+		// Future renewal orders have not started. Preserve a non-negative service
+		// interval in history while recording that their full paid amount was
+		// refunded as part of this instance-level settlement.
+		end := quote.ServiceEndsAt
+		if segment.Start.After(end) {
+			end = segment.Start
 		}
-		if index == targetIndex {
-			if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,expires_at=?,refunded_at=?,refund_amount_fen=?,refund_wallet_entry_id=?,updated_at=? WHERE id=? AND status=?`, orderRefund, end, now, quote.RefundAmountFen, entry.ID, now, segment.ID, orderActive); err != nil {
+		var walletEntryID any
+		if refundAmount > 0 {
+			currentBalance += refundAmount
+			walletEntryID = newID("wal")
+			if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,order_id,business_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, walletEntryID, ownerID, refundAmount, currentBalance, "refund", "实例退款 "+segment.ID, ownerID, segment.ID, "instance-refund:"+settlementID+":"+segment.ID, now); err != nil {
 				return refundQuote{}, walletEntry{}, err
 			}
-			continue
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET service_starts_at=?,expires_at=?,updated_at=? WHERE id=?`, start, end, now, segment.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instance_refund_settlement_items (id,settlement_id,order_id,refund_fen,wallet_entry_id,created_at) VALUES (?,?,?,?,?,?)`, newID("refunditem"), settlementID, segment.ID, refundAmount, walletEntryID, now); err != nil {
 			return refundQuote{}, walletEntry{}, err
 		}
+		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,expires_at=?,refunded_at=?,refund_amount_fen=?,refund_wallet_entry_id=?,updated_at=? WHERE id=? AND status=?`, orderRefund, end, now, refundAmount, walletEntryID, now, segment.ID, orderActive); err != nil {
+			return refundQuote{}, walletEntry{}, err
+		}
+	}
+	if currentBalance != balance+quote.RefundAmountFen {
+		return refundQuote{}, walletEntry{}, errors.New("退款明细与汇总金额不一致")
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=?,updated_at=? WHERE user_id=?`, currentBalance, now, ownerID); err != nil {
+		return refundQuote{}, walletEntry{}, err
 	}
 	// A user may manually destroy an instance before requesting a refund. The
 	// financial settlement is still determined by the immutable order service
@@ -323,12 +251,14 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 	// A missing row is treated the same way so an already-purged legacy record
 	// cannot trap a legitimate wallet refund.
 	instanceAlreadyGone := false
-	var runtimeStatus, instanceStatus string
-	err = tx.QueryRowContext(ctx, `SELECT status,COALESCE(runtime_status,status) FROM xcloud_instances WHERE id=? AND owner_id=? FOR UPDATE`, instanceID, ownerID).Scan(&instanceStatus, &runtimeStatus)
+	var runtimeStatus, instanceStatus, destroyReason string
+	err = tx.QueryRowContext(ctx, `SELECT status,COALESCE(runtime_status,status),COALESCE(destroy_reason,'') FROM xcloud_instances WHERE id=? AND owner_id=? FOR UPDATE`, instanceID, ownerID).Scan(&instanceStatus, &runtimeStatus, &destroyReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		instanceAlreadyGone = true
 	} else if err != nil {
 		return refundQuote{}, walletEntry{}, err
+	} else if destroyReason == "user_no_refund" {
+		return refundQuote{}, walletEntry{}, errors.New("该实例已由用户选择直接销毁，不能申请退款")
 	} else if instanceStatus == "destroyed" || instanceStatus == "purged" {
 		instanceAlreadyGone = true
 	} else if instanceStatus != "running" && instanceStatus != "stopped" {
@@ -345,7 +275,7 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 			return refundQuote{}, walletEntry{}, errInstanceStateConflict
 		}
 	}
-	if err = writeAuditTx(ctx, tx, ownerID, "order.refund", "order", orderID, map[string]any{"refundAmountFen": quote.RefundAmountFen, "baseRefundAmountFen": quote.BaseRefundAmountFen, "planChangeAdjustmentFen": quote.PlanChangeAdjustmentFen, "refundableDays": quote.RefundableDays, "serviceEndsAt": quote.ServiceEndsAt, "walletEntryId": entry.ID}); err != nil {
+	if err = writeAuditTx(ctx, tx, ownerID, "order.refund", "order", orderID, map[string]any{"refundSettlementId": settlementID, "refundAmountFen": quote.RefundAmountFen, "baseRefundAmountFen": quote.BaseRefundAmountFen, "refundableDays": quote.RefundableDays, "serviceEndsAt": quote.ServiceEndsAt}); err != nil {
 		return refundQuote{}, walletEntry{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -355,6 +285,6 @@ func refundOrder(ctx context.Context, ownerID, orderID string) (refundQuote, wal
 	if instanceAlreadyGone {
 		message = fmt.Sprintf("已退回 %.2f XCoin。实例资源已由此前操作销毁或清理，本次退款不会再执行容器操作。", float64(entry.AmountFen)/100)
 	}
-	_ = createNotification(ctx, ownerID, "refund", "订单退款已到账", message, map[string]any{"orderId": orderID, "walletEntryId": entry.ID, "serviceEndsAt": quote.ServiceEndsAt, "dataPurgeAt": quote.DataPurgeAt, "instanceAlreadyGone": instanceAlreadyGone})
+	_ = createNotification(ctx, ownerID, "refund", "订单退款已到账", message, map[string]any{"orderId": orderID, "refundSettlementId": settlementID, "serviceEndsAt": quote.ServiceEndsAt, "dataPurgeAt": quote.DataPurgeAt, "instanceAlreadyGone": instanceAlreadyGone})
 	return quote, entry, nil
 }

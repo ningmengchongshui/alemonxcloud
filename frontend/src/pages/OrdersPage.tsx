@@ -33,6 +33,7 @@ const orderStates: Record<string, { label: string; tone: string }> = {
     label: '已退款',
     tone: 'neutral'
   },
+  exchanged: { label: '已替换', tone: 'neutral' },
   cancelled: { label: '已取消', tone: 'neutral' },
   rejected: { label: '未通过', tone: 'danger' },
   pending_payment: {
@@ -89,6 +90,8 @@ export function OrdersPage({
     if (filter === 'closed')
       return [
         'expired',
+		'exchanged',
+		'refunded',
         'cancelled',
         'rejected',
         'pending_payment',
@@ -188,6 +191,13 @@ export function OrdersPage({
                         <span className="mt-1 block text-[11px] text-slate-400">
                           {order.imageVersion || '—'} · {order.id.slice(0, 14)}
                         </span>
+						{order.currentPlanName && order.currentPlanName !== order.planName ? (
+						  <span className="mt-1 block text-[11px] text-sky-600 dark:text-sky-300">
+						    当前实例套餐：{order.currentPlanName}（原订单：{order.planName}）
+						  </span>
+						) : null}
+						{order.orderRole === 'replacement' ? <span className="mt-1 block text-[11px] text-slate-400">套餐变更后的替换订单</span> : null}
+						{order.orderRole === 'source' ? <span className="mt-1 block text-[11px] text-slate-400">已被后续套餐订单替换</span> : null}
                       </td>
                       <td className="px-4 py-3.5">
                         <StatusBadge tone={badgeTone}>
@@ -329,11 +339,10 @@ export function OrdersPage({
                   </dd>
                 </div>
               </dl>
-              <p className="text-xs leading-5 text-slate-500 dark:text-slate-300">
-                本订单将扣减 {refundQuote.refundableDays} 个完整 24
-                小时服务期；后续续费订单会同步前移。服务结束后将销毁容器资源，数据再保留
-                30 天。
-              </p>
+			  <p className="text-xs leading-5 text-slate-500 dark:text-slate-300">
+				退款按实例当前有效订单统一结算：保留申请当天及后续 2 个自然日，
+				第 4 天零点起的未使用服务期退回钱包。服务结束后将销毁容器资源，数据再保留 30 天。
+			  </p>
               <div className="flex justify-end gap-2">
                 <Button tone="secondary" onClick={() => setRefunding(null)}>
                   取消

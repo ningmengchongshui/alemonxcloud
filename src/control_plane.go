@@ -208,6 +208,10 @@ type order struct {
 	PlanName            string          `json:"planName"`
 	ImageName           string          `json:"imageName"`
 	ImageVersion        string          `json:"imageVersion"`
+	OrderRole           string          `json:"orderRole,omitempty"`
+	ExchangeID          string          `json:"exchangeId,omitempty"`
+	ReplacesOrderID     string          `json:"replacesOrderId,omitempty"`
+	CurrentPlanName     string          `json:"currentPlanName,omitempty"`
 }
 
 type controlTask struct {
@@ -504,10 +508,10 @@ func createOrder(ctx context.Context, ownerID, planID, imageID string, months in
 }
 
 func listOrders(ctx context.Context, ownerID string) ([]order, error) {
-	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,COALESCE(o.list_amount_fen,o.amount_fen),COALESCE(o.discount_amount_fen,0),o.benefit_snapshot,COALESCE(o.bonus_days,0),COALESCE(o.promo_code_mask,''),o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.owner_id=? ORDER BY o.created_at DESC`, ownerID)
+	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,COALESCE(o.list_amount_fen,o.amount_fen),COALESCE(o.discount_amount_fen,0),o.benefit_snapshot,COALESCE(o.bonus_days,0),COALESCE(o.promo_code_mask,''),o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version,COALESCE(o.order_role,'standard'),COALESCE(o.exchange_id,''),COALESCE(o.replaces_order_id,''),COALESCE((SELECT cp.name FROM xcloud_orders co JOIN xcloud_plans cp ON cp.id=co.plan_id WHERE co.instance_id=o.instance_id AND co.status='active' ORDER BY co.created_at DESC LIMIT 1),'') FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.owner_id=? ORDER BY o.created_at DESC`, ownerID)
 }
 func listAllOrders(ctx context.Context) ([]order, error) {
-	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,COALESCE(o.list_amount_fen,o.amount_fen),COALESCE(o.discount_amount_fen,0),o.benefit_snapshot,COALESCE(o.bonus_days,0),COALESCE(o.promo_code_mask,''),o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id ORDER BY o.created_at DESC`)
+	return scanOrders(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,COALESCE(o.instance_id,''),o.amount_fen,COALESCE(o.list_amount_fen,o.amount_fen),COALESCE(o.discount_amount_fen,0),o.benefit_snapshot,COALESCE(o.bonus_days,0),COALESCE(o.promo_code_mask,''),o.status,COALESCE(o.payment_note,''),o.service_starts_at,o.expires_at,o.refunded_at,COALESCE(o.refund_amount_fen,0),COALESCE(o.refund_wallet_entry_id,''),o.created_at,o.updated_at,p.name,i.name,i.version,COALESCE(o.order_role,'standard'),COALESCE(o.exchange_id,''),COALESCE(o.replaces_order_id,''),COALESCE((SELECT cp.name FROM xcloud_orders co JOIN xcloud_plans cp ON cp.id=co.plan_id WHERE co.instance_id=o.instance_id AND co.status='active' ORDER BY co.created_at DESC LIMIT 1),'') FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id ORDER BY o.created_at DESC`)
 }
 func scanOrders(ctx context.Context, statement string, args ...any) ([]order, error) {
 	rows, err := instanceDB.QueryContext(ctx, statement, args...)
@@ -524,6 +528,9 @@ func scanOrders(ctx context.Context, statement string, args ...any) ([]order, er
 			"o.benefit_snapshot", "NULL",
 			"COALESCE(o.bonus_days,0)", "0",
 			"COALESCE(o.promo_code_mask,'')", "''",
+			"COALESCE(o.order_role,'standard')", "'standard'",
+			"COALESCE(o.exchange_id,'')", "''",
+			"COALESCE(o.replaces_order_id,'')", "''",
 		).Replace(statement)
 		rows, err = instanceDB.QueryContext(ctx, legacy, args...)
 		if err != nil {
@@ -537,7 +544,7 @@ func scanOrders(ctx context.Context, statement string, args ...any) ([]order, er
 		// JSON is nullable for historical orders. sql.NullString accepts both a
 		// driver []byte and NULL, whereas json.RawMessage cannot scan NULL.
 		var snapshot sql.NullString
-		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.ListAmountFen, &v.DiscountAmountFen, &snapshot, &v.BonusDays, &v.PromoCodeMask, &v.Status, &v.PaymentNote, &v.ServiceStartsAt, &v.ExpiresAt, &v.RefundedAt, &v.RefundAmountFen, &v.RefundWalletEntryID, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion); err != nil {
+		if err := rows.Scan(&v.ID, &v.OwnerID, &v.PlanID, &v.ImageID, &v.InstanceID, &v.AmountFen, &v.ListAmountFen, &v.DiscountAmountFen, &snapshot, &v.BonusDays, &v.PromoCodeMask, &v.Status, &v.PaymentNote, &v.ServiceStartsAt, &v.ExpiresAt, &v.RefundedAt, &v.RefundAmountFen, &v.RefundWalletEntryID, &v.CreatedAt, &v.UpdatedAt, &v.PlanName, &v.ImageName, &v.ImageVersion, &v.OrderRole, &v.ExchangeID, &v.ReplacesOrderID, &v.CurrentPlanName); err != nil {
 			return nil, err
 		}
 		if snapshot.Valid {
@@ -550,7 +557,7 @@ func scanOrders(ctx context.Context, statement string, args ...any) ([]order, er
 
 func isMissingOrderUpgrade(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unknown column") && (strings.Contains(message, "benefit_snapshot") || strings.Contains(message, "bonus_days") || strings.Contains(message, "promo_code_mask") || strings.Contains(message, "list_amount_fen") || strings.Contains(message, "discount_amount_fen"))
+	return strings.Contains(message, "unknown column") && (strings.Contains(message, "benefit_snapshot") || strings.Contains(message, "bonus_days") || strings.Contains(message, "promo_code_mask") || strings.Contains(message, "list_amount_fen") || strings.Contains(message, "discount_amount_fen") || strings.Contains(message, "order_role") || strings.Contains(message, "exchange_id") || strings.Contains(message, "replaces_order_id"))
 }
 
 func cancelOrder(ctx context.Context, id, ownerID string) error {

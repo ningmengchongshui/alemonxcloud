@@ -139,7 +139,7 @@ export const cloudApi = createApi({
         method: 'POST',
         body
       }),
-      invalidatesTags: ['Instances', 'Wallet']
+      invalidatesTags: ['Instances', 'Orders', 'Wallet']
     }),
     getInstanceLogs: builder.query<
       { lines: string[]; tail: number; truncated: boolean },

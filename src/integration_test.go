@@ -50,8 +50,10 @@ func TestIntegrationConcurrentRefundCreditsOnce(t *testing.T) {
 	ctx := context.Background()
 	suffix := newID("it")
 	ownerID, instanceID, orderID := "user_"+suffix, "ins_"+suffix, "ord_"+suffix
+	secondOrderID := "ord_second_" + suffix
 	now := time.Now().UTC().Truncate(time.Second)
 	start, end := now.Add(-5*24*time.Hour), now.Add(10*24*time.Hour)
+	secondEnd := end.Add(10 * 24 * time.Hour)
 	cleanup := func() {
 		for _, table := range []string{"xcloud_wallet_entries", "xcloud_orders", "xcloud_instances", "xcloud_wallets", "xcloud_users"} {
 			_, _ = instanceDB.Exec(`DELETE FROM `+table+` WHERE `+map[string]string{"xcloud_wallet_entries": "user_id", "xcloud_orders": "owner_id", "xcloud_instances": "owner_id", "xcloud_wallets": "user_id", "xcloud_users": "id"}[table]+`=?`, ownerID)
@@ -64,10 +66,13 @@ func TestIntegrationConcurrentRefundCreditsOnce(t *testing.T) {
 	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_wallets (user_id,balance_fen,updated_at) VALUES (?,0,?)`, ownerID, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, "integration", "example/test", "latest", "1 核 / 1 GB", "running", "https://example.test", "xcloud-abcdef123456", now, end); err != nil {
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, "integration", "example/test", "latest", "1 核 / 1 GB", "running", "https://example.test", "xcloud-abcdef123456", now, secondEnd); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_source,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, orderID, ownerID, "plan", "image", instanceID, 1500, orderActive, "wallet", start, end, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,status,payment_source,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, secondOrderID, ownerID, "plan", "image", instanceID, 900, orderActive, "wallet", end, secondEnd, now, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,13 +98,13 @@ func TestIntegrationConcurrentRefundCreditsOnce(t *testing.T) {
 		t.Fatalf("refund must commit once, successes=%d", successes)
 	}
 	var refunds, balance int
-	if err := instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_wallet_entries WHERE user_id=? AND order_id=? AND entry_type='refund'`, ownerID, orderID).Scan(&refunds); err != nil {
+	if err := instanceDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_wallet_entries WHERE user_id=? AND entry_type='refund'`, ownerID).Scan(&refunds); err != nil {
 		t.Fatal(err)
 	}
 	if err := instanceDB.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=?`, ownerID).Scan(&balance); err != nil {
 		t.Fatal(err)
 	}
-	if refunds != 1 || balance <= 0 {
+	if refunds != 2 || balance <= 0 {
 		t.Fatalf("refund ledger inconsistent: count=%d balance=%d", refunds, balance)
 	}
 }
@@ -198,7 +203,7 @@ func setupIntegrationDB(t *testing.T) {
 	t.Helper()
 	dsn := os.Getenv("XCLOUD_INTEGRATION_MYSQL_DSN")
 	if dsn == "" {
-		t.Skip("XCLOUD_INTEGRATION_MYSQL_DSN is not configured")
+		t.Fatal("XCLOUD_INTEGRATION_MYSQL_DSN is required: integration tests must run against the isolated Compose MySQL")
 	}
 	if instanceDB == nil {
 		if err := initInstanceStoreWithDSN(dsn); err != nil {

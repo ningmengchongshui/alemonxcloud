@@ -79,6 +79,21 @@ export interface PlanChangeQuote {
   refundFen: number
   expiresAt: string
   summary: string
+  operationCutoffAt: string
+  items: Array<{
+    sourceOrderId: string
+    sourcePlanId: string
+    sourcePlanName: string
+    sourceStartsAt: string
+    sourceExpiresAt: string
+    actualPaidFen: number
+    retainedFen: number
+    refundFen: number
+    replacementChargeFen: number
+    replacementStartsAt: string
+    replacementExpiresAt: string
+    tierDiscountBps: number
+  }>
 }
 
 export interface CreateInstanceInput {
@@ -163,6 +178,10 @@ export interface Order {
   planName: string
   imageName: string
   imageVersion: string
+  orderRole?: 'standard' | 'source' | 'replacement'
+  exchangeId?: string
+  replacesOrderId?: string
+  currentPlanName?: string
 }
 export interface PriceQuote {
   listAmountFen: number
