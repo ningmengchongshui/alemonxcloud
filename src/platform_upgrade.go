@@ -567,9 +567,18 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	if err != nil {
 		return order{}, nil, errors.New("订单不可续费")
 	}
-	// A successful plan change creates replacement orders, so the active source
-	// order is the current package. Historical plan-change rows never override
-	// an order selected for renewal.
+	// Replacement orders are the normal source of truth. Older instances may
+	// have completed a resize before the replacement-order settlement migration;
+	// in that case their still-active original order must not make renewal fall
+	// back to the old resources. The latest successful change is the audited
+	// compatibility source until a replacement order exists.
+	var changedPlanID string
+	if err = tx.QueryRowContext(ctx, `SELECT target_plan_id FROM xcloud_instance_plan_changes WHERE instance_id=? AND status='succeeded' ORDER BY completed_at DESC, created_at DESC LIMIT 1`, source.InstanceID).Scan(&changedPlanID); err == nil && changedPlanID != "" && changedPlanID != source.PlanID {
+		if err = tx.QueryRowContext(ctx, `SELECT id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans WHERE id=?`, changedPlanID).Scan(&p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt); err != nil {
+			return order{}, nil, errors.New("实例当前套餐不可用")
+		}
+		source.PlanID = changedPlanID
+	}
 	if !p.Enabled {
 		return order{}, nil, errors.New("套餐已下架，无法续费")
 	}
