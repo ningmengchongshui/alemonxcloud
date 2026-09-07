@@ -161,15 +161,16 @@ export function InstanceTerminalPage({
             <aside className="flex min-h-0 flex-col border-r border-slate-200 p-3 dark:border-slate-700 max-[850px]:border-r-0 max-[850px]:border-b">
               <div className="mb-3 flex items-center justify-between gap-2">
                 {path ? (
-                  <Button
-                    tone="ghost"
-                    className="mb-2 self-start"
+                  <button
+                    className="text-slate-400"
                     onClick={() =>
                       setPath(path.split('/').slice(0, -1).join('/'))
                     }
                   >
-                    返回上级
-                  </Button>
+                    <span className="text-slate-500 dark:text-slate-300">
+                      返回上级
+                    </span>
+                  </button>
                 ) : (
                   <div></div>
                 )}
