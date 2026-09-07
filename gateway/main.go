@@ -87,6 +87,7 @@ type commandResult struct {
 type sessionRecord struct{ GatewayID, InternalURL, Epoch string }
 type config struct {
 	id, internalURL, certFile, keyFile string
+	cluster                            bool
 	db                                 *sql.DB
 	redis                              *redis.Client
 	internalClient                     *http.Client
@@ -126,14 +127,16 @@ func main() {
 	public.HandleFunc("/command", cfg.command)
 	public.HandleFunc("/terminal", cfg.terminal)
 	public.HandleFunc("/metrics", cfg.metrics)
-	internal := http.NewServeMux()
-	internal.HandleFunc("/internal/forward", cfg.internalForward)
-	internal.HandleFunc("/internal/command", cfg.internalCommand)
-	internal.HandleFunc("/internal/terminal", cfg.internalTerminal)
-	go func() {
-		server := &http.Server{Addr: env("GATEWAY_INTERNAL_LISTEN", ":18443"), Handler: internal, TLSConfig: cfg.internalTLS}
-		log.Fatal(server.ListenAndServeTLS(cfg.certFile, cfg.keyFile))
-	}()
+	if cfg.cluster {
+		internal := http.NewServeMux()
+		internal.HandleFunc("/internal/forward", cfg.internalForward)
+		internal.HandleFunc("/internal/command", cfg.internalCommand)
+		internal.HandleFunc("/internal/terminal", cfg.internalTerminal)
+		go func() {
+			server := &http.Server{Addr: env("GATEWAY_INTERNAL_LISTEN", ":18443"), Handler: internal, TLSConfig: cfg.internalTLS}
+			log.Fatal(server.ListenAndServeTLS(cfg.certFile, cfg.keyFile))
+		}()
+	}
 	log.Fatal(http.ListenAndServe(env("GATEWAY_PUBLIC_LISTEN", ":13072"), public))
 }
 func newConfig() (*config, error) {
@@ -145,18 +148,37 @@ func newConfig() (*config, error) {
 	if err != nil {
 		return nil, err
 	}
-	certFile, keyFile := env("GATEWAY_TLS_CERT", ""), env("GATEWAY_TLS_KEY", "")
-	cfg := &config{id: env("GATEWAY_ID", hostname()), internalURL: strings.TrimRight(env("GATEWAY_INTERNAL_URL", ""), "/"), certFile: certFile, keyFile: keyFile, db: db, redis: redis.NewClient(r)}
-	if cfg.internalURL == "" {
-		return nil, errors.New("missing GATEWAY_INTERNAL_URL")
+	cluster, err := gatewayClusterMode()
+	if err != nil {
+		return nil, err
 	}
-	tlsCfg, err := internalTLS(certFile, keyFile, env("GATEWAY_TLS_CA", ""))
+	cfg := &config{id: env("GATEWAY_ID", hostname()), cluster: cluster, db: db, redis: redis.NewClient(r)}
+	if !cfg.cluster {
+		return cfg, nil
+	}
+	cfg.internalURL = strings.TrimRight(env("GATEWAY_INTERNAL_URL", ""), "/")
+	cfg.certFile, cfg.keyFile = env("GATEWAY_TLS_CERT", ""), env("GATEWAY_TLS_KEY", "")
+	if cfg.internalURL == "" {
+		return nil, errors.New("cluster mode requires GATEWAY_INTERNAL_URL")
+	}
+	tlsCfg, err := internalTLS(cfg.certFile, cfg.keyFile, env("GATEWAY_TLS_CA", ""))
 	if err != nil {
 		return nil, err
 	}
 	cfg.internalTLS = tlsCfg
 	cfg.internalClient = &http.Client{Timeout: 70 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsCfg.Clone(), ForceAttemptHTTP2: true}}
 	return cfg, nil
+}
+
+func gatewayClusterMode() (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(env("GATEWAY_MODE", "single"))) {
+	case "", "single":
+		return false, nil
+	case "cluster":
+		return true, nil
+	default:
+		return false, errors.New("GATEWAY_MODE must be single or cluster")
+	}
 }
 func internalTLS(certFile, keyFile, caFile string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -403,6 +425,10 @@ func (c *config) terminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "device offline", http.StatusBadGateway)
 		return
 	} else if owner.GatewayID != c.id {
+		if !c.cluster {
+			http.Error(w, "gateway owner unavailable", http.StatusBadGateway)
+			return
+		}
 		c.terminalRemote(w, r, owner)
 		return
 	}
@@ -552,6 +578,10 @@ func (c *config) commandRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if remote, err := c.directory(r.Context(), req.DeviceID); err == nil && remote.GatewayID != c.id {
+		if !c.cluster {
+			http.Error(w, "gateway owner unavailable", http.StatusBadGateway)
+			return
+		}
 		body, _ := json.Marshal(req)
 		forward, err := http.NewRequestWithContext(r.Context(), http.MethodPost, strings.TrimRight(remote.InternalURL, "/")+"/internal/command", strings.NewReader(string(body)))
 		if err != nil {
@@ -702,6 +732,10 @@ func (c *config) publicProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if record.GatewayID == c.id {
 		c.proxyLocal(w, r, device)
+		return
+	}
+	if !c.cluster {
+		http.Error(w, "gateway owner unavailable", http.StatusBadGateway)
 		return
 	}
 	c.proxyRemote(w, r, device, record)
