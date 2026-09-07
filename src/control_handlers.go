@@ -1017,16 +1017,16 @@ func queueInstanceAction(c *gin.Context) {
 		queueInstanceUpdate(c, item, user.ID)
 		return
 	}
+	if action == "reinstall" {
+		queueInstanceReinstall(c, item, user.ID)
+		return
+	}
 	if action != "start" && action != "stop" && action != "restart" && action != "reinstall" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "不支持的实例操作"})
 		return
 	}
 	if item.Status == "destroyed" || item.Status == "purged" {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例资源已销毁，不能执行运行操作"})
-		return
-	}
-	if action == "reinstall" && item.Status != "running" && item.Status != "stopped" {
-		c.JSON(http.StatusConflict, gin.H{"message": "仅运行中或已关机的实例可以重装"})
 		return
 	}
 	task, err := scheduleInstanceTask(c.Request.Context(), item.ID, action, user.ID)
@@ -1036,6 +1036,74 @@ func queueInstanceAction(c *gin.Context) {
 	}
 	if err := enqueuePersistedTask(c.Request.Context(), task); err != nil {
 		c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "任务已记录，等待队列恢复"})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"task": task})
+}
+
+type reinstallImagePayload struct {
+	ImageID      string `json:"imageId"`
+	ImageRef     string `json:"imageRef"`
+	ImageVersion string `json:"imageVersion"`
+	ImageDigest  string `json:"imageDigest,omitempty"`
+	TerminalMode bool   `json:"terminalMode"`
+}
+
+// queueInstanceReinstall records the exact selected release on the task. The
+// instance snapshot is only changed after the Agent has successfully erased
+// the old data and created the replacement container.
+func queueInstanceReinstall(c *gin.Context, item instance, actorID string) {
+	if item.Status != "running" && item.Status != "stopped" {
+		c.JSON(http.StatusConflict, gin.H{"message": "仅运行中或已关机的实例可以重装"})
+		return
+	}
+	var body struct {
+		ImageID      string `json:"imageId" binding:"required"`
+		ImageVersion string `json:"imageVersion" binding:"required"`
+	}
+	if c.ShouldBindJSON(&body) != nil || !validImageTag(strings.TrimSpace(body.ImageVersion)) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择可购买的软件版本"})
+		return
+	}
+	ctx := c.Request.Context()
+	var payload reinstallImagePayload
+	err := instanceDB.QueryRowContext(ctx, `SELECT i.id,i.image_ref,COALESCE(v.version_tag,''),COALESCE(v.image_digest,''),COALESCE(i.terminal_only,FALSE)
+		FROM xcloud_images i
+		LEFT JOIN xcloud_image_versions v ON v.image_id=i.id AND v.version_tag=? AND v.enabled=TRUE AND v.version_status='ready'
+		WHERE i.id=? AND i.enabled=TRUE`, strings.TrimSpace(body.ImageVersion), strings.TrimSpace(body.ImageID)).Scan(&payload.ImageID, &payload.ImageRef, &payload.ImageVersion, &payload.ImageDigest, &payload.TerminalMode)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusConflict, gin.H{"message": "所选软件或版本已下架"})
+		return
+	}
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	// A source without configured releases exposes Docker-style latest as the
+	// public fallback. It deliberately has no digest and is resolved only by
+	// the Agent during this explicit reinstall action.
+	if payload.ImageVersion == "" && strings.EqualFold(strings.TrimSpace(body.ImageVersion), "latest") {
+		payload.ImageVersion = "latest"
+	}
+	if payload.ImageVersion == "" {
+		c.JSON(http.StatusConflict, gin.H{"message": "所选版本当前不可购买"})
+		return
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	now := time.Now()
+	task := controlTask{ID: newID("task"), InstanceID: item.ID, Action: "reinstall", IdempotencyKey: "reinstall:" + item.ID + ":" + now.UTC().Format(time.RFC3339Nano), Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, Payload: rawPayload}
+	if _, err = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,payload) VALUES (?,?,?,?,?,?,?,?,?,?)`, task.ID, task.InstanceID, task.Action, task.IdempotencyKey, task.Status, 0, task.RunAfter, now, now, task.Payload); err != nil {
+		internalError(c, err)
+		return
+	}
+	appendTaskEvent(ctx, task.ID, "queued", "用户操作：将清空数据并重装所选软件版本 "+payload.ImageVersion)
+	_ = writeAudit(ctx, actorID, "instance.reinstall", "instance", item.ID, map[string]any{"taskId": task.ID, "imageId": payload.ImageID, "version": payload.ImageVersion, "digest": payload.ImageDigest})
+	if err = enqueuePersistedTask(ctx, task); err != nil {
+		c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "重装任务已记录，等待队列恢复"})
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"task": task})

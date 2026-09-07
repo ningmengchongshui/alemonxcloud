@@ -101,11 +101,17 @@ export const cloudApi = createApi({
           | 'archive'
           | 'retry-deploy'
           | 'update'
+        imageId?: string
+        imageVersion?: string
       }
     >({
-      query: ({ id, action }) => ({
+      query: ({ id, action, imageId, imageVersion }) => ({
         url: `/instances/${id}/${action}`,
-        method: 'POST'
+        method: 'POST',
+        body:
+          action === 'reinstall'
+            ? { imageId, imageVersion }
+            : undefined
       }),
       invalidatesTags: ['Instances', 'Orders']
     }),

@@ -1160,10 +1160,16 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if !n.supportsAgentCapability("container.reinstall.v1") {
 			return errors.New("节点 Agent 尚未支持实例重装，请先升级该节点 Agent")
 		}
-		payload, payloadErr := instanceRuntimePayload(ctx, item.ID, item.ContainerName, route)
-		if payloadErr != nil {
-			return payloadErr
+		var selected reinstallImagePayload
+		if err := json.Unmarshal(task.Payload, &selected); err != nil || selected.ImageRef == "" || !validImageTag(selected.ImageVersion) {
+			return errors.New("重装任务缺少有效的软件版本快照")
 		}
+		var cpu float64
+		var memoryMB, bandwidthMbps int
+		if err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb,bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB, &bandwidthMbps); err != nil {
+			return err
+		}
+		payload := map[string]any{"name": item.ContainerName, "image": deploymentImage(selected.ImageRef, selected.ImageVersion, selected.ImageDigest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route, "terminalMode": selected.TerminalMode}
 		if err = taskMayCallAgent(ctx, task, item.Status); err != nil {
 			return err
 		}
@@ -1172,7 +1178,12 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if err == nil {
 			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"
-			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, "running", &runtime, "")
+			changed, transitionErr := transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, "running", &runtime, "image=?,version=?,image_digest=?", selected.ImageRef, selected.ImageVersion, nullableString(selected.ImageDigest))
+			if transitionErr != nil {
+				err = transitionErr
+			} else if !changed {
+				err = errInstanceStateConflict
+			}
 		}
 	case "bandwidth":
 		var mbps int
@@ -1273,9 +1284,9 @@ func executeTask(ctx context.Context, task controlTask) error {
 }
 
 // instanceRuntimePayload is the single source of desired Compose state for
-// creation and restart. It deliberately reads the order's immutable image
-// snapshot: a restart applies current platform configuration, while a user
-// initiated update is the only operation allowed to pull a newer image.
+// creation and restart. The per-instance snapshot is authoritative: it may
+// have changed through an explicit image update or a destructive reinstall,
+// while historical order snapshots remain untouched.
 func instanceRuntimePayload(ctx context.Context, instanceID, containerName, route string) (map[string]any, error) {
 	var cpu float64
 	var memoryMB, bandwidthMbps int
@@ -1284,7 +1295,7 @@ func instanceRuntimePayload(ctx context.Context, instanceID, containerName, rout
 	}
 	var imageRef, digest, selectedVersion string
 	var terminalMode bool
-	if err := instanceDB.QueryRowContext(ctx, `SELECT i.image_ref,COALESCE(ins.image_digest,o.selected_image_digest,i.image_digest,''),COALESCE(ins.version,o.selected_image_version,i.version),COALESCE(i.terminal_only,TRUE) FROM xcloud_instances ins JOIN xcloud_orders o ON o.instance_id=ins.id JOIN xcloud_images i ON i.id=o.image_id WHERE ins.id=? ORDER BY o.created_at DESC LIMIT 1`, instanceID).Scan(&imageRef, &digest, &selectedVersion, &terminalMode); err != nil {
+	if err := instanceDB.QueryRowContext(ctx, `SELECT ins.image,COALESCE(ins.image_digest,''),ins.version,COALESCE(i.terminal_only,TRUE) FROM xcloud_instances ins LEFT JOIN xcloud_images i ON i.image_ref=ins.image WHERE ins.id=?`, instanceID).Scan(&imageRef, &digest, &selectedVersion, &terminalMode); err != nil {
 		return nil, err
 	}
 	return map[string]any{"name": containerName, "image": deploymentImage(imageRef, selectedVersion, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route, "terminalMode": terminalMode}, nil

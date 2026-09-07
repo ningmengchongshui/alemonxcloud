@@ -137,25 +137,27 @@ export function InstanceLogsPage({
           日志内容已按安全上限截断；可缩小时间范围或筛选关键词。
         </Alert>
       )}
-      <div className="mb-3 flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+      <div className="mb-3 flex justify-between rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <input
           aria-label="搜索日志"
           value={query}
           onChange={event => setQuery(event.target.value)}
           placeholder="搜索错误、请求 ID 或关键字"
         />
-        <button
-          className={`rounded-md px-3 py-1 text-sm ${filter === 'all' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-100'}`}
-          onClick={() => setFilter('all')}
-        >
-          全部 {lines.length}
-        </button>
-        <button
-          className={`rounded-md px-3 py-1 text-sm ${filter === 'error' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-100'}`}
-          onClick={() => setFilter('error')}
-        >
-          仅错误 {counts.error}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className={`rounded-md px-3 py-1 text-sm ${filter === 'all' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-100'}`}
+            onClick={() => setFilter('all')}
+          >
+            全部 {lines.length}
+          </button>
+          <button
+            className={`rounded-md px-3 py-1 text-sm ${filter === 'error' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-100'}`}
+            onClick={() => setFilter('error')}
+          >
+            仅错误 {counts.error}
+          </button>
+        </div>
       </div>
       {isLoading ? (
         <LoadingState>正在加载容器日志…</LoadingState>

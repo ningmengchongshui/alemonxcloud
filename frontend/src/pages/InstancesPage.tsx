@@ -258,6 +258,10 @@ export function InstancesPage({
     Record<string, NonNullable<Instance['activeTask']>>
   >({})
   const [renewing, setRenewing] = useState<Order | null>(null)
+  const [reinstalling, setReinstalling] = useState<Instance | null>(null)
+  const [reinstallImageID, setReinstallImageID] = useState('')
+  const [reinstallVersion, setReinstallVersion] = useState('')
+  const [reinstallError, setReinstallError] = useState('')
   const [resizing, setResizing] = useState<Instance | null>(null)
   const [resizePlanID, setResizePlanID] = useState('')
   const [resizeQuote, setResizeQuote] = useState<PlanChangeQuote | null>(null)
@@ -303,6 +307,78 @@ export function InstancesPage({
         new Date(current.createdAt).getTime()
     )
       renewableOrderByInstance.set(order.instanceId, order)
+  }
+  const reinstallImage = (catalog?.images ?? []).find(
+    image => image.id === reinstallImageID
+  )
+  const reinstallVersions = reinstallImage?.versions ?? []
+
+  function openReinstall(item: Instance) {
+    const currentImageID = renewableOrderByInstance.get(item.id)?.imageId
+    const source =
+      catalog?.images.find(image => image.id === currentImageID) ??
+      catalog?.images[0]
+    const versions = source?.versions ?? []
+    const currentVersion = versions.find(version => version.tag === item.version)
+    const fallback =
+      versions.find(version => version.tag.toLowerCase() === 'latest') ??
+      versions[0]
+    setReinstallImageID(source?.id ?? '')
+    setReinstallVersion((currentVersion ?? fallback)?.tag ?? '')
+    setReinstallError('')
+    setReinstalling(item)
+  }
+
+  function submitReinstall() {
+    if (!reinstalling || !reinstallImage || !reinstallVersion) {
+      setReinstallError('请选择软件和版本。')
+      return
+    }
+    const started = performance.now()
+    trackConsoleEvent('instance_action', 'me', 'instances', {
+      action: 'reinstall',
+      result: 'started'
+    })
+    void operate({
+      id: reinstalling.id,
+      action: 'reinstall',
+      imageId: reinstallImage.id,
+      imageVersion: reinstallVersion
+    })
+      .unwrap()
+      .then(response => {
+        trackConsoleEvent('instance_action', 'me', 'instances', {
+          action: 'reinstall',
+          result: 'success',
+          durationMs: performance.now() - started
+        })
+        if (response.task) {
+          setSubmittedTasks(current => ({
+            ...current,
+            [reinstalling.id]: {
+              id: response.task!.id,
+              action: response.task!.action,
+              status: response.task!.status
+            }
+          }))
+          dispatch(
+            watchTask({ id: response.task.id, action: response.task.action })
+          )
+        }
+        setReinstalling(null)
+      })
+      .catch(error => {
+        trackConsoleEvent('instance_action', 'me', 'instances', {
+          action: 'reinstall',
+          result: 'error',
+          durationMs: performance.now() - started
+        })
+        setReinstallError(
+          typeof error?.data?.message === 'string'
+            ? error.data.message
+            : '重装任务未创建，请稍后重试。'
+        )
+      })
   }
 
   function refreshRenewQuote(
@@ -605,7 +681,9 @@ export function InstancesPage({
                             { action: 'destroy', label: '销毁', danger: true }
                           ]}
                           onSelect={action =>
-                            setPending({ id: item.id, action })
+                            action === 'reinstall'
+                              ? openReinstall(item)
+                              : setPending({ id: item.id, action })
                           }
                         />
                       )}
@@ -632,7 +710,9 @@ export function InstancesPage({
                             { action: 'destroy', label: '销毁', danger: true }
                           ]}
                           onSelect={action =>
-                            setPending({ id: item.id, action })
+                            action === 'reinstall'
+                              ? openReinstall(item)
+                              : setPending({ id: item.id, action })
                           }
                         />
                       )}
@@ -718,6 +798,75 @@ export function InstancesPage({
           onCancel={() => setPending(null)}
           onConfirm={confirmAction}
         />
+      )}
+      {reinstalling && (
+        <Dialog
+          eyebrow="危险操作"
+          title={`重装实例 · ${imageName(reinstalling.image)}`}
+          description="重装会永久清空当前实例的数据目录和工作区。请选择要重新部署的软件与版本；重装成功前不会修改当前实例的镜像记录。"
+          onClose={() => setReinstalling(null)}
+        >
+          <label className="grid gap-2 text-xs font-bold text-slate-600 dark:text-slate-200">
+            软件
+            <select
+              className="h-11 rounded-lg border border-slate-200 px-3 text-sm dark:border-slate-600 dark:bg-slate-900"
+              value={reinstallImageID}
+              onChange={event => {
+                const imageID = event.target.value
+                const source = (catalog?.images ?? []).find(
+                  image => image.id === imageID
+                )
+                const version =
+                  source?.versions.find(
+                    item => item.tag.toLowerCase() === 'latest'
+                  ) ?? source?.versions[0]
+                setReinstallImageID(imageID)
+                setReinstallVersion(version?.tag ?? '')
+                setReinstallError('')
+              }}
+            >
+              <option value="">请选择软件</option>
+              {(catalog?.images ?? []).map(image => (
+                <option key={image.id} value={image.id}>
+                  {image.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-4 grid gap-2 text-xs font-bold text-slate-600 dark:text-slate-200">
+            版本
+            <select
+              className="h-11 rounded-lg border border-slate-200 px-3 text-sm dark:border-slate-600 dark:bg-slate-900"
+              value={reinstallVersion}
+              onChange={event => {
+                setReinstallVersion(event.target.value)
+                setReinstallError('')
+              }}
+              disabled={!reinstallImage}
+            >
+              <option value="">请选择版本</option>
+              {reinstallVersions.map(version => (
+                <option key={version.tag} value={version.tag}>
+                  {version.tag}
+                </option>
+              ))}
+            </select>
+          </label>
+          {reinstallError && <Alert tone="error">{reinstallError}</Alert>}
+          <div className="mt-5 flex justify-end gap-2">
+            <Button tone="secondary" onClick={() => setReinstalling(null)}>
+              取消
+            </Button>
+            <Button
+              tone="danger"
+              loading={operating}
+              disabled={!reinstallImage || !reinstallVersion}
+              onClick={submitReinstall}
+            >
+              清空数据并重装
+            </Button>
+          </div>
+        </Dialog>
       )}
       {renewing && (
         <Dialog
