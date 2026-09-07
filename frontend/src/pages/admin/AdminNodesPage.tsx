@@ -201,7 +201,7 @@ export function AdminNodesPage() {
                       </div>
                     )}
                   </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-1.5 text-[11px] text-slate-500 dark:text-slate-300">
+                  <div className="flex flex-col gap-x-3 gap-y-1.5 text-[11px] text-slate-500 dark:text-slate-300">
                     <span>{node.managedContainerCount ?? 0} 个容器</span>
                     <span>
                       {node.dockerVersion

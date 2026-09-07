@@ -272,9 +272,6 @@ export function OrdersPage({
             <LoadingState>正在计算可退款金额…</LoadingState>
           ) : refundError ? (
             <div className="space-y-4">
-              <p className="login-error" role="alert">
-                {refundError}
-              </p>
               <div className="flex justify-end gap-2">
                 <Button tone="secondary" onClick={() => setRefunding(null)}>
                   关闭

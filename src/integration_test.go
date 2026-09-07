@@ -108,7 +108,6 @@ func TestIntegrationConcurrentRefundCreditsOnce(t *testing.T) {
 		t.Fatalf("refund ledger inconsistent: count=%d balance=%d", refunds, balance)
 	}
 }
-
 func TestIntegrationRefundSucceedsAfterManualPurge(t *testing.T) {
 	setupIntegrationDB(t)
 	ctx := context.Background()
