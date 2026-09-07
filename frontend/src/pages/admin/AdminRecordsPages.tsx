@@ -17,10 +17,10 @@ import {
   Dialog,
   DialogFooter,
   dialogFieldClass,
-  dialogLabelClass,
-  PageHeader
+  dialogLabelClass
 } from '@/components/ui'
 import type { CloudUser } from '@/types/cloud'
+import { Field } from '@/components/Field'
 
 const dangerousTaskAction = (action: string) =>
   [
@@ -94,31 +94,26 @@ export function AdminTasksPage() {
   }
   return (
     <section className="page super-page">
-      <PageHeader
-        eyebrow="任务队列"
-        title="任务执行记录"
-        description="危险的过期生命周期任务会进入待复核，确认前不会再次操作容器。"
-        actions={
-          <div className="flex gap-2">
-            {abnormalCount > 0 && (
-              <Button
-                tone="danger"
-                loading={discardAllState.isLoading}
-                onClick={() => void discardAbnormalTasks()}
-              >
-                一键作废异常任务（{abnormalCount}）
-              </Button>
-            )}
+      <div className="mb-4 flex justify-end">
+        <div className="flex gap-2">
+          {abnormalCount > 0 && (
             <Button
-              tone="secondary"
-              loading={tasks.isFetching}
-              onClick={() => void tasks.refetch()}
+              tone="danger"
+              loading={discardAllState.isLoading}
+              onClick={() => void discardAbnormalTasks()}
             >
-              ↻ 刷新
+              一键作废异常任务（{abnormalCount}）
             </Button>
-          </div>
-        }
-      />
+          )}
+          <Button
+            tone="secondary"
+            loading={tasks.isFetching}
+            onClick={() => void tasks.refetch()}
+          >
+            ↻ 刷新
+          </Button>
+        </div>
+      </div>
       <div className="admin-table-wrap">
         <table>
           <thead>
@@ -232,11 +227,13 @@ export function AdminUsersPage({
   return (
     <section className="page super-page">
       <div className="mb-4 flex justify-end">
-        <input
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          placeholder="用户名、邮箱或ID"
-        />
+        <Field>
+          <input
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="用户名、邮箱或ID"
+          />
+        </Field>
       </div>
       <div className="admin-table-wrap">
         <table>

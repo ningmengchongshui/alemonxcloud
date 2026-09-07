@@ -1,19 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { useSaveAdminNodeMutation } from '@/services/cloudApi'
 import type { Node } from '@/types/cloud'
 import { Alert, Button, Dialog } from '@/components/ui'
+import { Field } from './Field'
 
 const inputClass =
   'mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white'
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100">
-      {label}
-      {children}
-    </label>
-  )
-}
 
 export function NodeEditor() {
   const [open, setOpen] = useState(false)
