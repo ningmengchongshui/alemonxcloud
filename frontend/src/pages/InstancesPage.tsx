@@ -266,9 +266,10 @@ export function InstancesPage({
     eyebrow?: string
     createLabel: string
     selfHosted?: boolean
+    /** Render as a section inside a parent workspace rather than as a page header. */
+    compact?: boolean
   }
 }) {
-  const [error, setError] = useState('')
   const [pending, setPending] = useState<{
     id: string
     action: InstanceAction
@@ -284,11 +285,9 @@ export function InstancesPage({
   const [resizing, setResizing] = useState<Instance | null>(null)
   const [resizePlanID, setResizePlanID] = useState('')
   const [resizeQuote, setResizeQuote] = useState<PlanChangeQuote | null>(null)
-  const [resizeError, setResizeError] = useState('')
   const [months, setMonths] = useState('1')
   const [renewPromoCode, setRenewPromoCode] = useState('')
   const [renewQuote, setRenewQuote] = useState<PriceQuote | null>(null)
-  const [renewalError, setRenewalError] = useState('')
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
   const { data: catalog } = useGetCatalogQuery()
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
@@ -386,17 +385,12 @@ export function InstancesPage({
         }
         setReinstalling(null)
       })
-      .catch(error => {
+      .catch(() => {
         trackConsoleEvent('instance_action', 'me', 'instances', {
           action: 'reinstall',
           result: 'error',
           durationMs: performance.now() - started
         })
-        setReinstallError(
-          typeof error?.data?.message === 'string'
-            ? error.data.message
-            : '重装任务未创建，请稍后重试。'
-        )
       })
   }
 
@@ -405,7 +399,6 @@ export function InstancesPage({
     promoCode = renewPromoCode,
     quoteMonths = Number(months) || 1
   ) {
-    setRenewalError('')
     void quoteRenewal({
       id: order.id,
       months: quoteMonths,
@@ -415,39 +408,25 @@ export function InstancesPage({
       .then(value => {
         setRenewQuote(value)
       })
-      .catch(error =>
-        setRenewalError(
-          typeof error?.data?.message === 'string'
-            ? error.data.message
-            : '优惠试算失败'
-        )
-      )
+      .catch(() => undefined)
   }
 
   function openRenewal(order: Order) {
     setMonths('1')
     setRenewPromoCode('')
     setRenewQuote(null)
-    setRenewalError('')
     setRenewing(order)
     void quoteRenewal({ id: order.id, months: 1 })
       .unwrap()
       .then(value => {
         setRenewQuote(value)
       })
-      .catch(error =>
-        setRenewalError(
-          typeof error?.data?.message === 'string'
-            ? error.data.message
-            : '优惠试算失败'
-        )
-      )
+      .catch(() => undefined)
   }
 
   function openResize(item: Instance) {
     setResizing(item)
     setResizeQuote(null)
-    setResizeError('')
     const current =
       item.currentPlanId || renewableOrderByInstance.get(item.id)?.planId
     const first = catalog?.plans.find(plan => plan.id !== current)?.id || ''
@@ -456,9 +435,7 @@ export function InstancesPage({
       void quotePlanChange({ id: item.id, targetPlanId: first })
         .unwrap()
         .then(setResizeQuote)
-        .catch((error: { data?: { message?: string } }) =>
-          setResizeError(error.data?.message || '套餐报价失败')
-        )
+        .catch(() => undefined)
   }
 
   function confirmAction() {
@@ -497,7 +474,6 @@ export function InstancesPage({
           result: 'error',
           durationMs: performance.now() - started
         })
-        setError('实例操作未完成，请稍后重试。')
         setPending(null)
       })
   }
@@ -506,19 +482,33 @@ export function InstancesPage({
 
   return (
     <section className={workspace ? '' : 'page me-page'}>
-      {workspace && (
-        <PageHeader
-          eyebrow={workspace.eyebrow}
-          title={workspace.title}
-          description={workspace.description}
-          actions={
+      {workspace &&
+        (workspace.compact ? (
+          <header className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="m-0 text-lg font-bold tracking-tight text-slate-900 dark:text-white">
+                {workspace.title}
+              </h2>
+              <p className="m-0 mt-1 text-xs text-slate-500 dark:text-slate-300">
+                {workspace.description}
+              </p>
+            </div>
             <Button onClick={onCreate}>
               <span aria-hidden="true">＋</span> {workspace.createLabel}
             </Button>
-          }
-        />
-      )}
-      {error && <Alert tone="error">{error}</Alert>}
+          </header>
+        ) : (
+          <PageHeader
+            eyebrow={workspace.eyebrow}
+            title={workspace.title}
+            description={workspace.description}
+            actions={
+              <Button onClick={onCreate}>
+                <span aria-hidden="true">＋</span> {workspace.createLabel}
+              </Button>
+            }
+          />
+        ))}
       {loading ? (
         <LoadingState>正在同步实例状态…</LoadingState>
       ) : sorted.length === 0 ? (
@@ -1004,7 +994,6 @@ export function InstancesPage({
               payableFen={renewPayableFen}
             />
           </div>
-          {renewalError && <Alert tone="error">{renewalError}</Alert>}
           <div className="mt-5 flex justify-end gap-2">
             <Button tone="secondary" onClick={() => setRenewing(null)}>
               取消
@@ -1015,10 +1004,6 @@ export function InstancesPage({
               disabled={!canRenew}
               onClick={() => {
                 const value = Number(months)
-                if (!subscriptionMonths.includes(value)) {
-                  setRenewalError('请选择 1、3、6 或 12 个月')
-                  return
-                }
                 const started = performance.now()
                 trackConsoleEvent('renew_order', 'me', 'instances', {
                   result: 'started'
@@ -1036,16 +1021,11 @@ export function InstancesPage({
                     })
                     setRenewing(null)
                   })
-                  .catch(error => {
+                  .catch(() => {
                     trackConsoleEvent('renew_order', 'me', 'instances', {
                       result: 'error',
                       durationMs: performance.now() - started
                     })
-                    setRenewalError(
-                      typeof error?.data?.message === 'string'
-                        ? error.data.message
-                        : '续费失败，请稍后重试'
-                    )
                   })
               }}
             >
@@ -1071,13 +1051,10 @@ export function InstancesPage({
                 const value = event.target.value
                 setResizePlanID(value)
                 setResizeQuote(null)
-                setResizeError('')
                 void quotePlanChange({ id: resizing.id, targetPlanId: value })
                   .unwrap()
                   .then(setResizeQuote)
-                  .catch((error: { data?: { message?: string } }) =>
-                    setResizeError(error.data?.message || '套餐报价失败')
-                  )
+                  .catch(() => undefined)
               }}
             >
               <option value="">请选择套餐</option>
@@ -1123,7 +1100,6 @@ export function InstancesPage({
               <p className="mb-0 mt-2 text-slate-500">{resizeQuote.summary}</p>
             </div>
           )}
-          {resizeError && <Alert tone="error">{resizeError}</Alert>}
           <div className="mt-5 flex justify-end gap-2">
             <Button tone="secondary" onClick={() => setResizing(null)}>
               取消
@@ -1157,9 +1133,7 @@ export function InstancesPage({
                     )
                     setResizing(null)
                   })
-                  .catch((error: { data?: { message?: string } }) =>
-                    setResizeError(error.data?.message || '套餐变更失败')
-                  )
+                  .catch(() => undefined)
               }}
             >
               确认变更

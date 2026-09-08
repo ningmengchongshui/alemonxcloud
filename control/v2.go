@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -266,24 +267,69 @@ func handleV2Terminal(cfg *config, f v2Frame, send func(v2Frame) error, terminal
 	}()
 }
 
-func localAgentStatus() map[string]any {
-	mem := 0
+func memoryMBFromMeminfo(raw string) int {
+	for _, line := range strings.Split(raw, "\n") {
+		var kb int
+		if _, err := fmt.Sscanf(line, "MemTotal: %d kB", &kb); err == nil && kb > 0 {
+			return kb / 1024
+		}
+	}
+	return 0
+}
+
+func localMemoryMB() int {
 	if raw, err := os.ReadFile("/proc/meminfo"); err == nil {
-		for _, line := range strings.Split(string(raw), "\n") {
-			var kb int
-			if _, err := fmt.Sscanf(line, "MemTotal: %d kB", &kb); err == nil {
-				mem = kb / 1024
-				break
+		if memory := memoryMBFromMeminfo(string(raw)); memory > 0 {
+			return memory
+		}
+	}
+	// macOS and the BSDs do not provide /proc/meminfo. Do not pretend that the
+	// machine has 1 GB: that old fallback silently turned every such node into
+	// an 819 MB quota (the default 80% safety headroom).
+	for _, key := range []string{"hw.memsize", "hw.physmem"} {
+		if raw, err := exec.Command("sysctl", "-n", key).Output(); err == nil {
+			if bytes, parseErr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); parseErr == nil && bytes > 0 {
+				return int(bytes / (1024 * 1024))
 			}
 		}
 	}
-	if mem == 0 {
-		mem = 1024
+	return 0
+}
+
+func controlDataRoot() string {
+	if root := strings.TrimSpace(os.Getenv("XCLOUD_CONTROL_DATA_ROOT")); root != "" {
+		return root
 	}
-	root := os.Getenv("XCLOUD_CONTROL_DATA_ROOT")
-	if root == "" {
-		root = "/var/lib/xcloud-control/instances"
+	const systemRoot = "/var/lib/xcloud-control/instances"
+	if writableDataRoot(systemRoot) {
+		return systemRoot
 	}
+	// `xcloud-control install` runs as root on Linux and uses systemRoot. This
+	// fallback keeps a directly-run development client (notably on macOS)
+	// consistent: its status report and Compose data use the same writable disk.
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".xcloud-control", "instances")
+	}
+	return systemRoot
+}
+
+func writableDataRoot(root string) bool {
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return false
+	}
+	probe, err := os.CreateTemp(root, ".xcloud-write-check-")
+	if err != nil {
+		return false
+	}
+	name := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(name)
+	return true
+}
+
+func localAgentStatus() map[string]any {
+	mem := localMemoryMB()
+	root := controlDataRoot()
 	_ = os.MkdirAll(root, 0700)
 	var stat syscall.Statfs_t
 	available, total := int64(0), int64(0)
@@ -304,7 +350,7 @@ func localAgentStatus() map[string]any {
 			}
 		}
 	}
-	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "agentVersion": "0.2.0", "agentApiVersion": 1, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1", "network.bandwidth.v1"}}
+	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "agentVersion": version, "agentApiVersion": 1, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1", "network.bandwidth.v1"}}
 }
 
 // handleV2Command deliberately recognises a small fixed command set.  The
@@ -401,10 +447,7 @@ func managedDir(cfg config, name string) (string, error) {
 	if !safeManagedName(name) {
 		return "", errors.New("受管实例标识无效")
 	}
-	root := os.Getenv("XCLOUD_CONTROL_DATA_ROOT")
-	if root == "" {
-		root = "/var/lib/xcloud-control/instances"
-	}
+	root := controlDataRoot()
 	return agentcore.InstanceDir(root, name)
 }
 func runManagedCompose(cfg config, action string, p managedPayload) error {

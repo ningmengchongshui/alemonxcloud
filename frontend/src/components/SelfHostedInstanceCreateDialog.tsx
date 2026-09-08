@@ -75,20 +75,12 @@ export function SelfHostedInstanceCreateDialog({
     })
       .unwrap()
       .then(onClose)
-      .catch(value =>
-        setError(
-          typeof value?.data?.message === 'string'
-            ? value.data.message
-            : '创建任务未提交，请检查节点在线状态、资源配额和镜像版本。'
-        )
-      )
+      .catch(() => undefined)
   }
 
   return (
     <Dialog
-      eyebrow="自建节点"
       title="创建实例"
-      description={`部署到 ${node.name}；不会创建订单或扣除 XCoin，只占用该节点的资源配额。`}
       onClose={onClose}
     >
       <div className="grid gap-4 sm:grid-cols-2">
@@ -99,7 +91,10 @@ export function SelfHostedInstanceCreateDialog({
             className={dialogFieldClass}
             value={name}
             maxLength={64}
-            onChange={event => setName(event.target.value)}
+            onChange={event => {
+              setName(event.target.value)
+              setError('')
+            }}
             placeholder="例如：我的 AlemonX"
           />
         </label>
@@ -125,7 +120,10 @@ export function SelfHostedInstanceCreateDialog({
             className={dialogFieldClass}
             value={imageVersion}
             disabled={!selectedImage}
-            onChange={event => setImageVersion(event.target.value)}
+            onChange={event => {
+              setImageVersion(event.target.value)
+              setError('')
+            }}
           >
             <option value="">请选择版本</option>
             {selectedVersions.map(version => (
@@ -147,7 +145,10 @@ export function SelfHostedInstanceCreateDialog({
             step="0.1"
             inputMode="decimal"
             value={cpu}
-            onChange={event => setCPU(event.target.value)}
+            onChange={event => {
+              setCPU(event.target.value)
+              setError('')
+            }}
           />
         </label>
         <label className={dialogLabelClass}>
@@ -159,12 +160,15 @@ export function SelfHostedInstanceCreateDialog({
             step="256"
             inputMode="numeric"
             value={memoryMB}
-            onChange={event => setMemoryMB(event.target.value)}
+            onChange={event => {
+              setMemoryMB(event.target.value)
+              setError('')
+            }}
           />
         </label>
       </div>
       <p className="mt-4 text-[11px] leading-5 text-slate-500 dark:text-slate-300">
-        可分配配额：{node.cpuUsed} / {node.cpuQuota} 核，{node.memoryUsedMB} / {node.memoryQuotaMB} MB。
+        实例已分配 / 可分配上限：{node.cpuUsed} / {node.cpuQuota} 核，{node.memoryUsedMB} / {node.memoryQuotaMB} MB。
       </p>
       {error && <Alert tone="error">{error}</Alert>}
       <DialogFooter>

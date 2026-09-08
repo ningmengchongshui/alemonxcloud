@@ -77,6 +77,8 @@ export interface SelfHostedNode {
   lastHeartbeatAt?: string
   cpuDetected: number
   memoryDetectedMB: number
+  diskAvailableBytes: number
+  diskTotalBytes: number
   cpuQuota: number
   memoryQuotaMB: number
   cpuUsed: number

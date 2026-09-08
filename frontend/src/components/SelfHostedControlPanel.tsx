@@ -1,7 +1,13 @@
 import { useState } from 'react'
 import { InstancesPage } from '@/pages/InstancesPage'
 import { SelfHostedInstanceCreateDialog } from '@/components/SelfHostedInstanceCreateDialog'
-import { Alert, Button, EmptyState, LoadingState, PageHeader, StatusBadge } from '@/components/ui'
+import {
+  Alert,
+  Button,
+  EmptyState,
+  LoadingState,
+  StatusBadge
+} from '@/components/ui'
 import {
   useCreateControlEnrollmentTokenMutation,
   useGetSelfHostedNodeInstancesQuery,
@@ -21,69 +27,240 @@ type Props = {
 }
 
 function NodeStatus({ online }: { online: boolean }) {
-  return <StatusBadge tone={online ? 'success' : 'neutral'}>{online ? '节点在线' : '节点离线'}</StatusBadge>
+  return (
+    <StatusBadge tone={online ? 'success' : 'neutral'}>
+      {online ? '节点在线' : '节点离线'}
+    </StatusBadge>
+  )
 }
 
-export function SelfHostedControlPanel({ detail = false, nodeID, onOpen, onBack, onOpenLogs = () => undefined, onOpenTerminal = () => undefined, onOpenExecutions = () => undefined }: Props) {
-  const { data: nodes = [], isLoading: nodesLoading } = useGetSelfHostedNodesQuery(undefined, { skip: detail })
-  const { data: node, isLoading: nodeLoading } = useGetSelfHostedNodeQuery(nodeID ?? '', { skip: !detail || !nodeID })
-  const { data: nodeInstances = [], isLoading: instancesLoading } = useGetSelfHostedNodeInstancesQuery(nodeID ?? '', { skip: !detail || !nodeID })
-  const [createToken, { isLoading: creatingToken }] = useCreateControlEnrollmentTokenMutation()
+function memory(value: number) {
+	if (value <= 0) return '等待上报'
+  return value >= 1024
+    ? `${(value / 1024).toFixed(value % 1024 ? 1 : 0)} GB`
+    : `${value} MB`
+}
+
+function storage(bytes: number) {
+  if (bytes <= 0) return '等待上报'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
+}
+
+function CapacityMeter({
+  label,
+  used,
+  total,
+  unit
+}: {
+  label: string
+  used: number
+  total: number
+  unit: string
+}) {
+  const percent = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
+  return (
+    <div className="min-w-0">
+      <div className="flex items-baseline justify-between gap-3 text-xs">
+        <span className="font-semibold text-slate-600 dark:text-slate-200">{label}</span>
+        <span className="shrink-0 font-bold tabular-nums text-slate-900 dark:text-white">{used} / {total} {unit}</span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+        <i className="block h-full rounded-full bg-blue-600" style={{ width: `${percent}%` }} aria-label={`${label}已使用 ${percent}%`} />
+      </div>
+    </div>
+  )
+}
+
+function DiskMeter({ available, total }: { available: number; total: number }) {
+  const used = Math.max(0, total - available)
+  const percent = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
+  return (
+    <div className="min-w-0">
+      <div className="flex items-baseline justify-between gap-3 text-xs">
+        <span className="font-semibold text-slate-600 dark:text-slate-200">实例数据盘已用</span>
+        <span className="shrink-0 font-bold tabular-nums text-slate-900 dark:text-white">
+          {total > 0 ? `${storage(used)} / ${storage(total)}` : '等待 Agent 上报'}
+        </span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+        <i className="block h-full rounded-full bg-blue-600" style={{ width: `${percent}%` }} aria-label={`实例数据盘已使用 ${percent}%`} />
+      </div>
+      {total > 0 && <p className="mb-0 mt-1.5 text-[11px] text-slate-500 dark:text-slate-300">可用 {storage(available)}</p>}
+    </div>
+  )
+}
+
+export function SelfHostedControlPanel({
+  detail = false,
+  nodeID,
+  onOpen,
+  onBack,
+  onOpenLogs = () => undefined,
+  onOpenTerminal = () => undefined,
+  onOpenExecutions = () => undefined
+}: Props) {
+  const { data: nodes = [], isLoading: nodesLoading } =
+    useGetSelfHostedNodesQuery(undefined, { skip: detail })
+  const { data: node, isLoading: nodeLoading } = useGetSelfHostedNodeQuery(
+    nodeID ?? '',
+    { skip: !detail || !nodeID }
+  )
+  const { data: nodeInstances = [], isLoading: instancesLoading } =
+    useGetSelfHostedNodeInstancesQuery(nodeID ?? '', {
+      skip: !detail || !nodeID
+    })
+  const [createToken, { isLoading: creatingToken }] =
+    useCreateControlEnrollmentTokenMutation()
   const [revoke, { isLoading: revoking }] = useRevokeSelfHostedControlMutation()
   const [enrollmentToken, setEnrollmentToken] = useState('')
-  const [message, setMessage] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
 
   async function generateToken() {
-    setMessage('')
     try {
       const result = await createToken().unwrap()
       setEnrollmentToken(result.token)
-    } catch {
-      setMessage('接入 Token 生成失败，请稍后重试。')
-    }
+    } catch { /* cloudApi presents request errors through the global Toast. */ }
   }
 
   if (!detail) {
-    return <section className="page me-page space-y-4">
-      <PageHeader eyebrow="自建 Agent" title="自建节点" description="接入自己的服务器，在节点资源配额内免费创建平台审核镜像实例。当前账户最多启用 1 个节点。" />
-      {nodesLoading ? <LoadingState>正在加载自建节点…</LoadingState> : nodes.length > 0 ? (
-        <div className="grid gap-3">
-          {nodes.map(item => <button key={item.id} type="button" onClick={() => onOpen?.(item.id)} className="flex w-full flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 text-left transition-colors hover:border-blue-300 hover:bg-blue-50/40 focus-visible:outline-3 focus-visible:outline-blue-200 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-700 dark:hover:bg-slate-900">
-            <span><b className="block text-sm text-slate-900 dark:text-white">{item.name}</b><span className="mt-1 block text-xs text-slate-500 dark:text-slate-300">已用 {item.cpuUsed} / {item.cpuQuota} 核 · {item.memoryUsedMB} / {item.memoryQuotaMB} MB · 所有实例共享最高 10 Mbps</span></span>
-            <span className="flex items-center gap-3"><NodeStatus online={item.status === 'online'} /><span className="text-sm font-semibold text-blue-700 dark:text-blue-300">进入节点 ›</span></span>
-          </button>)}
-        </div>
-      ) : <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-        <EmptyState title="还没有自建节点" description="当前账户可接入 1 台运行 xcloud-control 的服务器。生成 Token 后按部署说明启动 Agent。" />
-        <div className="mx-auto mt-4 max-w-xl space-y-3">
-          <Alert tone="info">Token 仅显示一次，10 分钟内有效。写入 <code>/etc/xcloud-control/config.json</code> 后启动服务。</Alert>
-          <Button loading={creatingToken} onClick={() => void generateToken()}>生成接入 Token</Button>
-          {enrollmentToken && <label className="block text-xs font-semibold text-slate-600 dark:text-slate-200">请立即保存 Token<input readOnly value={enrollmentToken} className="mt-1.5 w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-amber-800 dark:bg-amber-950 dark:text-white" /></label>}
-          {message && <Alert tone="error">{message}</Alert>}
-        </div>
-      </section>}
-    </section>
+    return (
+      <section className="page me-page space-y-4">
+        {nodesLoading ? (
+          <LoadingState>正在加载自建节点…</LoadingState>
+        ) : nodes.length > 0 ? (
+          <div className="grid gap-3">
+            {nodes.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onOpen?.(item.id)}
+                className="flex w-full flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 text-left transition-colors hover:border-blue-300 hover:bg-blue-50/40 focus-visible:outline-3 focus-visible:outline-blue-200 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-700 dark:hover:bg-slate-900"
+              >
+                <span>
+                  <b className="block text-sm text-slate-900 dark:text-white">
+                    {item.name}
+                  </b>
+                  <span className="mt-1 block text-xs text-slate-500 dark:text-slate-300">
+                    实例已分配 {item.cpuUsed} / {item.cpuQuota} 核 ·{' '}
+                    {item.memoryUsedMB} / {item.memoryQuotaMB} MB
+                    {item.diskTotalBytes > 0 && ` · 数据盘可用 ${storage(item.diskAvailableBytes)}`} ·
+                  </span>
+                </span>
+                <span className="flex items-center gap-3">
+                  <NodeStatus online={item.status === 'online'} />
+                  <span className="text-sm font-semibold text-blue-700 dark:text-blue-300">
+                    进入节点 ›
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+            <EmptyState
+              title="还没有自建节点"
+              description="当前账户可接入 1 台运行 xcloud-control 的服务器。生成 Token 后按部署说明启动 Agent。"
+            />
+            <div className="mx-auto mt-4 max-w-xl space-y-3">
+              <Alert tone="info">
+                Token 仅显示一次，10 分钟内有效。写入{' '}
+                <code>/etc/xcloud-control/config.json</code> 后启动服务。
+              </Alert>
+              <Button
+                loading={creatingToken}
+                onClick={() => void generateToken()}
+              >
+                生成接入 Token
+              </Button>
+              {enrollmentToken && (
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-200">
+                  请立即保存 Token
+                  <input
+                    readOnly
+                    value={enrollmentToken}
+                    className="mt-1.5 w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-amber-800 dark:bg-amber-950 dark:text-white"
+                  />
+                </label>
+              )}
+            </div>
+          </section>
+        )}
+      </section>
+    )
   }
 
   if (nodeLoading) return <LoadingState>正在加载节点详情…</LoadingState>
-  if (!node) return <EmptyState title="自建节点不存在" description="节点可能已被撤销或你没有访问权限。" action={<Button tone="secondary" onClick={onBack}>返回自建节点</Button>} />
+  if (!node)
+    return (
+      <EmptyState
+        title="自建节点不存在"
+        description="节点可能已被撤销或你没有访问权限。"
+        action={
+          <Button tone="secondary" onClick={onBack}>
+            返回自建节点
+          </Button>
+        }
+      />
+    )
 
-  return <section className="page me-page space-y-5">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><Button tone="secondary" onClick={onBack}>返回自建节点</Button><p className="mb-1 mt-4 text-[10px] font-extrabold tracking-widest text-blue-600">自建 Agent 节点</p><h1 className="m-0 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{node.name}</h1></div>
-      <NodeStatus online={node.status === 'online'} />
-    </div>
-    <section className="grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-4 dark:border-slate-700 dark:bg-slate-700">
-      {[
-        ['CPU 配额', `${node.cpuUsed} / ${node.cpuQuota} 核`],
-        ['内存配额', `${node.memoryUsedMB} / ${node.memoryQuotaMB} MB`],
-        ['检测资源', `${node.cpuDetected} 核 / ${node.memoryDetectedMB} MB`],
-        ['Agent 版本', node.agentVersion || '等待上报']
-      ].map(([label, value]) => <div key={label} className="bg-white px-4 py-3 dark:bg-slate-800"><span className="block text-[10px] font-bold text-slate-400">{label}</span><b className="mt-1 block text-xs text-slate-700 dark:text-slate-100">{value}</b></div>)}
+  return (
+    <section className="page me-page space-y-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+        </div>
+        <NodeStatus online={node.status === 'online'} />
+      </header>
+      <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
+        <div className="grid gap-5 md:grid-cols-3">
+          <CapacityMeter label="实例 CPU 已分配" used={node.cpuUsed} total={node.cpuQuota} unit="核" />
+          <CapacityMeter label="实例内存已分配" used={node.memoryUsedMB} total={node.memoryQuotaMB} unit="MB" />
+          <DiskMeter available={node.diskAvailableBytes} total={node.diskTotalBytes} />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 border-t border-slate-100 pt-3 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-300">
+          <span>设备资源 {node.cpuDetected} 核 / {memory(node.memoryDetectedMB)}</span>
+          {node.diskTotalBytes > 0 && <span>实例数据盘 {storage(node.diskTotalBytes)}</span>}
+          <span>“已分配”是实例预留配额，不是设备当前实时负载</span>
+          <span>Agent {node.agentVersion || '等待上报'}</span>
+          <span>实例共享最高 10 Mbps 出口带宽</span>
+        </div>
+      </section>
+      <InstancesPage
+        instances={nodeInstances}
+        orders={[]}
+        loading={instancesLoading}
+        onCreate={() => setCreateOpen(true)}
+        onOpenLogs={onOpenLogs}
+        onOpenTerminal={onOpenTerminal}
+        onOpenExecutions={onOpenExecutions}
+        workspace={{
+          title: '实例',
+          description:
+            '运行在当前自建节点。创建不会产生订单或消耗平台余额。',
+          createLabel: '创建实例',
+          selfHosted: true,
+          compact: true
+        }}
+      />
+      <details className="border-t border-slate-200 pt-4 dark:border-slate-700">
+        <summary className="cursor-pointer text-xs font-bold text-rose-700 dark:text-rose-300">危险操作：撤销节点</summary>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-rose-50 px-4 py-3 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-100">
+          <span>撤销会立即断开 Agent，已部署实例将无法继续管理。</span>
+          <Button tone="danger" loading={revoking} onClick={() => { if (window.confirm('确认撤销该自建节点吗？')) void revoke() }}>撤销节点</Button>
+        </div>
+      </details>
+      {createOpen && (
+        <SelfHostedInstanceCreateDialog
+          node={node}
+          onClose={() => setCreateOpen(false)}
+        />
+      )}
     </section>
-    <InstancesPage instances={nodeInstances} orders={[]} loading={instancesLoading} onCreate={() => setCreateOpen(true)} onOpenLogs={onOpenLogs} onOpenTerminal={onOpenTerminal} onOpenExecutions={onOpenExecutions} workspace={{ eyebrow: '节点实例', title: '我的实例', description: '与平台托管实例使用相同的管理能力；不创建订单、不扣 XCoin，所有实例共享该节点最高 10 Mbps 出口带宽。', createLabel: '创建', selfHosted: true }} />
-    <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 dark:border-rose-900 dark:bg-rose-950/30"><h2 className="m-0 text-base font-bold text-rose-900 dark:text-rose-100">撤销节点</h2><p className="mb-3 mt-1 text-sm text-rose-800 dark:text-rose-200">撤销会立即断开自建 Agent，已部署实例将无法继续管理。</p><Button tone="danger" loading={revoking} onClick={() => { if (window.confirm('确认撤销该自建节点吗？')) void revoke() }}>撤销节点</Button></section>
-    {createOpen && <SelfHostedInstanceCreateDialog node={node} onClose={() => setCreateOpen(false)} />}
-  </section>
+  )
 }

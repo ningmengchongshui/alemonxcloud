@@ -22,6 +22,8 @@ type selfHostedNode struct {
 	LastHeartbeat  *time.Time `json:"lastHeartbeatAt,omitempty"`
 	CPUDetected    float64    `json:"cpuDetected"`
 	MemoryDetected int        `json:"memoryDetectedMB"`
+	DiskAvailable  int64      `json:"diskAvailableBytes"`
+	DiskTotal      int64      `json:"diskTotalBytes"`
 	CPUQuota       float64    `json:"cpuQuota"`
 	MemoryQuota    int        `json:"memoryQuotaMB"`
 	CPUUsed        float64    `json:"cpuUsed"`
@@ -32,7 +34,7 @@ type selfHostedNode struct {
 
 func selfHostedNodes(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT n.id,n.name,n.control_device_id,n.enabled,n.last_heartbeat_at,n.cpu_detected,n.memory_detected_mb,n.cpu_quota,n.memory_quota_mb,COALESCE(n.agent_version,''),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id AND i.placement_type='selfhosted' WHERE n.node_kind=? AND n.owner_id=? GROUP BY n.id ORDER BY n.created_at`, selfHostedNodeKind, user.ID)
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT n.id,n.name,n.control_device_id,n.enabled,n.last_heartbeat_at,n.cpu_detected,n.memory_detected_mb,COALESCE(n.disk_available_bytes,0),COALESCE(n.disk_total_bytes,0),n.cpu_quota,n.memory_quota_mb,COALESCE(n.agent_version,''),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id AND i.placement_type='selfhosted' WHERE n.node_kind=? AND n.owner_id=? GROUP BY n.id ORDER BY n.created_at`, selfHostedNodeKind, user.ID)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -43,7 +45,7 @@ func selfHostedNodes(c *gin.Context) {
 		var item selfHostedNode
 		var enabled bool
 		var raw []byte
-		if err := rows.Scan(&item.ID, &item.Name, &item.DeviceID, &enabled, &item.LastHeartbeat, &item.CPUDetected, &item.MemoryDetected, &item.CPUQuota, &item.MemoryQuota, &item.AgentVersion, &raw, &item.CPUUsed, &item.MemoryUsed); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.DeviceID, &enabled, &item.LastHeartbeat, &item.CPUDetected, &item.MemoryDetected, &item.DiskAvailable, &item.DiskTotal, &item.CPUQuota, &item.MemoryQuota, &item.AgentVersion, &raw, &item.CPUUsed, &item.MemoryUsed); err != nil {
 			internalError(c, err)
 			return
 		}
@@ -63,7 +65,7 @@ func ownedSelfHostedNode(c *gin.Context) (selfHostedNode, bool) {
 	var item selfHostedNode
 	var enabled bool
 	var raw []byte
-	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT id,name,control_device_id,enabled,last_heartbeat_at,cpu_detected,memory_detected_mb,cpu_quota,memory_quota_mb,COALESCE(agent_version,''),COALESCE(agent_capabilities,JSON_ARRAY()),COALESCE((SELECT SUM(cpu) FROM xcloud_instances WHERE node_id=xcloud_nodes.id AND placement_type='selfhosted' AND status IN ('deploying','running','stopped','destroy_scheduled')),0),COALESCE((SELECT SUM(memory_mb) FROM xcloud_instances WHERE node_id=xcloud_nodes.id AND placement_type='selfhosted' AND status IN ('deploying','running','stopped','destroy_scheduled')),0) FROM xcloud_nodes WHERE id=? AND node_kind=? AND owner_id=?`, id, selfHostedNodeKind, user.ID).Scan(&item.ID, &item.Name, &item.DeviceID, &enabled, &item.LastHeartbeat, &item.CPUDetected, &item.MemoryDetected, &item.CPUQuota, &item.MemoryQuota, &item.AgentVersion, &raw, &item.CPUUsed, &item.MemoryUsed)
+	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT id,name,control_device_id,enabled,last_heartbeat_at,cpu_detected,memory_detected_mb,COALESCE(disk_available_bytes,0),COALESCE(disk_total_bytes,0),cpu_quota,memory_quota_mb,COALESCE(agent_version,''),COALESCE(agent_capabilities,JSON_ARRAY()),COALESCE((SELECT SUM(cpu) FROM xcloud_instances WHERE node_id=xcloud_nodes.id AND placement_type='selfhosted' AND status IN ('deploying','running','stopped','destroy_scheduled')),0),COALESCE((SELECT SUM(memory_mb) FROM xcloud_instances WHERE node_id=xcloud_nodes.id AND placement_type='selfhosted' AND status IN ('deploying','running','stopped','destroy_scheduled')),0) FROM xcloud_nodes WHERE id=? AND node_kind=? AND owner_id=?`, id, selfHostedNodeKind, user.ID).Scan(&item.ID, &item.Name, &item.DeviceID, &enabled, &item.LastHeartbeat, &item.CPUDetected, &item.MemoryDetected, &item.DiskAvailable, &item.DiskTotal, &item.CPUQuota, &item.MemoryQuota, &item.AgentVersion, &raw, &item.CPUUsed, &item.MemoryUsed)
 	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(404, gin.H{"message": "自建节点不存在"})
 		return item, false
@@ -111,7 +113,7 @@ func updateSelfHostedNodeQuota(c *gin.Context) {
 		c.JSON(409, gin.H{"message": "配额不能低于已分配资源"})
 		return
 	}
-	_, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_nodes SET cpu_quota=?,memory_quota_mb=?,updated_at=NOW() WHERE id=?`, body.CPUQuota, body.MemoryQuota, item.ID)
+	_, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_nodes SET cpu_quota=?,memory_quota_mb=?,selfhosted_quota_mode='manual',updated_at=NOW() WHERE id=?`, body.CPUQuota, body.MemoryQuota, item.ID)
 	if err != nil {
 		internalError(c, err)
 		return
