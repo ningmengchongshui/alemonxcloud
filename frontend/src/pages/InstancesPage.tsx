@@ -1030,6 +1030,18 @@ export function InstancesPage({
                   </b>
                 </div>
               )}
+              {renewQuote?.currentExpiresAt && renewQuote?.renewedExpiresAt && (
+                <div className="border-t border-slate-200 pt-2 text-slate-500 dark:border-slate-700 dark:text-slate-300">
+                  <div className="flex justify-between gap-3">
+                    <span>当前有效期至</span>
+                    <b>{serviceTime(renewQuote.currentExpiresAt)}</b>
+                  </div>
+                  <div className="mt-1 flex justify-between gap-3 text-blue-700 dark:text-blue-300">
+                    <span>续费后有效期至</span>
+                    <b>{serviceTime(renewQuote.renewedExpiresAt)}</b>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <div className="mt-4">
@@ -1138,15 +1150,32 @@ export function InstancesPage({
               </div>
               <div className="mt-2 border-t border-slate-200 pt-2 dark:border-slate-700">
                 <div className="flex justify-between">
-                  <span>旧订单退款合计</span>
+                  <span>旧套餐剩余价值</span>
                   <b className="text-emerald-600">
                     ¥{(resizeQuote.refundFen / 100).toFixed(2)}
                   </b>
                 </div>
                 <div className="mt-1 flex justify-between">
-                  <span>新套餐购买合计</span>
+                  <span>新套餐剩余价格</span>
                   <b>¥{(resizeQuote.chargeFen / 100).toFixed(2)}</b>
                 </div>
+              </div>
+              <div className="mt-2 border-t border-slate-200 pt-2 text-slate-500 dark:border-slate-700 dark:text-slate-300">
+                <p className="m-0 font-semibold text-slate-700 dark:text-slate-100">服务期对比</p>
+                {resizeQuote.items.map((item, index) => (
+                  <div key={item.sourceOrderId} className="mt-2 text-[11px] leading-5">
+                    {resizeQuote.items.length > 1 && <p className="m-0">第 {index + 1} 段服务期</p>}
+                    <div className="flex justify-between gap-3">
+                      <span>原服务期</span>
+                      <b>{serviceTime(item.sourceStartsAt)} — {serviceTime(item.sourceExpiresAt)}</b>
+                    </div>
+                    <div className="flex justify-between gap-3 text-blue-700 dark:text-blue-300">
+                      <span>新套餐生效后</span>
+                      <b>{serviceTime(item.replacementStartsAt)} — {serviceTime(item.replacementExpiresAt)}</b>
+                    </div>
+                  </div>
+                ))}
+                <p className="mb-0 mt-2 text-[11px]">变更只调整 CPU 和内存，到期日保持不变。</p>
               </div>
               <p className="mb-0 mt-2 text-slate-500">{resizeQuote.summary}</p>
             </div>

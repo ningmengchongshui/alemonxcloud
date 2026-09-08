@@ -78,3 +78,25 @@ func TestRuntimeReadinessDoesNotCreateNetworkWithoutCompose(t *testing.T) {
 		t.Fatal("network must not be created when compose is unavailable")
 	}
 }
+
+func TestLocalAgentStatusDoesNotClaimInventoryWhenDockerListFails(t *testing.T) {
+	t.Setenv("XCLOUD_CONTROL_DATA_ROOT", t.TempDir())
+	previous := controlDockerCommand
+	t.Cleanup(func() { controlDockerCommand = previous })
+	controlDockerCommand = func(args ...string) (string, error) {
+		command := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(command, "info "), strings.HasPrefix(command, "compose version"), strings.HasPrefix(command, "network inspect"):
+			return "ok", nil
+		case strings.HasPrefix(command, "ps "):
+			return "", errors.New("docker list timed out")
+		default:
+			return "", nil
+		}
+	}
+	status := localAgentStatus()
+	inventoryOK, ok := status["runtimeInventoryOK"].(bool)
+	if !ok || inventoryOK {
+		t.Fatalf("runtime inventory must be false after a failed Docker list: %#v", status)
+	}
+}

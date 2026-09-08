@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/binary"
@@ -45,6 +46,8 @@ const (
 	v2TerminalResize
 	v2TerminalClose
 )
+
+const dockerProbeTimeout = 3 * time.Second
 
 type v2Frame struct {
 	kind       byte
@@ -109,7 +112,15 @@ func limitedDiagnostic(value string) string {
 }
 
 var controlDockerCommand = func(args ...string) (string, error) {
-	output, err := exec.Command("docker", args...).CombinedOutput()
+	// Docker CLI can block indefinitely when the daemon is wedged. Readiness
+	// reporting must never keep a freshly connected node in a "checking" state
+	// forever, so every probe has a short, bounded deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), dockerProbeTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return strings.TrimSpace(string(output)), fmt.Errorf("docker command timed out after %s", dockerProbeTimeout)
+	}
 	return strings.TrimSpace(string(output)), err
 }
 
@@ -161,18 +172,29 @@ func serveV2(cfg *config, path string) error {
 		sync.RWMutex
 		values map[string]*os.File
 	}{values: map[string]*os.File{}}
+	commands := struct {
+		sync.RWMutex
+		values map[string]context.CancelFunc
+	}{values: map[string]context.CancelFunc{}}
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	done := make(chan struct{})
 	defer close(done)
+	reportStatus := func() {
+		status, _ := json.Marshal(localAgentStatus())
+		_ = send(v2Frame{kind: v2Ping, meta: status})
+	}
+	// Do not wait for the first 15-second ticker. A successful tunnel
+	// authentication is enough to perform the bounded local checks and report
+	// whether this node can accept an instance right away.
+	reportStatus()
 	go func() {
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				status, _ := json.Marshal(localAgentStatus())
-				_ = send(v2Frame{kind: v2Ping, meta: status})
+				reportStatus()
 			}
 		}
 	}()
@@ -197,7 +219,19 @@ func serveV2(cfg *config, path string) error {
 		case v2RequestStart:
 			go handleV2Request(*cfg, f, send, &pipes)
 		case v2Command:
-			go handleV2Command(cfg, f, send)
+			commandCtx, cancel := context.WithCancel(context.Background())
+			commands.Lock()
+			commands.values[f.id] = cancel
+			commands.Unlock()
+			go func() {
+				defer func() {
+					commands.Lock()
+					delete(commands.values, f.id)
+					commands.Unlock()
+					cancel()
+				}()
+				handleV2Command(commandCtx, cfg, f, send)
+			}()
 		case v2TerminalOpen:
 			go handleV2Terminal(cfg, f, send, &terminals)
 		case v2TerminalData:
@@ -239,6 +273,14 @@ func serveV2(cfg *config, path string) error {
 			pipes.RUnlock()
 			if p != nil {
 				_ = p.Close()
+			}
+			if f.kind == v2Cancel {
+				commands.RLock()
+				cancel := commands.values[f.id]
+				commands.RUnlock()
+				if cancel != nil {
+					cancel()
+				}
 			}
 		case v2Ping:
 			_ = send(v2Frame{kind: v2Pong})
@@ -375,7 +417,9 @@ func localAgentStatus() map[string]any {
 	}
 	dockerVersion, _ := controlDockerCommand("info", "--format", "{{.ServerVersion}}")
 	instances := []map[string]string{}
+	inventoryOK := false
 	if raw, err := controlDockerCommand("ps", "-a", "--filter", "label=xcloud.managed=true", "--format", "{{.Label \"xcloud.route\"}}|{{.State}}"); err == nil {
+		inventoryOK = true
 		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
 			parts := strings.SplitN(line, "|", 2)
 			if len(parts) == 2 && len(parts[0]) == 17 {
@@ -383,7 +427,7 @@ func localAgentStatus() map[string]any {
 			}
 		}
 	}
-	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1", "network.bandwidth.v1"}}
+	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "runtimeInventoryOK": inventoryOK, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1", "network.bandwidth.v1"}}
 }
 
 func safeDockerNetwork(value string) bool {
@@ -454,7 +498,7 @@ func checkRuntimeReadiness() runtimeReadiness {
 // handleV2Command deliberately recognises a small fixed command set.  The
 // control client never accepts a shell string, a host path, or an arbitrary
 // Docker object from the tunnel.
-func handleV2Command(cfg *config, f v2Frame, send func(v2Frame) error) {
+func handleV2Command(ctx context.Context, cfg *config, f v2Frame, send func(v2Frame) error) {
 	var command v2CommandRequest
 	if json.Unmarshal(f.meta, &command) != nil {
 		_ = send(v2Frame{kind: v2CommandResult, id: f.id, meta: []byte(`{"ok":false,"error":"命令格式无效"}`)})
@@ -462,7 +506,7 @@ func handleV2Command(cfg *config, f v2Frame, send func(v2Frame) error) {
 	}
 	var p managedPayload
 	_ = json.Unmarshal(command.Payload, &p)
-	data, err := runManagedCommand(*cfg, command.Action, p)
+	data, err := runManagedCommand(ctx, *cfg, command.Action, p)
 	result := map[string]any{"ok": err == nil}
 	if err != nil {
 		var operation *agentOperationError
@@ -480,7 +524,7 @@ func handleV2Command(cfg *config, f v2Frame, send func(v2Frame) error) {
 	raw, _ := json.Marshal(result)
 	_ = send(v2Frame{kind: v2CommandResult, id: f.id, meta: raw})
 }
-func runManagedCommand(cfg config, action string, p managedPayload) (any, error) {
+func runManagedCommand(ctx context.Context, cfg config, action string, p managedPayload) (any, error) {
 	if action == "logs" {
 		if !safeManagedName(p.Name) {
 			return nil, errors.New("受管实例标识无效")
@@ -489,7 +533,7 @@ func runManagedCommand(cfg config, action string, p managedPayload) (any, error)
 		if tail == "" {
 			tail = "300"
 		}
-		cmd := exec.Command("docker", "logs", "--tail", tail, "--timestamps", p.Name)
+		cmd := exec.CommandContext(ctx, "docker", "logs", "--tail", tail, "--timestamps", p.Name)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return nil, fmt.Errorf("读取容器日志失败: %s", strings.TrimSpace(string(out)))
@@ -534,7 +578,7 @@ func runManagedCommand(cfg config, action string, p managedPayload) (any, error)
 		}
 		return map[string]any{"path": rel, "entries": entries}, nil
 	}
-	err := runManagedCompose(cfg, action, p)
+	err := runManagedCompose(ctx, cfg, action, p)
 	return nil, err
 }
 func safeManagedName(v string) bool {
@@ -555,7 +599,7 @@ func managedDir(cfg config, name string) (string, error) {
 	root := controlDataRoot()
 	return agentcore.InstanceDir(root, name)
 }
-func runManagedCompose(cfg config, action string, p managedPayload) error {
+func runManagedCompose(ctx context.Context, cfg config, action string, p managedPayload) error {
 	dir, err := managedDir(cfg, p.Name)
 	if err != nil {
 		return err
@@ -572,7 +616,7 @@ func runManagedCompose(cfg config, action string, p managedPayload) error {
 		if p.Image == "" {
 			return errors.New("镜像地址无效")
 		}
-		cmd := exec.Command("docker", "pull", p.Image)
+		cmd := exec.CommandContext(ctx, "docker", "pull", p.Image)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("镜像拉取失败: %s", strings.TrimSpace(string(output)))
@@ -605,24 +649,24 @@ func runManagedCompose(cfg config, action string, p managedPayload) error {
 		}
 	}
 	if action == "purge" {
-		if err := composeCommand(dir, p.Name, "down", "--remove-orphans", "--volumes"); err != nil {
+		if err := composeCommand(ctx, dir, p.Name, "down", "--remove-orphans", "--volumes"); err != nil {
 			return err
 		}
 		return os.RemoveAll(dir)
 	}
 	if action == "destroy" {
-		return composeCommand(dir, p.Name, "down", "--remove-orphans")
+		return composeCommand(ctx, dir, p.Name, "down", "--remove-orphans")
 	}
 	switch action {
 	case "stop":
-		return composeCommand(dir, p.Name, "stop")
+		return composeCommand(ctx, dir, p.Name, "stop")
 	case "restart":
-		return composeCommand(dir, p.Name, "restart")
+		return composeCommand(ctx, dir, p.Name, "restart")
 	case "create", "start", "resize", "reinstall":
 		if p.KeepStopped {
-			return composeCommand(dir, p.Name, "up", "-d", "--no-start")
+			return composeCommand(ctx, dir, p.Name, "up", "-d", "--no-start")
 		}
-		return composeCommand(dir, p.Name, "up", "-d", "--remove-orphans")
+		return composeCommand(ctx, dir, p.Name, "up", "-d", "--remove-orphans")
 	case "bandwidth":
 		return nil
 	}
@@ -634,13 +678,16 @@ func maxBandwidth(value int) int {
 	}
 	return value
 }
-func composeCommand(dir, name string, args ...string) error {
+func composeCommand(ctx context.Context, dir, name string, args ...string) error {
 	base := []string{"compose", "--project-name", name, "--file", filepath.Join(dir, "docker-compose.yml")}
-	cmd := exec.Command("docker", append(base, args...)...)
+	cmd := exec.CommandContext(ctx, "docker", append(base, args...)...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		diagnostic := limitedDiagnostic(string(output))
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return &agentOperationError{Code: "command_cancelled", Message: "控制面已取消该节点操作", Diagnostic: "docker compose command cancelled"}
+		}
 		lower := strings.ToLower(diagnostic)
 		code, message := "compose_failed", "实例启动配置执行失败"
 		switch {

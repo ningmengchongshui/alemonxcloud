@@ -51,6 +51,7 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 	suffix := newID("revoke")
 	ownerID := "user_" + suffix
 	deviceID := "ctl_" + suffix
+	tokenID := "token_" + suffix
 	nodeID := "snode_" + suffix
 	instanceID := "shi_" + suffix
 	taskID := "task_" + suffix
@@ -65,12 +66,16 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_tasks WHERE id=?`, runningTaskID)
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_instances WHERE id=?`, instanceID)
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_routes WHERE device_id=?`, deviceID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_enrollment_tokens WHERE id=?`, tokenID)
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_nodes WHERE id=?`, nodeID)
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_devices WHERE id=?`, deviceID)
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_audit_logs WHERE actor_id=? AND action='control.device.revoke'`, ownerID)
 	}()
 
 	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_control_devices (id,owner_id,name,public_key,credential_hash,status,client_version,created_at,updated_at) VALUES (?,?,?,?,?,'enabled','test',NOW(),NOW())`, deviceID, ownerID, "test-control", "test-key", controlHash(deviceID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_control_enrollment_tokens (id,owner_id,token_hash,expires_at,created_at) VALUES (?,?,?,DATE_ADD(NOW(), INTERVAL 10 MINUTE),NOW())`, tokenID, ownerID, controlHash(tokenID)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_control_routes (id,owner_id,device_id,route_key,target_url,status,access_address,created_at,updated_at) VALUES (?,?,?,?,?,'enabled',?,NOW(),NOW())`, "ctr_"+suffix, ownerID, deviceID, "r"+suffix[:16], "", "https://example.test"); err != nil {
@@ -96,12 +101,16 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 	if err != nil {
 		t.Fatalf("revoke self-hosted device: %v", err)
 	}
-	if result.DeviceID != deviceID || result.NodeCount != 1 || len(result.CancelledTaskIDs) != 1 || result.CancelledTaskIDs[0] != taskID {
+	if result.DeviceID != deviceID || result.NodeCount != 1 || result.RevokedTokenCount != 1 || len(result.CancelledTaskIDs) != 1 || result.CancelledTaskIDs[0] != taskID {
 		t.Fatalf("unexpected revoke result: %#v", result)
 	}
 	var deviceStatus, taskStatus, runningTaskStatus, instanceStatus, runtimeStatus string
+	var tokenRevoked sql.NullTime
 	var enabled, ready bool
 	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_control_devices WHERE id=?`, deviceID).Scan(&deviceStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT revoked_at FROM xcloud_control_enrollment_tokens WHERE id=?`, tokenID).Scan(&tokenRevoked); err != nil {
 		t.Fatal(err)
 	}
 	if err := instanceDB.QueryRowContext(ctx, `SELECT enabled,selfhosted_ready FROM xcloud_nodes WHERE id=?`, nodeID).Scan(&enabled, &ready); err != nil {
@@ -116,8 +125,8 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_tasks WHERE id=?`, runningTaskID).Scan(&runningTaskStatus); err != nil {
 		t.Fatal(err)
 	}
-	if deviceStatus != "revoked" || enabled || ready || instanceStatus != "running" || runtimeStatus != "unknown" || taskStatus != taskCanceled || runningTaskStatus != taskRunning {
-		t.Fatalf("revoke cleanup mismatch: device=%s enabled=%v ready=%v instance=%s/%s task=%s runningTask=%s", deviceStatus, enabled, ready, instanceStatus, runtimeStatus, taskStatus, runningTaskStatus)
+	if deviceStatus != "revoked" || !tokenRevoked.Valid || enabled || ready || instanceStatus != "running" || runtimeStatus != "unknown" || taskStatus != taskCanceled || runningTaskStatus != taskRunning {
+		t.Fatalf("revoke cleanup mismatch: device=%s tokenRevoked=%v enabled=%v ready=%v instance=%s/%s task=%s runningTask=%s", deviceStatus, tokenRevoked.Valid, enabled, ready, instanceStatus, runtimeStatus, taskStatus, runningTaskStatus)
 	}
 	if err := taskMayCallAgent(ctx, controlTask{ID: runningTaskID, InstanceID: instanceID, Action: "restart", WorkerID: workerID, ExecutionToken: executionToken}); err == nil {
 		t.Fatal("a running task must be fenced from calling a revoked self-hosted node")

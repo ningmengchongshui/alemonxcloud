@@ -26,7 +26,13 @@ type Props = {
   onOpenExecutions?: (instanceID: string) => void
 }
 
-function NodeStatus({ online, ready = true }: { online: boolean; ready?: boolean }) {
+function NodeStatus({
+  online,
+  ready = true
+}: {
+  online: boolean
+  ready?: boolean
+}) {
   if (online && !ready) {
     return <StatusBadge tone="danger">节点需修复</StatusBadge>
   }
@@ -60,15 +66,24 @@ function CapacityMeter({
   total: number
   unit: string
 }) {
-  const percent = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
+  const percent =
+    total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
   return (
     <div className="min-w-0">
       <div className="flex items-baseline justify-between gap-3 text-xs">
-        <span className="font-semibold text-slate-600 dark:text-slate-200">{label}</span>
-        <span className="shrink-0 font-bold tabular-nums text-slate-900 dark:text-white">{used} / {total} {unit}</span>
+        <span className="font-semibold text-slate-600 dark:text-slate-200">
+          {label}
+        </span>
+        <span className="shrink-0 font-bold tabular-nums text-slate-900 dark:text-white">
+          {used} / {total} {unit}
+        </span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-        <i className="block h-full rounded-full bg-blue-600" style={{ width: `${percent}%` }} aria-label={`${label}已使用 ${percent}%`} />
+        <i
+          className="block h-full rounded-full bg-blue-600"
+          style={{ width: `${percent}%` }}
+          aria-label={`${label}已使用 ${percent}%`}
+        />
       </div>
     </div>
   )
@@ -76,17 +91,26 @@ function CapacityMeter({
 
 function DiskMeter({ available, total }: { available: number; total: number }) {
   const used = Math.max(0, total - available)
-  const percent = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
+  const percent =
+    total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
   return (
     <div className="min-w-0">
       <div className="flex items-baseline justify-between gap-3 text-xs">
-        <span className="font-semibold text-slate-600 dark:text-slate-200">实例数据盘已用</span>
+        <span className="font-semibold text-slate-600 dark:text-slate-200">
+          实例数据盘已用
+        </span>
         <span className="shrink-0 font-bold tabular-nums text-slate-900 dark:text-white">
-          {total > 0 ? `${storage(used)} / ${storage(total)}` : '等待 Agent 上报'}
+          {total > 0
+            ? `${storage(used)} / ${storage(total)}`
+            : '等待 Agent 上报'}
         </span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-        <i className="block h-full rounded-full bg-blue-600" style={{ width: `${percent}%` }} aria-label={`实例数据盘已使用 ${percent}%`} />
+        <i
+          className="block h-full rounded-full bg-blue-600"
+          style={{ width: `${percent}%` }}
+          aria-label={`实例数据盘已使用 ${percent}%`}
+        />
       </div>
     </div>
   )
@@ -121,7 +145,9 @@ export function SelfHostedControlPanel({
     try {
       const result = await createToken().unwrap()
       setEnrollmentToken(result.token)
-    } catch { /* cloudApi presents request errors through the global Toast. */ }
+    } catch {
+      /* cloudApi presents request errors through the global Toast. */
+    }
   }
 
   if (!detail) {
@@ -145,11 +171,16 @@ export function SelfHostedControlPanel({
                   <span className="mt-1 block text-xs text-slate-500 dark:text-slate-300">
                     实例已分配 {item.cpuUsed} / {item.cpuQuota} 核 ·{' '}
                     {item.memoryUsedMB} / {item.memoryQuotaMB} MB
-                    {item.diskTotalBytes > 0 && ` · 数据盘可用 ${storage(item.diskAvailableBytes)}`} ·
+                    {item.diskTotalBytes > 0 &&
+                      ` · 数据盘可用 ${storage(item.diskAvailableBytes)}`}{' '}
+                    ·
                   </span>
                 </span>
                 <span className="flex items-center gap-3">
-                  <NodeStatus online={item.status === 'online'} ready={item.ready} />
+                  <NodeStatus
+                    online={item.status === 'online'}
+                    ready={item.ready}
+                  />
                   <span className="text-sm font-semibold text-blue-700 dark:text-blue-300">
                     进入节点 ›
                   </span>
@@ -161,13 +192,9 @@ export function SelfHostedControlPanel({
           <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
             <EmptyState
               title="还没有自建节点"
-              description="当前账户可接入 1 台运行 xcloud-control 的服务器。生成 Token 后按部署说明启动 Agent。"
+              description="生成 Token 后按部署说明启动 Agent。"
             />
             <div className="mx-auto mt-4 max-w-xl space-y-3">
-              <Alert tone="info">
-                Token 仅显示一次，10 分钟内有效。写入{' '}
-                <code>/etc/xcloud-control/config.json</code> 后启动服务。
-              </Alert>
               <Button
                 loading={creatingToken}
                 onClick={() => void generateToken()}
@@ -208,21 +235,37 @@ export function SelfHostedControlPanel({
   return (
     <section className="page me-page space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-        </div>
+        <div className="flex min-w-0 items-center gap-3"></div>
         <NodeStatus online={node.status === 'online'} ready={node.ready} />
       </header>
       <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
         <div className="grid gap-5 md:grid-cols-3">
-          <CapacityMeter label="实例 CPU 已分配" used={node.cpuUsed} total={node.cpuQuota} unit="核" />
-          <CapacityMeter label="实例内存已分配" used={node.memoryUsedMB} total={node.memoryQuotaMB} unit="MB" />
-          <DiskMeter available={node.diskAvailableBytes} total={node.diskTotalBytes} />
+          <CapacityMeter
+            label="实例 CPU 已分配"
+            used={node.cpuUsed}
+            total={node.cpuQuota}
+            unit="核"
+          />
+          <CapacityMeter
+            label="实例内存已分配"
+            used={node.memoryUsedMB}
+            total={node.memoryQuotaMB}
+            unit="MB"
+          />
+          <DiskMeter
+            available={node.diskAvailableBytes}
+            total={node.diskTotalBytes}
+          />
         </div>
       </section>
       {!node.ready && (
         <Alert tone="error">
           <b>节点已连接，但暂不可部署。</b>{' '}
-          {node.readinessIssues?.map(issue => issue.message).join('；') || node.lastAgentError || 'Agent 正在检查 Docker、Compose、数据盘和实例网络。'}
+          {node.readinessIssues?.map(issue => issue.message).join('；') ||
+            node.lastAgentError ||
+            (node.agentVersion
+              ? 'Agent 尚未上报运行环境检查结果。请等待数秒；若仍未恢复，请检查 xcloud-control 服务日志。'
+              : '当前连接的 Agent 未上报部署就绪状态，通常是旧版 xcloud-control。请升级 Agent 后重新连接。')}
         </Alert>
       )}
       <InstancesPage
@@ -235,18 +278,27 @@ export function SelfHostedControlPanel({
         onOpenExecutions={onOpenExecutions}
         workspace={{
           title: '实例',
-          description:
-            '',
+          description: '',
           createLabel: '创建实例',
           selfHosted: true,
           compact: true
         }}
       />
       <details className="border-t border-slate-200 pt-4 dark:border-slate-700">
-        <summary className="cursor-pointer text-xs font-bold text-rose-700 dark:text-rose-300">危险操作：撤销节点</summary>
+        <summary className="cursor-pointer text-xs font-bold text-rose-700 dark:text-rose-300">
+          危险操作：撤销节点
+        </summary>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-rose-50 px-4 py-3 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-100">
           <span>撤销会立即断开 Agent，已部署实例将无法继续管理。</span>
-          <Button tone="danger" loading={revoking} onClick={() => { if (window.confirm('确认撤销该自建节点吗？')) void revoke() }}>撤销节点</Button>
+          <Button
+            tone="danger"
+            loading={revoking}
+            onClick={() => {
+              if (window.confirm('确认撤销该自建节点吗？')) void revoke()
+            }}
+          >
+            撤销节点
+          </Button>
         </div>
       </details>
       {createOpen && (

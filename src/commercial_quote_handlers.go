@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -56,7 +57,8 @@ func quoteRenewHandler(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	var planID, imageID, instanceID string
 	var monthly int
-	if err := instanceDB.QueryRowContext(c, `SELECT o.plan_id,o.image_id,COALESCE(o.instance_id,''),p.monthly_price_fen FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id WHERE o.id=? AND o.owner_id=?`, c.Param("id"), user.ID).Scan(&planID, &imageID, &instanceID, &monthly); err != nil {
+	var currentExpiry time.Time
+	if err := instanceDB.QueryRowContext(c, `SELECT o.plan_id,o.image_id,COALESCE(o.instance_id,''),p.monthly_price_fen,ins.expires_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_instances ins ON ins.id=o.instance_id WHERE o.id=? AND o.owner_id=?`, c.Param("id"), user.ID).Scan(&planID, &imageID, &instanceID, &monthly, &currentExpiry); err != nil {
 		businessError(c, errors.New("订单不可续费"))
 		return
 	}
@@ -71,5 +73,13 @@ func quoteRenewHandler(c *gin.Context) {
 		businessError(c, err)
 		return
 	}
+	now := time.Now()
+	base := currentExpiry
+	if base.Before(now) {
+		base = now
+	}
+	renewedExpiry := base.AddDate(0, body.Months, 0).AddDate(0, 0, quote.BonusDays)
+	quote.CurrentExpiresAt = &currentExpiry
+	quote.RenewedExpiresAt = &renewedExpiry
 	c.JSON(http.StatusOK, quote)
 }

@@ -221,6 +221,8 @@ export interface PriceQuote {
   tierMonths?: number
   tierDiscountBps?: number
   quoteSummary: string
+  currentExpiresAt?: string
+  renewedExpiresAt?: string
   program?: {
     id: string
     name: string

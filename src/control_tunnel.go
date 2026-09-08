@@ -219,7 +219,7 @@ func controlAuthorizationApprove(c *gin.Context) {
 		c.JSON(500, gin.H{"message": "无法签发设备凭证"})
 		return
 	}
-	deviceID, routeID := newID("ctl"), newID("ctr")
+	deviceID, routeID, nodeID := newID("ctl"), newID("ctr"), newID("snode")
 	route := routeKey(user.ID + "\x00" + deviceID)
 	address := "https://control-" + route + "." + env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com")
 	if _, err = tx.ExecContext(c.Request.Context(), `INSERT INTO xcloud_control_devices (id,owner_id,name,public_key,credential_hash,status,client_version,key_version,credential_version,rebind_required,created_at,updated_at) VALUES (?,?,?,?,?,'enabled',?,3,1,FALSE,NOW(),NOW())`, deviceID, user.ID, name, pub, controlHash(credential), version); err != nil {
@@ -230,11 +230,19 @@ func controlAuthorizationApprove(c *gin.Context) {
 		c.JSON(503, gin.H{"message": "无法创建自建入口"})
 		return
 	}
+	// The browser-approval flow is retained for older xcloud-control clients.
+	// It must create the same self-hosted node record as the enrollment-token
+	// flow; otherwise the device consumes the one-device quota but can never
+	// receive resources or create an instance.
+	if _, err = tx.ExecContext(c.Request.Context(), `INSERT INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,node_kind,owner_id,control_device_id,created_at,updated_at) VALUES (?,?, '',0,0,TRUE,'selfhosted',?,?,NOW(),NOW())`, nodeID, "自建节点", user.ID, deviceID); err != nil {
+		c.JSON(503, gin.H{"message": "无法创建自建节点"})
+		return
+	}
 	if _, err = tx.ExecContext(c.Request.Context(), `UPDATE xcloud_control_authorizations SET status='approved',owner_id=?,device_id=?,issued_credential=? WHERE id=?`, user.ID, deviceID, credential, id); err != nil {
 		c.JSON(503, gin.H{"message": "无法完成设备绑定"})
 		return
 	}
-	if err = writeAuditTx(c.Request.Context(), tx, user.ID, "control.device.approve", "control_device", deviceID, map[string]any{"name": name}); err != nil {
+	if err = writeAuditTx(c.Request.Context(), tx, user.ID, "control.device.approve", "control_device", deviceID, map[string]any{"name": name, "nodeId": nodeID}); err != nil {
 		c.JSON(503, gin.H{"message": "无法完成设备绑定"})
 		return
 	}
@@ -397,9 +405,10 @@ func controlDeviceRevoke(c *gin.Context) {
 // a device must never call the customer's Agent: the remote containers and
 // data directory remain entirely under the owner's control.
 type revokedSelfHostedDeviceResult struct {
-	DeviceID         string
-	NodeCount        int64
-	CancelledTaskIDs []string
+	DeviceID          string
+	NodeCount         int64
+	RevokedTokenCount int64
+	CancelledTaskIDs  []string
 }
 
 func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHostedDeviceResult, error) {
@@ -424,6 +433,14 @@ func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHos
 			return revokedSelfHostedDeviceResult{}, err
 		}
 	}
+	// Revoking the device must also revoke leaked, unused enrollment tokens.
+	// Otherwise an old 10-minute token can immediately bind another machine
+	// after the owner believes the self-hosted connection was removed.
+	tokenResult, err := tx.ExecContext(ctx, `UPDATE xcloud_control_enrollment_tokens SET revoked_at=NOW() WHERE owner_id=? AND used_at IS NULL AND revoked_at IS NULL`, ownerID)
+	if err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	result.RevokedTokenCount, _ = tokenResult.RowsAffected()
 
 	// A revoked device must release its node slot. Keep the record as history
 	// rather than deleting it, so existing instances and audit records remain
@@ -469,7 +486,7 @@ func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHos
 	if targetID == "" {
 		targetType, targetID = "selfhosted_nodes", ownerID
 	}
-	if err = writeAuditTx(ctx, tx, ownerID, "control.device.revoke", targetType, targetID, map[string]any{"nodeCount": result.NodeCount, "cancelledTaskCount": len(result.CancelledTaskIDs), "remoteDataPreserved": true, "alreadyUnbound": result.DeviceID == ""}); err != nil {
+	if err = writeAuditTx(ctx, tx, ownerID, "control.device.revoke", targetType, targetID, map[string]any{"nodeCount": result.NodeCount, "revokedTokenCount": result.RevokedTokenCount, "cancelledTaskCount": len(result.CancelledTaskIDs), "remoteDataPreserved": true, "alreadyUnbound": result.DeviceID == ""}); err != nil {
 		return revokedSelfHostedDeviceResult{}, err
 	}
 	if err = tx.Commit(); err != nil {

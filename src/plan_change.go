@@ -55,28 +55,6 @@ type planExchangeQuoteItem struct {
 	BenefitName          string    `json:"benefitName,omitempty"`
 }
 
-// planChangeRefundAfter retains one complete day of the old package. The new
-// package is effective immediately; this retained day is an explicit change
-// fee rather than a delayed activation window.
-func planChangeRefundAfter(now time.Time) time.Time {
-	return now.Add(24 * time.Hour)
-}
-
-func tierDiscountBps(snapshot []byte) int {
-	var value struct {
-		DiscountBps     int `json:"discountBps"`
-		TierDiscountBps int `json:"tierDiscountBps"`
-	}
-	_ = json.Unmarshal(snapshot, &value)
-	if value.TierDiscountBps > 0 {
-		return value.TierDiscountBps
-	}
-	if value.DiscountBps > 0 {
-		return value.DiscountBps
-	}
-	return 10000
-}
-
 func prorateFen(amount int, totalStart, totalEnd, from time.Time) int {
 	if !totalEnd.After(totalStart) || !totalEnd.After(from) {
 		return 0
@@ -84,7 +62,15 @@ func prorateFen(amount int, totalStart, totalEnd, from time.Time) int {
 	if from.Before(totalStart) {
 		from = totalStart
 	}
-	return int(int64(amount) * int64(totalEnd.Sub(from)) / int64(totalEnd.Sub(totalStart)))
+	// Database service windows are second-granular. Never multiply an amount
+	// by a nanosecond duration: even ordinary package prices overflow int64
+	// across multi-month windows and can turn an upgrade into a fake refund.
+	totalSeconds := int64(totalEnd.Sub(totalStart) / time.Second)
+	remainingSeconds := int64(totalEnd.Sub(from) / time.Second)
+	if amount <= 0 || totalSeconds <= 0 || remainingSeconds <= 0 {
+		return 0
+	}
+	return int(int64(amount) * remainingSeconds / totalSeconds)
 }
 
 // prorateMonthlyFen prices a partial service window using the platform's
@@ -94,7 +80,12 @@ func prorateMonthlyFen(monthlyFen int, start, end time.Time) int {
 	if monthlyFen <= 0 || !end.After(start) {
 		return 0
 	}
-	return int(int64(monthlyFen) * int64(end.Sub(start)) / int64(30*24*time.Hour))
+	seconds := int64(end.Sub(start) / time.Second)
+	const monthSeconds = int64(30 * 24 * 60 * 60)
+	if seconds <= 0 {
+		return 0
+	}
+	return int(int64(monthlyFen) * seconds / monthSeconds)
 }
 
 func planChangeTierMonths(start, end time.Time) int {
@@ -111,58 +102,35 @@ func planChangeTierMonths(start, end time.Time) int {
 	}
 }
 
-// quotePlanChangePurchase applies current product pricing and automatic
-// commercial rights to the remaining service window. A change has no manual
-// promotion-code channel and bonus-day programs are excluded by the
-// plan_change scope in quoteCommercialBenefit.
-func quotePlanChangePurchase(ctx context.Context, tx *sql.Tx, ownerID, planID string, monthly int, start, end time.Time, lock bool) (benefitQuote, error) {
+// planChangeTargetRate selects the longest tier the remaining service period
+// reaches. The selected tier's discounted monthly rate applies to every
+// remaining day, including the final partial month. This keeps the service
+// end unchanged while making 100 remaining days, for example, price as a
+// three-month tier plus ten days at that same tier's daily rate.
+func planChangeTargetRate(ctx context.Context, tx *sql.Tx, planID string, monthly int, start, end time.Time, lock bool) (int, int, error) {
+	if monthly < 0 {
+		return 0, 0, errors.New("目标套餐价格异常，请联系管理员核对套餐价格")
+	}
 	months := planChangeTierMonths(start, end)
-	full, _, bps, err := tierPrice(ctx, tx, planID, months, monthly, lock)
+	_, _, bps, err := tierPrice(ctx, tx, planID, months, monthly, lock)
 	if err != nil {
-		return benefitQuote{}, err
+		return 0, 0, err
 	}
-	q, err := quoteCommercialBenefit(ctx, ownerID, "plan_change", planID, "", months, monthly, "", tx, lock)
-	if err != nil {
-		return benefitQuote{}, err
+	if bps < 0 || bps > 10000 {
+		return 0, 0, errors.New("目标套餐阶梯价格异常，请联系管理员核对套餐价格")
 	}
-	// quoteCommercialBenefit prices a whole tier term. Replacement service is
-	// only the unfinished window, so retain the current tier rate and calculate
-	// the automatic benefit against that exact partial price.
-	_ = full
-	q.TierMonths = months
-	q.TierDiscountBps = bps
-	q.ListAmountFen = prorateMonthlyFen(monthly*bps/10000, start, end)
-	q.DiscountAmountFen = 0
-	q.BonusDays = 0
-	if q.program != nil {
-		q.DiscountAmountFen, _ = benefitDiscount(*q.program, q.ListAmountFen)
-	}
-	q.AmountFen = q.ListAmountFen - q.DiscountAmountFen
-	q.QuoteSummary = fmt.Sprintf("套餐变更新购：基础价 %d 分，自动权益 %d 分", q.ListAmountFen, q.DiscountAmountFen)
-	return q, nil
+	return months, bps, nil
 }
 
-// planChangeOrderRefundFen applies the plan-change-only one-day retention to
-// each source order separately. A free order and an order with less than a
-// day's refundable value both settle at zero; neither may create a negative
-// refund that offsets another order or the replacement purchase.
+// planChangeOrderRefundFen returns the exact unused value of a source order.
+// It deliberately uses the order's real paid amount and its real service
+// window: no arbitrary retention day, current list price, or new promotion
+// may alter the user's remaining credit.
 func planChangeOrderRefundFen(actualPaidFen int, start, end, now time.Time) int {
 	if actualPaidFen <= 0 || !end.After(start) {
 		return 0
 	}
-	gross := prorateFen(actualPaidFen, start, end, now)
-	duration := end.Sub(start)
-	retained := time.Duration(24 * time.Hour)
-	if duration < retained {
-		retained = duration
-	}
-	// Round the retained cost up to one fen so an incomplete day never turns
-	// into an accidental over-refund through integer truncation.
-	deduction := int((int64(actualPaidFen)*int64(retained) + int64(duration) - 1) / int64(duration))
-	if gross <= deduction {
-		return 0
-	}
-	return gross - deduction
+	return prorateFen(actualPaidFen, start, end, now)
 }
 
 type planChangeRecord struct {
@@ -273,6 +241,9 @@ func buildPlanChangeQuote(ctx context.Context, ownerID, instanceID, targetPlanID
 	if err = tx.QueryRowContext(ctx, `SELECT name,cpu,memory_mb,monthly_price_fen FROM xcloud_plans WHERE id=? AND enabled=TRUE`, targetPlanID).Scan(&targetName, &targetCPU, &targetMemory, &targetMonthly); err != nil {
 		return planChangeQuote{}, errors.New("目标套餐不可用")
 	}
+	if targetMonthly < 0 {
+		return planChangeQuote{}, errors.New("目标套餐价格异常，请联系管理员核对套餐价格")
+	}
 	if err = tx.QueryRowContext(ctx, `SELECT monthly_price_fen FROM xcloud_plans WHERE id=?`, currentID).Scan(&monthly); err != nil {
 		return planChangeQuote{}, err
 	}
@@ -281,7 +252,7 @@ func buildPlanChangeQuote(ctx context.Context, ownerID, instanceID, targetPlanID
 	}
 	now := time.Now()
 	seconds, _ := calculatePlanDelta(monthly, targetMonthly, expiry, now)
-	quote := planChangeQuote{QuoteID: newID("quote"), InstanceID: instanceID, CurrentPlanID: currentID, CurrentPlanName: currentName, TargetPlanID: targetPlanID, TargetPlanName: targetName, CurrentCPU: currentCPU, CurrentMemoryMB: currentMemory, TargetCPU: targetCPU, TargetMemoryMB: targetMemory, RemainingSeconds: seconds, ExpiresAt: now.Add(5 * time.Minute), OperationCutoffAt: planChangeRefundAfter(now), Summary: ""}
+	quote := planChangeQuote{QuoteID: newID("quote"), InstanceID: instanceID, CurrentPlanID: currentID, CurrentPlanName: currentName, TargetPlanID: targetPlanID, TargetPlanName: targetName, CurrentCPU: currentCPU, CurrentMemoryMB: currentMemory, TargetCPU: targetCPU, TargetMemoryMB: targetMemory, RemainingSeconds: seconds, ExpiresAt: now.Add(5 * time.Minute), OperationCutoffAt: now, Summary: "按每笔订单的真实支付金额和未使用服务时长折算。"}
 	rows, queryErr := tx.QueryContext(ctx, `SELECT o.id,o.plan_id,p.name,o.amount_fen,o.service_starts_at,o.expires_at
 		FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id
 		WHERE o.owner_id=? AND o.instance_id=? AND o.status=? AND o.service_starts_at IS NOT NULL AND o.expires_at>? ORDER BY o.service_starts_at,o.id`, ownerID, instanceID, orderActive, now)
@@ -313,7 +284,6 @@ func buildPlanChangeQuote(ctx context.Context, ownerID, instanceID, targetPlanID
 	if err := rows.Close(); err != nil {
 		return planChangeQuote{}, err
 	}
-	quote.ChargeFen, quote.RefundFen = 0, 0
 	for _, source := range sources {
 		item, start, end := source.item, source.startsAt, source.expiresAt
 		item.ReplacementStartsAt = now
@@ -325,30 +295,41 @@ func buildPlanChangeQuote(ctx context.Context, ownerID, instanceID, targetPlanID
 		item.SourceExpiresAt = end
 		item.RefundFen = planChangeOrderRefundFen(item.ActualPaidFen, start, end, now)
 		item.RetainedFen = item.ActualPaidFen - item.RefundFen
-		benefit, quoteErr := quotePlanChangePurchase(ctx, tx, ownerID, targetPlanID, targetMonthly, item.ReplacementStartsAt, item.ReplacementExpiresAt, false)
-		if quoteErr != nil {
-			return planChangeQuote{}, quoteErr
-		}
-		item.TierDiscountBps = benefit.TierDiscountBps
-		item.TierMonths = benefit.TierMonths
-		item.DiscountAmountFen = benefit.DiscountAmountFen
-		item.ReplacementChargeFen = benefit.AmountFen
-		if benefit.Program != nil {
-			item.BenefitProgramID = benefit.Program.ID
-			item.BenefitName = benefit.Program.Name
-		}
-		quote.RefundFen += item.RefundFen
-		quote.ChargeFen += item.ReplacementChargeFen
 		quote.Items = append(quote.Items, item)
 	}
 	if len(quote.Items) == 0 {
 		return planChangeQuote{}, errors.New("没有可替换的未结束订单")
 	}
+	periodEnd := now
+	for _, item := range quote.Items {
+		if item.ReplacementExpiresAt.After(periodEnd) {
+			periodEnd = item.ReplacementExpiresAt
+		}
+	}
+	tierMonths, tierBps, err := planChangeTargetRate(ctx, tx, targetPlanID, targetMonthly, now, periodEnd, false)
+	if err != nil {
+		return planChangeQuote{}, err
+	}
+	discountedMonthly := targetMonthly * tierBps / 10000
+	quote.ChargeFen, quote.RefundFen = 0, 0
+	for index := range quote.Items {
+		item := &quote.Items[index]
+		item.TierMonths = tierMonths
+		item.TierDiscountBps = tierBps
+		item.ReplacementChargeFen = prorateMonthlyFen(discountedMonthly, item.ReplacementStartsAt, item.ReplacementExpiresAt)
+		if item.ReplacementChargeFen < 0 || item.RefundFen < 0 {
+			return planChangeQuote{}, errors.New("套餐变更报价异常，请联系管理员核对套餐价格")
+		}
+		quote.ChargeFen += item.ReplacementChargeFen
+		quote.RefundFen += item.RefundFen
+	}
 	quote.DeltaFen = quote.ChargeFen - quote.RefundFen
 	if quote.DeltaFen > 0 {
-		quote.Summary += "，需补钱包差额"
+		quote.Summary += " 新套餐剩余价格高于旧套餐剩余价值，需补钱包差额。"
 	} else if quote.DeltaFen < 0 {
-		quote.Summary += "，净额退回 XCoin 钱包"
+		quote.Summary += " 旧套餐剩余价值高于新套餐剩余价格，差额退回 XCoin 钱包。"
+	} else {
+		quote.Summary += " 两边剩余价值相同，无需补退。"
 	}
 	return quote, nil
 }
@@ -442,15 +423,15 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 	if targetPlanID == currentPlan {
 		return planChangeRecord{}, controlTask{}, errors.New("目标套餐与当前套餐相同")
 	}
-	var currentMonthly int
-	if err = tx.QueryRowContext(ctx, `SELECT monthly_price_fen FROM xcloud_plans WHERE id=?`, currentPlan).Scan(&currentMonthly); err != nil {
-		return planChangeRecord{}, controlTask{}, err
-	}
-	seconds, delta := calculatePlanDelta(currentMonthly, targetMonthly, expiry, time.Now())
+	seconds, _ := calculatePlanDelta(0, 0, expiry, time.Now())
 	if quote.InstanceID != instanceID || quote.TargetPlanID != targetPlanID || len(quote.Items) == 0 {
 		return planChangeRecord{}, controlTask{}, errors.New("套餐报价已变化，请重新报价")
 	}
-	delta = quote.DeltaFen
+	effectiveAt := quote.OperationCutoffAt
+	if effectiveAt.IsZero() || effectiveAt.After(time.Now()) {
+		return planChangeRecord{}, controlTask{}, errors.New("套餐报价已变化，请重新报价")
+	}
+	delta := quote.DeltaFen
 	var active int
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE instance_id=? AND status IN (?,?) AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize')`, instanceID, taskPending, taskRunning).Scan(&active); err != nil {
 		return planChangeRecord{}, controlTask{}, err
@@ -493,21 +474,28 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 	if usedCPU+targetCPU > capCPU || usedMem+targetMem > capMem {
 		return planChangeRecord{}, controlTask{}, errors.New("当前节点容量不足，无法变更套餐")
 	}
+	periodEnd := effectiveAt
+	for _, item := range quote.Items {
+		if item.ReplacementExpiresAt.After(periodEnd) {
+			periodEnd = item.ReplacementExpiresAt
+		}
+	}
+	tierMonths, tierBps, err := planChangeTargetRate(ctx, tx, targetPlanID, targetMonthly, effectiveAt, periodEnd, true)
+	if err != nil {
+		return planChangeRecord{}, controlTask{}, err
+	}
+	discountedMonthly := targetMonthly * tierBps / 10000
 	changeID := newID("resize")
 	taskID := newID("task")
 	idem := "resize:" + instanceID + ":" + changeID
 	before, _ := json.Marshal(map[string]any{"planId": currentPlan, "planName": currentName, "cpu": currentCPU, "memoryMB": currentMem})
 	after, _ := json.Marshal(map[string]any{"planId": targetPlanID, "planName": targetName, "cpu": targetCPU, "memoryMB": targetMem})
 	now := time.Now()
-	// Reserve the full replacement purchase before calling the Agent. The old
-	// orders are refunded only after Agent success, so the durable ledger still
-	// reads as the intended two-leg operation: new purchase plus old refunds.
+	// Reserve the exact target-package price before calling the Agent. The old
+	// order credit is settled only after Agent success.
 	charge := quote.ChargeFen
 	refund := quote.RefundFen
-	reservation := 0
-	for _, item := range quote.Items {
-		reservation += prorateMonthlyFen(targetMonthly, item.ReplacementStartsAt, item.ReplacementExpiresAt)
-	}
+	reservation := charge
 	var pending string
 	if reservation > 0 {
 		var balance int
@@ -527,7 +515,7 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 	}
 	exchangeID := newID("exchange")
 	priceSnapshot, _ := json.Marshal(quote)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_order_exchanges (id,instance_id,owner_id,target_plan_id,effective_at,cutoff_at,task_id,status,refund_total_fen,charge_total_fen,net_settlement_fen,price_snapshot,idempotency_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`, exchangeID, instanceID, ownerID, targetPlanID, now, quote.OperationCutoffAt, taskID, "processing", quote.RefundFen, quote.ChargeFen, quote.ChargeFen-quote.RefundFen, priceSnapshot, idem); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_order_exchanges (id,instance_id,owner_id,target_plan_id,effective_at,cutoff_at,task_id,status,refund_total_fen,charge_total_fen,net_settlement_fen,price_snapshot,idempotency_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`, exchangeID, instanceID, ownerID, targetPlanID, effectiveAt, effectiveAt, taskID, "processing", quote.RefundFen, quote.ChargeFen, quote.ChargeFen-quote.RefundFen, priceSnapshot, idem); err != nil {
 		return planChangeRecord{}, controlTask{}, err
 	}
 	for _, item := range quote.Items {
@@ -535,6 +523,15 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 		var startsAt, expiresAt time.Time
 		if err = tx.QueryRowContext(ctx, `SELECT amount_fen,service_starts_at,expires_at FROM xcloud_orders WHERE id=? AND owner_id=? AND instance_id=? AND status=? FOR UPDATE`, item.SourceOrderID, ownerID, instanceID, orderActive).Scan(&actualPaid, &startsAt, &expiresAt); err != nil || actualPaid != item.ActualPaidFen || !startsAt.Equal(item.SourceStartsAt) || !expiresAt.Equal(item.SourceExpiresAt) {
 			return planChangeRecord{}, controlTask{}, errors.New("订单服务期已变化，请重新报价")
+		}
+		expectedStart := effectiveAt
+		if startsAt.After(expectedStart) {
+			expectedStart = startsAt
+		}
+		expectedRefund := planChangeOrderRefundFen(actualPaid, startsAt, expiresAt, effectiveAt)
+		expectedCharge := prorateMonthlyFen(discountedMonthly, expectedStart, expiresAt)
+		if item.RefundFen != expectedRefund || item.ReplacementChargeFen != expectedCharge || item.TierMonths != tierMonths || item.TierDiscountBps != tierBps || !item.ReplacementStartsAt.Equal(expectedStart) || !item.ReplacementExpiresAt.Equal(expiresAt) {
+			return planChangeRecord{}, controlTask{}, errors.New("套餐价格或服务期已变化，请重新报价")
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_order_exchange_items (id,exchange_id,source_order_id,source_plan_id,source_starts_at,source_expires_at,replacement_starts_at,replacement_expires_at,source_refund_fen,replacement_charge_fen,tier_discount_bps,tier_months,benefit_program_id,benefit_discount_fen,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`, newID("exchangeitem"), exchangeID, item.SourceOrderID, item.SourcePlanID, item.SourceStartsAt, item.SourceExpiresAt, item.ReplacementStartsAt, item.ReplacementExpiresAt, item.RefundFen, item.ReplacementChargeFen, item.TierDiscountBps, item.TierMonths, nullableString(item.BenefitProgramID), item.DiscountAmountFen); err != nil {
 			return planChangeRecord{}, controlTask{}, err

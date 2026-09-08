@@ -37,13 +37,6 @@ func TestPlanChangeQuoteExpiryCannotBeExtendedByClient(t *testing.T) {
 	}
 }
 
-func TestPlanChangeRetainsOneCompleteOldPackageDay(t *testing.T) {
-	now := time.Date(2026, 9, 7, 18, 30, 0, 0, time.UTC)
-	if got := planChangeRefundAfter(now); !got.Equal(now.Add(24 * time.Hour)) {
-		t.Fatalf("refund cutoff = %s, want %s", got, now.Add(24*time.Hour))
-	}
-}
-
 func TestReplacementChargeUsesTargetThirtyDayRate(t *testing.T) {
 	start := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
 	if got := prorateMonthlyFen(2400, start, start.Add(15*24*time.Hour)); got != 1200 {
@@ -51,34 +44,49 @@ func TestReplacementChargeUsesTargetThirtyDayRate(t *testing.T) {
 	}
 }
 
-func TestPlanChangeTierMonthsUsesCurrentSupportedTier(t *testing.T) {
-	start := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
-	if got := planChangeTierMonths(start, start.Add(100*24*time.Hour)); got != 3 {
-		t.Fatalf("100-day replacement tier = %d, want 3", got)
+func TestPlanChangeTierRateAppliesToEveryRemainingDay(t *testing.T) {
+	start := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	end := start.Add(100 * 24 * time.Hour)
+	if tier := planChangeTierMonths(start, end); tier != 3 {
+		t.Fatalf("100 remaining days should use the 3-month tier, got %d", tier)
 	}
-	if got := planChangeTierMonths(start, start.Add(89*24*time.Hour)); got != 1 {
-		t.Fatalf("short replacement tier = %d, want 1", got)
-	}
-}
-
-func TestTierDiscountBpsIsPayableRateNotAmountOff(t *testing.T) {
-	if bps := tierDiscountBps([]byte(`{"tierDiscountBps":8000}`)); bps != 8000 {
-		t.Fatalf("tier bps = %d, want 8000", bps)
-	}
-	if monthly := 3000 * tierDiscountBps([]byte(`{"tierDiscountBps":8000}`)) / 10000; monthly != 2400 {
-		t.Fatalf("8-discount monthly price = %d, want 2400", monthly)
+	// 3,000 fen monthly at an 8-discount tier is 2,400 fen/month. Every one
+	// of the remaining 100 days uses that same 80 fen/day rate.
+	if charge := prorateMonthlyFen(2400, start, end); charge != 8000 {
+		t.Fatalf("100 days at the selected tier rate = %d, want 8000", charge)
 	}
 }
 
-func TestPlanChangeRefundNeverTurnsOneDayRetentionIntoDebt(t *testing.T) {
+func TestProrationDoesNotOverflowForLongServiceWindows(t *testing.T) {
+	start := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	end := start.Add(12 * 30 * 24 * time.Hour)
+	if charge := prorateMonthlyFen(240000, start, end); charge != 2880000 {
+		t.Fatalf("12 months of target price = %d, want 2880000", charge)
+	}
+	if credit := prorateFen(2880000, start, end, start.Add(6*30*24*time.Hour)); credit != 1440000 {
+		t.Fatalf("half of a long real-paid order = %d, want 1440000", credit)
+	}
+}
+
+func TestReplacementChargeNeverAcceptsNegativeMonthlyPrice(t *testing.T) {
+	start := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	if got := prorateMonthlyFen(-2400, start, start.Add(15*24*time.Hour)); got != 0 {
+		t.Fatalf("negative monthly price must not create a negative charge: %d", got)
+	}
+}
+
+func TestPlanChangeUsesRealPaidValueForUnusedTime(t *testing.T) {
 	start := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
-	if got := planChangeOrderRefundFen(100, start, start.Add(12*time.Hour), start); got != 0 {
-		t.Fatalf("short order refund = %d, want 0", got)
+	if got := planChangeOrderRefundFen(100, start, start.Add(12*time.Hour), start); got != 100 {
+		t.Fatalf("short order refund = %d, want 100", got)
 	}
 	if got := planChangeOrderRefundFen(0, start, start.Add(30*24*time.Hour), start); got != 0 {
 		t.Fatalf("free order refund = %d, want 0", got)
 	}
-	if got := planChangeOrderRefundFen(3000, start, start.Add(30*24*time.Hour), start); got != 2900 {
-		t.Fatalf("30-day order refund = %d, want 2900", got)
+	if got := planChangeOrderRefundFen(3000, start, start.Add(30*24*time.Hour), start); got != 3000 {
+		t.Fatalf("30-day order refund = %d, want 3000", got)
+	}
+	if got := planChangeOrderRefundFen(3000, start, start.Add(30*24*time.Hour), start.Add(10*24*time.Hour)); got != 2000 {
+		t.Fatalf("20 days of real paid value = %d, want 2000", got)
 	}
 }

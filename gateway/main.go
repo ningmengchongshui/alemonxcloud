@@ -31,7 +31,7 @@ import (
 const protocol = "xcloud-control.v3"
 const sessionTTL = 45 * time.Second
 const chunkSize = 32 * 1024
-const bandwidthBps = 10 * 1000 * 1000 / 8
+const commandTimeout = 30 * time.Minute
 
 const (
 	fHello byte = iota + 1
@@ -103,11 +103,6 @@ type tunnelSession struct {
 	commands                             map[string]chan frame
 	terminals                            map[string]chan frame
 	mu                                   sync.RWMutex
-	limiter                              *limiter
-}
-type limiter struct {
-	mu   sync.Mutex
-	next time.Time
 }
 
 var sessions = struct {
@@ -168,7 +163,7 @@ func newConfig() (*config, error) {
 		return nil, err
 	}
 	cfg.internalTLS = tlsCfg
-	cfg.internalClient = &http.Client{Timeout: 70 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsCfg.Clone(), ForceAttemptHTTP2: true}}
+	cfg.internalClient = &http.Client{Timeout: commandTimeout, Transport: &http.Transport{TLSClientConfig: tlsCfg.Clone(), ForceAttemptHTTP2: true}}
 	return cfg, nil
 }
 
@@ -314,7 +309,7 @@ func (c *config) connect(w http.ResponseWriter, r *http.Request) {
 	if err != nil || proof.kind != fAuth || !ed25519.Verify(ed25519.PublicKey(decodeKey(pub)), challenge, proof.data) {
 		return
 	}
-	s := &tunnelSession{deviceID: h.DeviceID, ownerID: owner, credential: h.Credential, epoch: randomID(), conn: conn, streams: map[string]chan frame{}, commands: map[string]chan frame{}, terminals: map[string]chan frame{}, limiter: &limiter{}}
+	s := &tunnelSession{deviceID: h.DeviceID, ownerID: owner, credential: h.Credential, epoch: randomID(), conn: conn, streams: map[string]chan frame{}, commands: map[string]chan frame{}, terminals: map[string]chan frame{}}
 	c.putSession(s)
 	defer c.dropSession(s)
 	c.setDirectory(r.Context(), s)
@@ -374,7 +369,11 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 		CPUDetected      float64 `json:"cpuDetected"`
 		MemoryDetectedMB int     `json:"memoryDetectedMB"`
 		RuntimeReady     *bool   `json:"runtimeReady"`
-		ReadinessIssues  []struct {
+		// RuntimeInventoryOK is only true when the Agent completed its managed
+		// container inventory. An empty or failed inventory must never be
+		// mistaken for proof that every container is gone.
+		RuntimeInventoryOK *bool `json:"runtimeInventoryOK"`
+		ReadinessIssues    []struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"readinessIssues"`
@@ -403,13 +402,18 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 	}
 	_, _ = c.db.Exec(`UPDATE xcloud_nodes SET cpu_detected=?,memory_detected_mb=?,cpu_total=?,memory_total_mb=?,cpu_quota=IF(selfhosted_quota_mode='auto' OR cpu_quota<=0,ROUND(?*0.8,2),cpu_quota),memory_quota_mb=IF(selfhosted_quota_mode='auto' OR memory_quota_mb<=0,FLOOR(?*0.8),memory_quota_mb),docker_version=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,agent_version=?,agent_api_version=?,agent_capabilities=?,selfhosted_ready=?,selfhosted_readiness=?,last_agent_error=IF(?,NULL,?),last_heartbeat_at=NOW(),updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.DockerVersion, report.DiskAvailableBytes, report.DiskTotalBytes, report.ManagedContainerCount, report.AgentVersion, report.AgentAPIVersion, string(caps), ready, string(issues), ready, problem, s.deviceID)
 	_, _ = c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID)
-	_, _ = c.db.Exec(`UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status='missing' WHERE i.placement_type='selfhosted' AND n.control_device_id=? AND i.status IN ('running','stopped','destroy_scheduled')`, s.deviceID)
-	for _, item := range report.Instances {
-		runtime := "stopped"
-		if item.State == "running" {
-			runtime = "running"
+	if report.RuntimeInventoryOK != nil && *report.RuntimeInventoryOK {
+		// A complete inventory may say that a record is not currently present,
+		// but that is not an Agent-confirmed 404. Preserve the stronger
+		// `missing` state for explicit operation failures only.
+		_, _ = c.db.Exec(`UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status='unknown' WHERE i.placement_type='selfhosted' AND n.control_device_id=? AND i.status IN ('running','stopped','destroy_scheduled') AND COALESCE(i.runtime_status,'')<>'missing'`, s.deviceID)
+		for _, item := range report.Instances {
+			runtime := "stopped"
+			if item.State == "running" {
+				runtime = "running"
+			}
+			_, _ = c.db.Exec(`UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status=? WHERE i.route_key=? AND i.placement_type='selfhosted' AND n.control_device_id=? AND i.status IN ('running','stopped','destroy_scheduled')`, runtime, item.Route, s.deviceID)
 		}
-		_, _ = c.db.Exec(`UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status=? WHERE i.route_key=? AND i.placement_type='selfhosted' AND n.control_device_id=? AND i.status IN ('running','stopped','destroy_scheduled')`, runtime, item.Route, s.deviceID)
 	}
 }
 
@@ -626,7 +630,15 @@ func (c *config) commandRequest(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.commands[id] = ch
 	s.mu.Unlock()
-	defer func() { s.mu.Lock(); delete(s.commands, id); s.mu.Unlock() }()
+	completed := false
+	defer func() {
+		s.mu.Lock()
+		delete(s.commands, id)
+		s.mu.Unlock()
+		if !completed {
+			_ = s.send(frame{kind: fCancel, id: id})
+		}
+	}()
 	meta, _ := json.Marshal(req)
 	if s.send(frame{kind: fCommand, id: id, meta: meta}) != nil {
 		http.Error(w, "device unavailable", 502)
@@ -634,9 +646,10 @@ func (c *config) commandRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	select {
 	case f := <-ch:
+		completed = true
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(f.meta)
-	case <-time.After(70 * time.Second):
+	case <-time.After(commandTimeout):
 		http.Error(w, "command timeout", 504)
 	case <-r.Context().Done():
 	}
@@ -714,19 +727,6 @@ func (s *tunnelSession) send(f frame) error {
 	s.write.Lock()
 	defer s.write.Unlock()
 	return writeFrame(s.conn, f)
-}
-func (l *limiter) wait(n int) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	d := time.Duration(int64(n) * int64(time.Second) / bandwidthBps)
-	now := time.Now()
-	if l.next.Before(now) {
-		l.next = now
-	}
-	l.next = l.next.Add(d)
-	if wait := time.Until(l.next); wait > 0 {
-		time.Sleep(wait)
-	}
 }
 func (c *config) publicProxy(w http.ResponseWriter, r *http.Request) {
 	route := r.Header.Get("X-Control-Route-Key")
@@ -837,7 +837,6 @@ func (c *config) proxyLocal(w http.ResponseWriter, r *http.Request, device strin
 		for {
 			n, e := r.Body.Read(buf)
 			if n > 0 {
-				s.limiter.wait(n)
 				_ = s.send(frame{kind: fData, id: id, data: append([]byte(nil), buf[:n]...)})
 			}
 			if e != nil {
@@ -873,7 +872,6 @@ func (c *config) proxyLocal(w http.ResponseWriter, r *http.Request, device strin
 				return
 			}
 			if f.kind == fData {
-				s.limiter.wait(len(f.data))
 				_, _ = w.Write(f.data)
 			}
 			if f.kind == fError {

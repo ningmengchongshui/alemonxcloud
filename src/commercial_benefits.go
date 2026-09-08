@@ -59,13 +59,15 @@ type benefitProgram struct {
 }
 
 type benefitQuote struct {
-	ListAmountFen     int    `json:"listAmountFen"`
-	DiscountAmountFen int    `json:"discountAmountFen"`
-	AmountFen         int    `json:"amountFen"`
-	BonusDays         int    `json:"bonusDays"`
-	TierMonths        int    `json:"tierMonths,omitempty"`
-	TierDiscountBps   int    `json:"tierDiscountBps,omitempty"`
-	QuoteSummary      string `json:"quoteSummary"`
+	ListAmountFen     int        `json:"listAmountFen"`
+	DiscountAmountFen int        `json:"discountAmountFen"`
+	AmountFen         int        `json:"amountFen"`
+	BonusDays         int        `json:"bonusDays"`
+	TierMonths        int        `json:"tierMonths,omitempty"`
+	TierDiscountBps   int        `json:"tierDiscountBps,omitempty"`
+	QuoteSummary      string     `json:"quoteSummary"`
+	CurrentExpiresAt  *time.Time `json:"currentExpiresAt,omitempty"`
+	RenewedExpiresAt  *time.Time `json:"renewedExpiresAt,omitempty"`
 	Program           *struct {
 		ID          string `json:"id"`
 		Name        string `json:"name"`
