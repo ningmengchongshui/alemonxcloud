@@ -40,6 +40,3 @@ agent-test: ## Run the bare-metal agent tests
 
 docker-build: ## Run the container image locally
 	docker compose up -d --build
-
-control-run:
-    ./control/xcloud-control run
