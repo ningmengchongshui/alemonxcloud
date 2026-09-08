@@ -67,7 +67,7 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_routes WHERE device_id=?`, deviceID)
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_nodes WHERE id=?`, nodeID)
 		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_devices WHERE id=?`, deviceID)
-		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_audit_logs WHERE target_type='control_device' AND target_id=?`, deviceID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_audit_logs WHERE actor_id=? AND action='control.device.revoke'`, ownerID)
 	}()
 
 	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_control_devices (id,owner_id,name,public_key,credential_hash,status,client_version,created_at,updated_at) VALUES (?,?,?,?,?,'enabled','test',NOW(),NOW())`, deviceID, ownerID, "test-control", "test-key", controlHash(deviceID)); err != nil {
@@ -121,6 +121,23 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 	}
 	if err := taskMayCallAgent(ctx, controlTask{ID: runningTaskID, InstanceID: instanceID, Action: "restart", WorkerID: workerID, ExecutionToken: executionToken}); err == nil {
 		t.Fatal("a running task must be fenced from calling a revoked self-hosted node")
+	}
+
+	// Retrying the user action after a device has already been revoked is a
+	// cleanup operation, not an error. It must remove any stale node record
+	// that survived an older release without requiring a new device binding.
+	if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_nodes SET enabled=TRUE,selfhosted_ready=TRUE WHERE id=?`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,finished_at=NULL,last_error=NULL,updated_at=NOW() WHERE id=?`, taskPending, taskID); err != nil {
+		t.Fatal(err)
+	}
+	alreadyUnbound, err := revokeSelfHostedDevice(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("clean up already-unbound self-hosted node: %v", err)
+	}
+	if alreadyUnbound.DeviceID != "" || alreadyUnbound.NodeCount != 1 || len(alreadyUnbound.CancelledTaskIDs) != 1 || alreadyUnbound.CancelledTaskIDs[0] != taskID {
+		t.Fatalf("already-unbound cleanup mismatch: %#v", alreadyUnbound)
 	}
 }
 
