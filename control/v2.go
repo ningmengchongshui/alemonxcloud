@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -181,7 +182,12 @@ func serveV2(cfg *config, path string) error {
 	done := make(chan struct{})
 	defer close(done)
 	reportStatus := func() {
-		status, _ := json.Marshal(localAgentStatus())
+		localStatus := localAgentStatus()
+		// This is intentionally a small, secret-free line.  Operators need a
+		// positive confirmation that readiness was actually measured, rather
+		// than having to infer it from a silent tunnel connection.
+		log.Printf("runtime readiness reported: ready=%v inventoryOK=%v issues=%v", localStatus["runtimeReady"], localStatus["runtimeInventoryOK"], localStatus["readinessIssues"])
+		status, _ := json.Marshal(localStatus)
 		_ = send(v2Frame{kind: v2Ping, meta: status})
 	}
 	// Do not wait for the first 15-second ticker. A successful tunnel

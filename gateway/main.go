@@ -390,12 +390,30 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 		} `json:"instances"`
 	}
 	if json.Unmarshal(raw, &report) != nil || report.CPUDetected <= 0 || report.MemoryDetectedMB <= 0 {
+		// A connected tunnel is not proof that this Agent can deploy.  The old
+		// behavior only updated the device heartbeat here, leaving the node at
+		// its initial `ready=false` without an explanation.  Persist a safe,
+		// actionable reason so the UI and API do not indefinitely say "wait".
+		issues, _ := json.Marshal([]map[string]string{{
+			"code":    "runtime_status_incomplete",
+			"message": "Agent 未完整上报 CPU、内存和运行环境检查结果；请升级并重启 xcloud-control",
+		}})
+		_, _ = c.db.Exec(`UPDATE xcloud_nodes SET selfhosted_ready=FALSE,selfhosted_readiness=?,last_agent_error='Agent 运行环境状态上报不完整',updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, string(issues), s.deviceID)
 		_, _ = c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID)
 		return
 	}
 	caps, _ := json.Marshal(report.Capabilities)
+	if report.RuntimeReady == nil {
+		report.ReadinessIssues = append(report.ReadinessIssues, struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}{
+			Code:    "runtime_readiness_not_reported",
+			Message: "当前 xcloud-control 未上报运行环境检查结果；请升级并重启服务",
+		})
+	}
 	issues, _ := json.Marshal(report.ReadinessIssues)
-	ready := report.RuntimeReady == nil || *report.RuntimeReady
+	ready := report.RuntimeReady != nil && *report.RuntimeReady
 	problem := ""
 	if !ready && len(report.ReadinessIssues) > 0 {
 		problem = report.ReadinessIssues[0].Message
