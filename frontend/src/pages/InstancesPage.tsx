@@ -656,10 +656,12 @@ export function InstancesPage({
                 )}
                 <div className="flex items-center justify-between gap-4 border-t border-slate-100 px-5 py-3.5 dark:border-slate-700 max-[760px]:items-start max-[760px]:flex-col">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                    <span className="text-slate-500 dark:text-slate-300">
-                      服务期：{serviceTime(item.serviceStartsAt)} —{' '}
-                      {serviceTime(item.serviceExpiresAt)}
-                    </span>
+                    {item.serviceStartsAt ? (
+                      <span className="text-slate-500 dark:text-slate-300">
+                        服务期：{serviceTime(item.serviceStartsAt)} —{' '}
+                        {serviceTime(item.serviceExpiresAt)}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full">
                     {!item.terminalOnly && (

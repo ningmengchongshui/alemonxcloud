@@ -88,7 +88,6 @@ function DiskMeter({ available, total }: { available: number; total: number }) {
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
         <i className="block h-full rounded-full bg-blue-600" style={{ width: `${percent}%` }} aria-label={`实例数据盘已使用 ${percent}%`} />
       </div>
-      {total > 0 && <p className="mb-0 mt-1.5 text-[11px] text-slate-500 dark:text-slate-300">可用 {storage(available)}</p>}
     </div>
   )
 }

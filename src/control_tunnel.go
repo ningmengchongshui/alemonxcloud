@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -378,6 +379,7 @@ func controlDeviceRevoke(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	result, err := revokeSelfHostedDevice(c.Request.Context(), user.ID)
 	if err != nil {
+		log.Printf("revoke self-hosted node for user %q: %v", user.ID, err)
 		c.JSON(503, gin.H{"message": "撤销失败，请稍后重试"})
 		return
 	}
@@ -435,7 +437,7 @@ func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHos
 	// "unknown" means the control plane intentionally no longer observes the
 	// runtime. It is distinct from "missing", which is reserved for an Agent
 	// confirmed container 404. No instance lifecycle state is changed here.
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status='unknown',i.updated_at=NOW() WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.owner_id=? AND n.node_kind='selfhosted' AND i.status IN ('deploying','running','stopped','destroy_scheduled')`, ownerID, ownerID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status='unknown' WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.owner_id=? AND n.node_kind='selfhosted' AND i.status IN ('deploying','running','stopped','destroy_scheduled')`, ownerID, ownerID); err != nil {
 		return revokedSelfHostedDeviceResult{}, err
 	}
 
