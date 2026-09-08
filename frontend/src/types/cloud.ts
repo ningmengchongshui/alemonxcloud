@@ -74,6 +74,9 @@ export interface SelfHostedNode {
   name: string
   deviceId: string
   status: 'online' | 'offline'
+  ready: boolean
+  readinessIssues?: Array<{ code: string; message: string }>
+  lastAgentError?: string
   lastHeartbeatAt?: string
   cpuDetected: number
   memoryDetectedMB: number
@@ -312,6 +315,14 @@ export interface TaskEvent {
 export interface InstanceTaskRecord {
   task: Task
   events: TaskEvent[]
+  diagnosticAvailable?: boolean
+}
+export interface TaskDiagnostic {
+  taskId: string
+  errorCode: string
+  safeMessage: string
+  diagnostic: string
+  createdAt: string
 }
 export interface Wallet {
   id: string

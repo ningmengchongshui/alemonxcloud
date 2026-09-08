@@ -80,9 +80,11 @@ type commandRequest struct {
 	Payload  json.RawMessage `json:"payload"`
 }
 type commandResult struct {
-	OK    bool            `json:"ok"`
-	Error string          `json:"error,omitempty"`
-	Data  json.RawMessage `json:"data,omitempty"`
+	OK         bool            `json:"ok"`
+	Error      string          `json:"error,omitempty"`
+	ErrorCode  string          `json:"errorCode,omitempty"`
+	Diagnostic string          `json:"diagnostic,omitempty"`
+	Data       json.RawMessage `json:"data,omitempty"`
 }
 type sessionRecord struct{ GatewayID, InternalURL, Epoch string }
 type config struct {
@@ -369,8 +371,13 @@ func (c *config) connect(w http.ResponseWriter, r *http.Request) {
 
 func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 	var report struct {
-		CPUDetected           float64  `json:"cpuDetected"`
-		MemoryDetectedMB      int      `json:"memoryDetectedMB"`
+		CPUDetected      float64 `json:"cpuDetected"`
+		MemoryDetectedMB int     `json:"memoryDetectedMB"`
+		RuntimeReady     *bool   `json:"runtimeReady"`
+		ReadinessIssues  []struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"readinessIssues"`
 		AgentVersion          string   `json:"agentVersion"`
 		AgentAPIVersion       int      `json:"agentApiVersion"`
 		Capabilities          []string `json:"capabilities"`
@@ -388,7 +395,13 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 		return
 	}
 	caps, _ := json.Marshal(report.Capabilities)
-	_, _ = c.db.Exec(`UPDATE xcloud_nodes SET cpu_detected=?,memory_detected_mb=?,cpu_total=?,memory_total_mb=?,cpu_quota=IF(selfhosted_quota_mode='auto' OR cpu_quota<=0,ROUND(?*0.8,2),cpu_quota),memory_quota_mb=IF(selfhosted_quota_mode='auto' OR memory_quota_mb<=0,FLOOR(?*0.8),memory_quota_mb),docker_version=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,agent_version=?,agent_api_version=?,agent_capabilities=?,last_heartbeat_at=NOW(),updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.DockerVersion, report.DiskAvailableBytes, report.DiskTotalBytes, report.ManagedContainerCount, report.AgentVersion, report.AgentAPIVersion, string(caps), s.deviceID)
+	issues, _ := json.Marshal(report.ReadinessIssues)
+	ready := report.RuntimeReady == nil || *report.RuntimeReady
+	problem := ""
+	if !ready && len(report.ReadinessIssues) > 0 {
+		problem = report.ReadinessIssues[0].Message
+	}
+	_, _ = c.db.Exec(`UPDATE xcloud_nodes SET cpu_detected=?,memory_detected_mb=?,cpu_total=?,memory_total_mb=?,cpu_quota=IF(selfhosted_quota_mode='auto' OR cpu_quota<=0,ROUND(?*0.8,2),cpu_quota),memory_quota_mb=IF(selfhosted_quota_mode='auto' OR memory_quota_mb<=0,FLOOR(?*0.8),memory_quota_mb),docker_version=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,agent_version=?,agent_api_version=?,agent_capabilities=?,selfhosted_ready=?,selfhosted_readiness=?,last_agent_error=IF(?,NULL,?),last_heartbeat_at=NOW(),updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.DockerVersion, report.DiskAvailableBytes, report.DiskTotalBytes, report.ManagedContainerCount, report.AgentVersion, report.AgentAPIVersion, string(caps), ready, string(issues), ready, problem, s.deviceID)
 	_, _ = c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID)
 	_, _ = c.db.Exec(`UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status='missing' WHERE i.placement_type='selfhosted' AND n.control_device_id=? AND i.status IN ('running','stopped','destroy_scheduled')`, s.deviceID)
 	for _, item := range report.Instances {

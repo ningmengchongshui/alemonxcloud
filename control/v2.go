@@ -78,6 +78,41 @@ type managedPayload struct {
 	Since         string  `json:"since,omitempty"`
 }
 
+type readinessIssue struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type runtimeReadiness struct {
+	Ready  bool             `json:"runtimeReady"`
+	Issues []readinessIssue `json:"readinessIssues,omitempty"`
+}
+
+// agentOperationError deliberately separates a customer-safe message from the
+// local diagnostic. The latter may contain host paths or Docker output and is
+// only persisted for the device owner through the control plane.
+type agentOperationError struct {
+	Code       string
+	Message    string
+	Diagnostic string
+}
+
+func (e *agentOperationError) Error() string { return e.Message }
+
+func limitedDiagnostic(value string) string {
+	const limit = 16 * 1024
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "\n…诊断输出已截断"
+}
+
+var controlDockerCommand = func(args ...string) (string, error) {
+	output, err := exec.Command("docker", args...).CombinedOutput()
+	return strings.TrimSpace(string(output)), err
+}
+
 func serveV2(cfg *config, path string) error {
 	base := cfg.TunnelURL
 	if base == "" {
@@ -331,26 +366,89 @@ func localAgentStatus() map[string]any {
 	mem := localMemoryMB()
 	root := controlDataRoot()
 	_ = os.MkdirAll(root, 0700)
+	readiness := checkRuntimeReadiness()
 	var stat syscall.Statfs_t
 	available, total := int64(0), int64(0)
 	if syscall.Statfs(root, &stat) == nil {
 		available = int64(stat.Bavail) * int64(stat.Bsize)
 		total = int64(stat.Blocks) * int64(stat.Bsize)
 	}
-	dockerVersion := ""
-	if raw, err := exec.Command("docker", "info", "--format", "{{.ServerVersion}}").Output(); err == nil {
-		dockerVersion = strings.TrimSpace(string(raw))
-	}
+	dockerVersion, _ := controlDockerCommand("info", "--format", "{{.ServerVersion}}")
 	instances := []map[string]string{}
-	if raw, err := exec.Command("docker", "ps", "-a", "--filter", "label=xcloud.managed=true", "--format", "{{.Label \"xcloud.route\"}}|{{.State}}").Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+	if raw, err := controlDockerCommand("ps", "-a", "--filter", "label=xcloud.managed=true", "--format", "{{.Label \"xcloud.route\"}}|{{.State}}"); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
 			parts := strings.SplitN(line, "|", 2)
 			if len(parts) == 2 && len(parts[0]) == 17 {
 				instances = append(instances, map[string]string{"route": parts[0], "state": parts[1]})
 			}
 		}
 	}
-	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "agentVersion": version, "agentApiVersion": 1, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1", "network.bandwidth.v1"}}
+	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1", "network.bandwidth.v1"}}
+}
+
+func safeDockerNetwork(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for index, r := range value {
+		if index == 0 && (r == '.' || r == '_' || r == '-') {
+			return false
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func managedDockerNetwork() (string, *agentOperationError) {
+	name := strings.TrimSpace(os.Getenv("XCLOUD_DOCKER_NETWORK"))
+	if name == "" {
+		name = "xcloud_network"
+	}
+	if !safeDockerNetwork(name) {
+		return "", &agentOperationError{Code: "network_invalid", Message: "实例运行网络名称无效", Diagnostic: "invalid XCLOUD_DOCKER_NETWORK"}
+	}
+	return name, nil
+}
+
+func ensureManagedDockerNetwork() *agentOperationError {
+	name, failure := managedDockerNetwork()
+	if failure != nil {
+		return failure
+	}
+	if _, err := controlDockerCommand("network", "inspect", name); err == nil {
+		return nil
+	}
+	created, createErr := controlDockerCommand("network", "create", "--driver", "bridge", name)
+	if createErr == nil {
+		return nil
+	}
+	// A concurrent Agent may have created it after our inspect. Re-check before
+	// reporting a failure so first deployment is idempotent.
+	if _, err := controlDockerCommand("network", "inspect", name); err == nil {
+		return nil
+	}
+	return &agentOperationError{Code: "network_unavailable", Message: "实例运行网络不可用，Agent 无法自动准备", Diagnostic: limitedDiagnostic(created)}
+}
+
+func checkRuntimeReadiness() runtimeReadiness {
+	issues := make([]readinessIssue, 0, 4)
+	if _, err := controlDockerCommand("info", "--format", "{{.ServerVersion}}"); err != nil {
+		issues = append(issues, readinessIssue{Code: "docker_unavailable", Message: "Docker 服务不可用"})
+	} else if _, err := controlDockerCommand("compose", "version", "--short"); err != nil {
+		issues = append(issues, readinessIssue{Code: "compose_unavailable", Message: "Docker Compose v2 不可用"})
+	}
+	if !writableDataRoot(controlDataRoot()) {
+		issues = append(issues, readinessIssue{Code: "data_root_unavailable", Message: "实例数据盘不可写"})
+	}
+	if len(issues) == 0 {
+		if failure := ensureManagedDockerNetwork(); failure != nil {
+			issues = append(issues, readinessIssue{Code: failure.Code, Message: failure.Message})
+		}
+	}
+	return runtimeReadiness{Ready: len(issues) == 0, Issues: issues}
 }
 
 // handleV2Command deliberately recognises a small fixed command set.  The
@@ -367,7 +465,14 @@ func handleV2Command(cfg *config, f v2Frame, send func(v2Frame) error) {
 	data, err := runManagedCommand(*cfg, command.Action, p)
 	result := map[string]any{"ok": err == nil}
 	if err != nil {
-		result["error"] = err.Error()
+		var operation *agentOperationError
+		if errors.As(err, &operation) {
+			result["error"] = operation.Message
+			result["errorCode"] = operation.Code
+			result["diagnostic"] = operation.Diagnostic
+		} else {
+			result["error"] = err.Error()
+		}
 	}
 	if data != nil {
 		result["data"] = data
@@ -459,6 +564,10 @@ func runManagedCompose(cfg config, action string, p managedPayload) error {
 	if !allowed[action] {
 		return errors.New("不支持的受管操作")
 	}
+	if readiness := checkRuntimeReadiness(); !readiness.Ready {
+		issue := readiness.Issues[0]
+		return &agentOperationError{Code: issue.Code, Message: issue.Message, Diagnostic: "runtime preflight failed: " + issue.Code}
+	}
 	if action == "pull-image" {
 		if p.Image == "" {
 			return errors.New("镜像地址无效")
@@ -483,7 +592,11 @@ func runManagedCompose(cfg config, action string, p managedPayload) error {
 		if err := os.MkdirAll(filepath.Join(dir, "workspace"), 0700); err != nil {
 			return err
 		}
-		compose, composeErr := agentcore.Compose(agentcore.ComposeInput{Name: p.Name, Image: p.Image, Route: p.Route, DataDir: filepath.Join(dir, "data"), WorkspaceDir: filepath.Join(dir, "workspace"), Network: os.Getenv("XCLOUD_DOCKER_NETWORK"), CPU: p.CPU, MemoryMB: p.MemoryMB, BandwidthMbps: maxBandwidth(p.BandwidthMbps), TerminalMode: false})
+		network, networkErr := managedDockerNetwork()
+		if networkErr != nil {
+			return networkErr
+		}
+		compose, composeErr := agentcore.Compose(agentcore.ComposeInput{Name: p.Name, Image: p.Image, Route: p.Route, DataDir: filepath.Join(dir, "data"), WorkspaceDir: filepath.Join(dir, "workspace"), Network: network, CPU: p.CPU, MemoryMB: p.MemoryMB, BandwidthMbps: maxBandwidth(p.BandwidthMbps), TerminalMode: false})
 		if composeErr != nil {
 			return composeErr
 		}
@@ -527,7 +640,20 @@ func composeCommand(dir, name string, args ...string) error {
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("受管 Compose 执行失败: %s", strings.TrimSpace(string(output)))
+		diagnostic := limitedDiagnostic(string(output))
+		lower := strings.ToLower(diagnostic)
+		code, message := "compose_failed", "实例启动配置执行失败"
+		switch {
+		case strings.Contains(lower, "network") && strings.Contains(lower, "not found"):
+			code, message = "network_unavailable", "实例运行网络不可用，Agent 将在下次操作自动修复"
+		case strings.Contains(lower, "no space left"):
+			code, message = "disk_full", "实例数据盘空间不足"
+		case strings.Contains(lower, "pull access denied"), strings.Contains(lower, "manifest unknown"), strings.Contains(lower, "failed to pull"):
+			code, message = "image_unavailable", "镜像拉取失败，请稍后重试"
+		case strings.Contains(lower, "cannot connect to the docker daemon"):
+			code, message = "docker_unavailable", "Docker 服务不可用"
+		}
+		return &agentOperationError{Code: code, Message: message, Diagnostic: diagnostic}
 	}
 	return nil
 }

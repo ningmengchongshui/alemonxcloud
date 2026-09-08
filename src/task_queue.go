@@ -201,6 +201,7 @@ func processDelivery(delivery amqp091.Delivery) {
 		return
 	}
 	if err != nil {
+		saveSelfHostedTaskDiagnostic(context.Background(), task, err)
 		if strings.HasPrefix(err.Error(), "节点 ") {
 			// Keep the latest concise Agent failure visible in node management.
 			// Full Docker stderr stays in the node's journal rather than leaking to

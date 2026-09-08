@@ -20,6 +20,7 @@ import type {
   WalletEntry,
   Ticket,
   InstanceTaskRecord,
+  TaskDiagnostic,
   TicketDetail,
   TicketPriority,
   TicketStatus,
@@ -263,6 +264,9 @@ export const cloudApi = createApi({
     getInstanceTasks: builder.query<InstanceTaskRecord[], string>({
       query: id => `/instances/${id}/tasks`,
       providesTags: ['Instances']
+    }),
+    getInstanceTaskDiagnostic: builder.query<TaskDiagnostic, { instanceId: string; taskId: string }>({
+      query: ({ instanceId, taskId }) => `/instances/${instanceId}/tasks/${taskId}/diagnostic`
     }),
     cancelInstanceTask: builder.mutation<
       void,
@@ -514,6 +518,9 @@ export const cloudApi = createApi({
       query: () => '/admin/tasks',
       providesTags: ['Admin']
     }),
+    getAdminTaskDiagnostic: builder.query<TaskDiagnostic, string>({
+      query: id => `/admin/tasks/${id}/diagnostic`
+    }),
     getAdminAuditLogs: builder.query<AuditLog[], void>({
       query: () => '/admin/audit-logs',
       providesTags: ['Admin']
@@ -689,6 +696,7 @@ export const {
   useReadNotificationMutation,
   useReadAllNotificationsMutation,
   useGetInstanceTasksQuery,
+  useGetInstanceTaskDiagnosticQuery,
   useCancelInstanceTaskMutation,
   useCancelAllInstanceTasksMutation,
   useGetTaskQuery,
@@ -719,6 +727,7 @@ export const {
   useAdminUpdateTicketPriorityMutation,
   useGetAdminNodesQuery,
   useGetAdminTasksQuery,
+  useLazyGetAdminTaskDiagnosticQuery,
   useGetAdminAuditLogsQuery,
   useGetAdminMetricsQuery,
   useSearchAdminUsersQuery,

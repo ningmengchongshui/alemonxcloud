@@ -177,10 +177,10 @@ export function SelfHostedInstanceCreateDialog({
         </Button>
         <Button
           loading={submitting}
-          disabled={node.status !== 'online' || catalogLoading || !catalog?.images.length}
+          disabled={node.status !== 'online' || !node.ready || catalogLoading || !catalog?.images.length}
           onClick={submit}
         >
-          {node.status === 'online' ? '创建实例' : '节点离线，暂不可创建'}
+          {node.status !== 'online' ? '节点离线，暂不可创建' : !node.ready ? '节点需修复，暂不可创建' : '创建实例'}
         </Button>
       </DialogFooter>
     </Dialog>

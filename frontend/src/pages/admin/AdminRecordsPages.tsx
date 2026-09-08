@@ -3,6 +3,7 @@ import {
   useAdjustAdminWalletMutation,
   useGetAdminAuditLogsQuery,
   useGetAdminOrdersQuery,
+  useLazyGetAdminTaskDiagnosticQuery,
   useGetAdminTasksQuery,
   useGetAdminWalletEntriesQuery,
   useDiscardReviewTaskMutation,
@@ -78,6 +79,8 @@ export function AdminTasksPage() {
   const [resume] = useResumeReviewTaskMutation()
   const [discard] = useDiscardReviewTaskMutation()
   const [discardAll, discardAllState] = useDiscardAllAdminTasksMutation()
+  const [loadDiagnostic] = useLazyGetAdminTaskDiagnosticQuery()
+  const [diagnostic, setDiagnostic] = useState<{ taskID: string; detail: string } | null>(null)
   const abnormalCount = (tasks.data ?? []).filter(task =>
     ['failed', 'needs_review'].includes(task.status)
   ).length
@@ -91,6 +94,12 @@ export function AdminTasksPage() {
       return
     await discardAll()
     await tasks.refetch()
+  }
+  async function showDiagnostic(taskID: string) {
+    try {
+      const value = await loadDiagnostic(taskID).unwrap()
+      setDiagnostic({ taskID, detail: value.diagnostic })
+    } catch { /* Missing/expired diagnostics are already surfaced by cloudApi. */ }
   }
   return (
     <section className="page super-page">
@@ -176,12 +185,24 @@ export function AdminTasksPage() {
                       </button>
                     </>
                   )}
+                  <button
+                    className="text-button"
+                    onClick={() => void showDiagnostic(task.id)}
+                  >
+                    节点诊断
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {diagnostic && (
+        <Dialog title="节点诊断" description={`任务 ${diagnostic.taskID}`} onClose={() => setDiagnostic(null)}>
+          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{diagnostic.detail}</pre>
+          <DialogFooter><Button onClick={() => setDiagnostic(null)}>关闭</Button></DialogFooter>
+        </Dialog>
+      )}
     </section>
   )
 }

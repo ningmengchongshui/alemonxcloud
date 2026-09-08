@@ -26,7 +26,10 @@ type Props = {
   onOpenExecutions?: (instanceID: string) => void
 }
 
-function NodeStatus({ online }: { online: boolean }) {
+function NodeStatus({ online, ready = true }: { online: boolean; ready?: boolean }) {
+  if (online && !ready) {
+    return <StatusBadge tone="danger">节点需修复</StatusBadge>
+  }
   return (
     <StatusBadge tone={online ? 'success' : 'neutral'}>
       {online ? '节点在线' : '节点离线'}
@@ -154,7 +157,7 @@ export function SelfHostedControlPanel({
                   </span>
                 </span>
                 <span className="flex items-center gap-3">
-                  <NodeStatus online={item.status === 'online'} />
+                  <NodeStatus online={item.status === 'online'} ready={item.ready} />
                   <span className="text-sm font-semibold text-blue-700 dark:text-blue-300">
                     进入节点 ›
                   </span>
@@ -215,7 +218,7 @@ export function SelfHostedControlPanel({
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
         </div>
-        <NodeStatus online={node.status === 'online'} />
+        <NodeStatus online={node.status === 'online'} ready={node.ready} />
       </header>
       <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
         <div className="grid gap-5 md:grid-cols-3">
@@ -231,6 +234,12 @@ export function SelfHostedControlPanel({
           <span>实例共享最高 10 Mbps 出口带宽</span>
         </div>
       </section>
+      {!node.ready && (
+        <Alert tone="error">
+          <b>节点已连接，但暂不可部署。</b>{' '}
+          {node.readinessIssues?.map(issue => issue.message).join('；') || node.lastAgentError || 'Agent 正在检查 Docker、Compose、数据盘和实例网络。'}
+        </Alert>
+      )}
       <InstancesPage
         instances={nodeInstances}
         orders={[]}
@@ -242,7 +251,7 @@ export function SelfHostedControlPanel({
         workspace={{
           title: '实例',
           description:
-            '运行在当前自建节点。创建不会产生订单或消耗平台余额。',
+            '',
           createLabel: '创建实例',
           selfHosted: true,
           compact: true

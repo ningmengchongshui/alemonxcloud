@@ -189,7 +189,9 @@ func instanceTasksHandler(c *gin.Context) {
 			return
 		}
 		events, _ := taskEvents(c.Request.Context(), t.ID)
-		items = append(items, gin.H{"task": t, "events": events})
+		var diagnosticAvailable bool
+		_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT EXISTS(SELECT 1 FROM xcloud_task_diagnostics WHERE task_id=? AND owner_id=?)`, t.ID, c.MustGet("user").(oidcUser).ID).Scan(&diagnosticAvailable)
+		items = append(items, gin.H{"task": t, "events": events, "diagnosticAvailable": diagnosticAvailable})
 	}
 	c.JSON(http.StatusOK, items)
 }

@@ -10,6 +10,7 @@ import {
 import {
   useCancelAllInstanceTasksMutation,
   useCancelInstanceTaskMutation,
+  useGetInstanceTaskDiagnosticQuery,
   useGetInstanceTasksQuery
 } from '@/services/cloudApi'
 import type { Instance } from '@/types/cloud'
@@ -53,12 +54,17 @@ export function InstanceExecutionPage({
   onBack: () => void
 }) {
   const [onlyProblems, setOnlyProblems] = useState(false)
+  const [diagnosticTaskID, setDiagnosticTaskID] = useState('')
   const tasks = useGetInstanceTasksQuery(instanceID, {
     pollingInterval: 5000,
     refetchOnFocus: true
   })
   const [cancelTask, cancelTaskState] = useCancelInstanceTaskMutation()
   const [cancelAll, cancelAllState] = useCancelAllInstanceTasksMutation()
+  const diagnostic = useGetInstanceTaskDiagnosticQuery(
+    { instanceId: instanceID, taskId: diagnosticTaskID },
+    { skip: !diagnosticTaskID }
+  )
   const records = useMemo(() => tasks.data ?? [], [tasks.data])
   const visible = records.filter(
     ({ task }) =>
@@ -148,7 +154,7 @@ export function InstanceExecutionPage({
         />
       ) : (
         <div className="space-y-3">
-          {visible.map(({ task, events }) => (
+          {visible.map(({ task, events, diagnosticAvailable }) => (
             <article
               key={task.id}
               className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800"
@@ -186,12 +192,38 @@ export function InstanceExecutionPage({
                       取消任务
                     </Button>
                   )}
+                  {diagnosticAvailable && (
+                    <Button
+                      tone="secondary"
+                      onClick={() => setDiagnosticTaskID(task.id)}
+                    >
+                      节点诊断
+                    </Button>
+                  )}
                 </div>
               </div>
               {task.lastError && (
                 <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-100">
                   {task.lastError}
                 </div>
+              )}
+              {diagnosticTaskID === task.id && (
+                <section className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-900">
+                  <div className="flex items-center justify-between gap-3">
+                    <b>节点诊断</b>
+                    <button className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-white" onClick={() => setDiagnosticTaskID('')}>关闭</button>
+                  </div>
+                  {diagnostic.isFetching ? (
+                    <p className="mb-0 mt-2 text-slate-500">正在读取诊断…</p>
+                  ) : diagnostic.data ? (
+                    <>
+                      <p className="mb-2 mt-2 text-slate-600 dark:text-slate-200">{diagnostic.data.safeMessage}（{diagnostic.data.errorCode}）</p>
+                      <pre className="mb-0 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{diagnostic.data.diagnostic}</pre>
+                    </>
+                  ) : (
+                    <p className="mb-0 mt-2 text-rose-700 dark:text-rose-300">节点诊断已过期或暂不可读取。</p>
+                  )}
+                </section>
               )}
               <ol className="mb-0 mt-4 space-y-3 border-l-2 border-slate-200 pl-4 dark:border-slate-600">
                 {events.map(event => (

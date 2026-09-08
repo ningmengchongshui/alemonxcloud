@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useDispatch } from 'react-redux'
 import { ActionDialog } from '@/components/ActionDialog'
@@ -47,6 +47,18 @@ const renewDiscountLabel = (plan: Plan | undefined, months: number) => {
   return months > 1 && bps !== undefined && bps < 10000
     ? `${bps / 1000} 折`
     : ''
+}
+
+function quoteErrorMessage(error: unknown) {
+  return typeof error === 'object' &&
+    error !== null &&
+    'data' in error &&
+    typeof error.data === 'object' &&
+    error.data !== null &&
+    'message' in error.data &&
+    typeof error.data.message === 'string'
+    ? error.data.message
+    : '优惠试算失败，请稍后重试。'
 }
 
 type InstanceAction =
@@ -288,10 +300,13 @@ export function InstancesPage({
   const [months, setMonths] = useState('1')
   const [renewPromoCode, setRenewPromoCode] = useState('')
   const [renewQuote, setRenewQuote] = useState<PriceQuote | null>(null)
+  const [renewPromoError, setRenewPromoError] = useState('')
   const [operate, { isLoading: operating }] = useInstanceActionMutation()
   const { data: catalog } = useGetCatalogQuery()
   const [renewOrder, { isLoading: renewalLoading }] = useRenewOrderMutation()
-  const [quoteRenewal] = useQuoteRenewalMutation()
+  const [quoteRenewal, { isLoading: quotingRenewal }] =
+    useQuoteRenewalMutation()
+  const renewQuoteRequest = useRef(0)
   const [quotePlanChange] = useQuotePlanChangeMutation()
   const [submitPlanChange, { isLoading: resizeLoading }] =
     useSubmitPlanChangeMutation()
@@ -337,7 +352,9 @@ export function InstancesPage({
       catalog?.images.find(image => image.id === currentImageID) ??
       catalog?.images[0]
     const versions = source?.versions ?? []
-    const currentVersion = versions.find(version => version.tag === item.version)
+    const currentVersion = versions.find(
+      version => version.tag === item.version
+    )
     const fallback =
       versions.find(version => version.tag.toLowerCase() === 'latest') ??
       versions[0]
@@ -394,35 +411,44 @@ export function InstancesPage({
       })
   }
 
-  function refreshRenewQuote(
-    order: Order,
-    promoCode = renewPromoCode,
-    quoteMonths = Number(months) || 1
-  ) {
-    void quoteRenewal({
-      id: order.id,
-      months: quoteMonths,
-      promoCode: promoCode || undefined
-    })
-      .unwrap()
-      .then(value => {
-        setRenewQuote(value)
+  const refreshRenewQuote = useCallback(
+    (order: Order, promoCode: string, quoteMonths: number) => {
+      const request = ++renewQuoteRequest.current
+      setRenewPromoError('')
+      void quoteRenewal({
+        id: order.id,
+        months: quoteMonths,
+        promoCode: promoCode || undefined
       })
-      .catch(() => undefined)
-  }
+        .unwrap()
+        .then(value => {
+          if (request === renewQuoteRequest.current) setRenewQuote(value)
+        })
+        .catch(error => {
+          if (request !== renewQuoteRequest.current) return
+          setRenewQuote(null)
+          setRenewPromoError(quoteErrorMessage(error))
+        })
+    },
+    [quoteRenewal]
+  )
 
   function openRenewal(order: Order) {
     setMonths('1')
     setRenewPromoCode('')
     setRenewQuote(null)
+    setRenewPromoError('')
     setRenewing(order)
-    void quoteRenewal({ id: order.id, months: 1 })
-      .unwrap()
-      .then(value => {
-        setRenewQuote(value)
-      })
-      .catch(() => undefined)
   }
+  useEffect(() => {
+    if (!renewing) return
+    const timeout = window.setTimeout(
+      () =>
+        refreshRenewQuote(renewing, renewPromoCode.trim(), Number(months) || 1),
+      renewPromoCode.trim() ? 350 : 0
+    )
+    return () => window.clearTimeout(timeout)
+  }, [months, renewPromoCode, renewing, refreshRenewQuote])
 
   function openResize(item: Instance) {
     setResizing(item)
@@ -630,16 +656,23 @@ export function InstancesPage({
                 )}
                 <div className="flex items-center justify-between gap-4 border-t border-slate-100 px-5 py-3.5 dark:border-slate-700 max-[760px]:items-start max-[760px]:flex-col">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-					<span className="text-slate-500 dark:text-slate-300">
-					  服务期：{serviceTime(item.serviceStartsAt)} — {serviceTime(item.serviceExpiresAt)}
-					</span>
+                    <span className="text-slate-500 dark:text-slate-300">
+                      服务期：{serviceTime(item.serviceStartsAt)} —{' '}
+                      {serviceTime(item.serviceExpiresAt)}
+                    </span>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full">
                     {!item.terminalOnly && (
                       <Button
                         tone="secondary"
-                        disabled={!item.ip || runtime !== 'running' || Boolean(activeTask)}
-                        onClick={() => window.open(item.ip, '_blank', 'noopener,noreferrer')}
+                        disabled={
+                          !item.ip ||
+                          runtime !== 'running' ||
+                          Boolean(activeTask)
+                        }
+                        onClick={() =>
+                          window.open(item.ip, '_blank', 'noopener,noreferrer')
+                        }
                       >
                         {item.ip ? 'Web服务 ↗' : '服务准备中'}
                       </Button>
@@ -914,7 +947,6 @@ export function InstancesPage({
                   tone={Number(months) === value ? 'primary' : 'secondary'}
                   onClick={() => {
                     setMonths(String(value))
-                    refreshRenewQuote(renewing, renewPromoCode, value)
                   }}
                 >
                   <span>{value} 个月</span>
@@ -952,11 +984,21 @@ export function InstancesPage({
               <Button
                 className="h-10 px-4"
                 tone="secondary"
-                onClick={() => refreshRenewQuote(renewing, renewPromoCode)}
+                loading={quotingRenewal}
+                onClick={() =>
+                  refreshRenewQuote(
+                    renewing,
+                    renewPromoCode.trim(),
+                    Number(months) || 1
+                  )
+                }
               >
                 应用
               </Button>
             </div>
+            {renewPromoError && (
+              <p className="mt-2 text-xs text-red-600">{renewPromoError}</p>
+            )}
             <div className="mt-4 space-y-2 text-xs">
               <div className="flex justify-between gap-3 text-slate-500 dark:text-slate-300">
                 <span>
@@ -974,7 +1016,7 @@ export function InstancesPage({
               {renewQuote?.program && (
                 <div className="flex justify-between gap-3 text-emerald-700">
                   <span>
-                    已自动应用：{renewQuote.program.name}
+                    已应用：{renewQuote.program.name}
                     {renewQuote.bonusDays
                       ? ` · 赠送 ${renewQuote.bonusDays} 天`
                       : ''}
@@ -1086,16 +1128,23 @@ export function InstancesPage({
                       ? '钱包退回'
                       : '无需补退'}
                 </span>
-                <b className={resizeQuote.deltaFen < 0 ? 'text-emerald-600' : ''}>
-                  ¥
-                  {(
-                    Math.abs(resizeQuote.deltaFen) / 100
-                  ).toFixed(2)}
+                <b
+                  className={resizeQuote.deltaFen < 0 ? 'text-emerald-600' : ''}
+                >
+                  ¥{(Math.abs(resizeQuote.deltaFen) / 100).toFixed(2)}
                 </b>
               </div>
               <div className="mt-2 border-t border-slate-200 pt-2 dark:border-slate-700">
-                <div className="flex justify-between"><span>旧订单退款合计</span><b className="text-emerald-600">¥{(resizeQuote.refundFen / 100).toFixed(2)}</b></div>
-                <div className="mt-1 flex justify-between"><span>新套餐购买合计</span><b>¥{(resizeQuote.chargeFen / 100).toFixed(2)}</b></div>
+                <div className="flex justify-between">
+                  <span>旧订单退款合计</span>
+                  <b className="text-emerald-600">
+                    ¥{(resizeQuote.refundFen / 100).toFixed(2)}
+                  </b>
+                </div>
+                <div className="mt-1 flex justify-between">
+                  <span>新套餐购买合计</span>
+                  <b>¥{(resizeQuote.chargeFen / 100).toFixed(2)}</b>
+                </div>
               </div>
               <p className="mb-0 mt-2 text-slate-500">{resizeQuote.summary}</p>
             </div>

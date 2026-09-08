@@ -22,6 +22,7 @@ func startControlLoops() {
 			recoverPendingTasks()
 			syncNodeHeartbeat(context.Background())
 			syncInstanceStates(context.Background())
+			cleanupExpiredTaskDiagnostics(context.Background())
 		}
 	}()
 	go func() {
@@ -37,6 +38,7 @@ func startControlLoops() {
 	quarantineDangerousFailedTasks(context.Background())
 	recoverExpiredTaskLeases(context.Background())
 	reconcileBandwidthTasks(context.Background())
+	cleanupExpiredTaskDiagnostics(context.Background())
 }
 
 func syncBenefitProgramStates(ctx context.Context) {

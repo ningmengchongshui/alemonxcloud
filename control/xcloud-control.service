@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
+EnvironmentFile=-/etc/xcloud-control.env
 ExecStart=/usr/local/bin/xcloud-control run --config /etc/xcloud-control/config.json
 Restart=always
 RestartSec=5

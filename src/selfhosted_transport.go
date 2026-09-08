@@ -11,6 +11,19 @@ import (
 	"strings"
 )
 
+type selfHostedCommandError struct {
+	Code       string
+	Message    string
+	Diagnostic string
+}
+
+func (e *selfHostedCommandError) Error() string {
+	if e.Message == "" {
+		return "节点自建 Agent 操作失败"
+	}
+	return "节点 " + e.Message
+}
+
 // selfHostedNodeRequest is the narrow command bridge to a customer-owned
 // node. It only translates structured xCloud lifecycle calls; it never sends
 // shell text, host paths, or arbitrary Docker IDs through the tunnel.
@@ -91,15 +104,17 @@ func selfHostedNodeRequest(ctx context.Context, n node, method, path string, pay
 		return fmt.Errorf("自建 Agent 返回 %s", resp.Status)
 	}
 	var reply struct {
-		OK    bool            `json:"ok"`
-		Error string          `json:"error"`
-		Data  json.RawMessage `json:"data"`
+		OK         bool            `json:"ok"`
+		Error      string          `json:"error"`
+		ErrorCode  string          `json:"errorCode"`
+		Diagnostic string          `json:"diagnostic"`
+		Data       json.RawMessage `json:"data"`
 	}
 	if err = json.NewDecoder(resp.Body).Decode(&reply); err != nil {
 		return err
 	}
 	if !reply.OK {
-		return errors.New(reply.Error)
+		return &selfHostedCommandError{Code: reply.ErrorCode, Message: reply.Error, Diagnostic: reply.Diagnostic}
 	}
 	if result != nil && len(reply.Data) > 0 {
 		return json.Unmarshal(reply.Data, result)

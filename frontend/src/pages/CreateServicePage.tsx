@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch } from 'react-redux'
 import { BalanceSettlement } from '@/components/BalanceSettlement'
 import {
@@ -24,6 +24,18 @@ const discountLabel = (plan: Plan | undefined, months: number) => {
   return months > 1 && bps !== undefined && bps < 10000
     ? `${bps / 1000} 折`
     : ''
+}
+
+function quoteErrorMessage(error: unknown) {
+  return typeof error === 'object' &&
+    error !== null &&
+    'data' in error &&
+    typeof error.data === 'object' &&
+    error.data !== null &&
+    'message' in error.data &&
+    typeof error.data.message === 'string'
+    ? error.data.message
+    : '优惠试算失败，请稍后重试。'
 }
 
 function PlanChoice({
@@ -77,8 +89,10 @@ export function CreateServicePage({
   const [months, setMonths] = useState(1)
   const [promoCode, setPromoCode] = useState('')
   const [quote, setQuote] = useState<PriceQuote | null>(null)
+  const [promoError, setPromoError] = useState('')
   const [purchase, { isLoading: saving }] = usePurchaseMutation()
-  const [quotePurchase] = useQuotePurchaseMutation()
+  const [quotePurchase, { isLoading: quoting }] = useQuotePurchaseMutation()
+  const quoteRequest = useRef(0)
   const { data: wallet } = useGetWalletQuery()
   const dispatch = useDispatch()
   const images = Array.isArray(catalog?.images) ? catalog.images : []
@@ -102,8 +116,10 @@ export function CreateServicePage({
       selectedImage && selectedPlan && wallet && payableFen !== undefined
     ) && (wallet?.balanceFen ?? 0) >= (payableFen ?? 0)
   const preview = useCallback(
-    (code = promoCode) => {
+    (code: string) => {
       if (!selectedImage || !selectedPlan) return
+      const request = ++quoteRequest.current
+      setPromoError('')
       void quotePurchase({
         planId: selectedPlan.id,
         imageId: selectedImage.id,
@@ -112,16 +128,26 @@ export function CreateServicePage({
       })
         .unwrap()
         .then(value => {
-          setQuote(value)
+          if (request === quoteRequest.current) setQuote(value)
         })
-        .catch(() => undefined)
+        .catch(error => {
+          if (request !== quoteRequest.current) return
+          setQuote(null)
+          setPromoError(quoteErrorMessage(error))
+        })
     },
-    [months, promoCode, quotePurchase, selectedImage, selectedPlan]
+    [months, quotePurchase, selectedImage, selectedPlan]
   )
   useEffect(() => {
     setQuote(null)
-    if (selectedImage && selectedPlan) preview('')
-  }, [selectedImage, selectedPlan, months, preview])
+    setPromoError('')
+    if (!selectedImage || !selectedPlan) return
+    const timeout = window.setTimeout(
+      () => preview(promoCode.trim()),
+      promoCode.trim() ? 350 : 0
+    )
+    return () => window.clearTimeout(timeout)
+  }, [selectedImage, selectedPlan, months, promoCode, preview])
 
   function submit() {
     if (!selectedImage || !selectedPlan) return
@@ -200,8 +226,11 @@ export function CreateServicePage({
                           ? source.versions
                           : []
                         setImageVersion(
-                          versions.find(version => version.tag.toLowerCase() === 'latest')
-                            ?.tag ?? versions[0]?.tag ?? ''
+                          versions.find(
+                            version => version.tag.toLowerCase() === 'latest'
+                          )?.tag ??
+                            versions[0]?.tag ??
+                            ''
                         )
                       }}
                     >
@@ -216,9 +245,14 @@ export function CreateServicePage({
                   ))}
                 </div>
                 <div className="mt-5">
-                  <label className="block text-sm font-bold text-slate-800 dark:text-slate-100" htmlFor="image-version">
+                  <label
+                    className="block text-sm font-bold text-slate-800 dark:text-slate-100"
+                    htmlFor="image-version"
+                  >
                     选择镜像版本
-                    <span className="ml-2 text-[11px] font-normal text-slate-400">默认推荐 latest</span>
+                    <span className="ml-2 text-[11px] font-normal text-slate-400">
+                      默认推荐 latest
+                    </span>
                     <select
                       id="image-version"
                       className="mt-2 block h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-blue-500 focus:ring-3 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-blue-950"
@@ -233,7 +267,10 @@ export function CreateServicePage({
                       ) : (
                         imageVersions.map(version => (
                           <option key={version.tag} value={version.tag}>
-                            {version.tag}{version.tag.toLowerCase() === 'latest' ? '（推荐）' : ''}
+                            {version.tag}
+                            {version.tag.toLowerCase() === 'latest'
+                              ? '（推荐）'
+                              : ''}
                           </option>
                         ))
                       )}
@@ -347,11 +384,15 @@ export function CreateServicePage({
               <Button
                 className="h-10 px-4"
                 tone="secondary"
+                loading={quoting}
                 onClick={() => preview(promoCode)}
               >
                 应用
               </Button>
             </div>
+            {promoError && (
+              <p className="mt-2 text-xs text-red-600">{promoError}</p>
+            )}
             <div className="mt-4 space-y-2 text-xs">
               <div className="flex justify-between gap-3 text-slate-500 dark:text-slate-300">
                 <span>
@@ -363,7 +404,7 @@ export function CreateServicePage({
               {quote?.program && (
                 <div className="flex justify-between gap-3 text-emerald-700">
                   <span>
-                    已自动应用：{quote.program.name}
+                    已应用：{quote.program.name}
                     {quote.bonusDays ? ` · 赠送 ${quote.bonusDays} 天` : ''}
                   </span>
                   <b>
