@@ -10,6 +10,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -375,35 +376,97 @@ func controlRouteAction(c *gin.Context) {
 }
 func controlDeviceRevoke(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
-	tx, err := instanceDB.BeginTx(c.Request.Context(), nil)
-	if err != nil {
-		c.JSON(503, gin.H{"message": "服务暂不可用，请稍后重试"})
-		return
-	}
-	defer tx.Rollback()
-	var id string
-	if err = tx.QueryRowContext(c.Request.Context(), `SELECT id FROM xcloud_control_devices WHERE owner_id=? AND status='enabled' FOR UPDATE`, user.ID).Scan(&id); err == sql.ErrNoRows {
+	result, err := revokeSelfHostedDevice(c.Request.Context(), user.ID)
+	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(404, gin.H{"message": "未绑定自建设备"})
 		return
 	}
 	if err != nil {
-		c.JSON(503, gin.H{"message": "服务暂不可用，请稍后重试"})
-		return
-	}
-	_, err = tx.ExecContext(c.Request.Context(), `UPDATE xcloud_control_devices SET status='revoked',revoked_at=NOW(),updated_at=NOW() WHERE id=?`, id)
-	if err == nil {
-		_, err = tx.ExecContext(c.Request.Context(), `UPDATE xcloud_control_routes SET status='disabled',updated_at=NOW() WHERE device_id=?`, id)
-	}
-	if err == nil {
-		err = writeAuditTx(c.Request.Context(), tx, user.ID, "control.device.revoke", "control_device", id, nil)
-	}
-	if err != nil || tx.Commit() != nil {
 		c.JSON(503, gin.H{"message": "撤销失败，请稍后重试"})
 		return
 	}
-	controlRemoveSession(id)
-	_ = createNotification(c.Request.Context(), user.ID, "control_device", "自建设备已撤销", "该设备和公网入口已停止访问。", map[string]any{"deviceId": id})
+	controlRemoveSession(result.DeviceID)
+	for _, taskID := range result.CancelledTaskIDs {
+		appendTaskEvent(c.Request.Context(), taskID, "cancelled_by_node_revoke", "自建节点已撤销，任务尚未开始执行，已取消")
+	}
+	_ = createNotification(c.Request.Context(), user.ID, "control_device", "自建设备已撤销", "设备、节点和公网入口已停止访问；远端容器与数据目录不会被删除，未开始的任务已取消。", map[string]any{"deviceId": result.DeviceID, "nodeCount": result.NodeCount, "cancelledTaskCount": len(result.CancelledTaskIDs)})
 	c.Status(204)
+}
+
+// revokedSelfHostedDeviceResult describes only control-plane cleanup. Revoking
+// a device must never call the customer's Agent: the remote containers and
+// data directory remain entirely under the owner's control.
+type revokedSelfHostedDeviceResult struct {
+	DeviceID         string
+	NodeCount        int64
+	CancelledTaskIDs []string
+}
+
+func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHostedDeviceResult, error) {
+	tx, err := instanceDB.BeginTx(ctx, nil)
+	if err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	defer tx.Rollback()
+
+	var result revokedSelfHostedDeviceResult
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM xcloud_control_devices WHERE owner_id=? AND status='enabled' FOR UPDATE`, ownerID).Scan(&result.DeviceID); err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_control_devices SET status='revoked',revoked_at=NOW(),updated_at=NOW() WHERE id=?`, result.DeviceID); err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_control_routes SET status='disabled',updated_at=NOW() WHERE device_id=?`, result.DeviceID); err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+
+	// A revoked device must release its node slot. Keep the record as history
+	// rather than deleting it, so existing instances and audit records remain
+	// referentially meaningful, but make it unavailable for all scheduling/UI.
+	nodeResult, err := tx.ExecContext(ctx, `UPDATE xcloud_nodes SET enabled=FALSE,selfhosted_ready=FALSE,selfhosted_readiness=JSON_ARRAY(JSON_OBJECT('code','device_revoked','message','自建节点已撤销，请重新绑定节点后再创建实例')),last_agent_error='自建节点已撤销',updated_at=NOW() WHERE owner_id=? AND control_device_id=? AND node_kind='selfhosted' AND enabled=TRUE`, ownerID, result.DeviceID)
+	if err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	result.NodeCount, _ = nodeResult.RowsAffected()
+
+	// "unknown" means the control plane intentionally no longer observes the
+	// runtime. It is distinct from "missing", which is reserved for an Agent
+	// confirmed container 404. No instance lifecycle state is changed here.
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status='unknown',i.updated_at=NOW() WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.owner_id=? AND n.control_device_id=? AND n.node_kind='selfhosted' AND i.status IN ('deploying','running','stopped','destroy_scheduled')`, ownerID, ownerID, result.DeviceID); err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT t.id FROM xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.owner_id=? AND n.control_device_id=? AND n.node_kind='selfhosted' AND t.status=? FOR UPDATE`, ownerID, ownerID, result.DeviceID, taskPending)
+	if err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	for rows.Next() {
+		var taskID string
+		if err = rows.Scan(&taskID); err != nil {
+			_ = rows.Close()
+			return revokedSelfHostedDeviceResult{}, err
+		}
+		result.CancelledTaskIDs = append(result.CancelledTaskIDs, taskID)
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	if err = rows.Close(); err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	if len(result.CancelledTaskIDs) > 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id JOIN xcloud_nodes n ON n.id=i.node_id SET t.status=?,t.last_error='自建节点已撤销，任务尚未开始执行，已取消',t.finished_at=NOW(),t.claimed_at=NULL,t.heartbeat_at=NULL,t.claim_expires_at=NULL,t.worker_id=NULL,t.execution_token=NULL,t.updated_at=NOW() WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.owner_id=? AND n.control_device_id=? AND n.node_kind='selfhosted' AND t.status=?`, taskCanceled, ownerID, ownerID, result.DeviceID, taskPending); err != nil {
+			return revokedSelfHostedDeviceResult{}, err
+		}
+	}
+	if err = writeAuditTx(ctx, tx, ownerID, "control.device.revoke", "control_device", result.DeviceID, map[string]any{"nodeCount": result.NodeCount, "cancelledTaskCount": len(result.CancelledTaskIDs), "remoteDataPreserved": true}); err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return revokedSelfHostedDeviceResult{}, err
+	}
+	return result, nil
 }
 
 func controlConnect(c *gin.Context) {

@@ -894,10 +894,13 @@ func taskMayCallAgent(ctx context.Context, task controlTask, expected ...string)
 		return errors.New("任务未持有执行租约")
 	}
 	query := `SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id
+		JOIN xcloud_nodes n ON n.id=i.node_id
+		LEFT JOIN xcloud_control_devices d ON d.id=n.control_device_id
 		WHERE t.id=? AND t.status=? AND t.worker_id=? AND t.execution_token=?
 		AND t.claim_expires_at>NOW() AND i.active_task_id=t.id
-		AND i.active_task_token=t.execution_token AND i.active_task_expires_at>NOW()`
-	args := []any{task.ID, taskRunning, task.WorkerID, task.ExecutionToken}
+		AND i.active_task_token=t.execution_token AND i.active_task_expires_at>NOW()
+		AND n.enabled=TRUE AND (n.node_kind<>? OR d.status='enabled')`
+	args := []any{task.ID, taskRunning, task.WorkerID, task.ExecutionToken, selfHostedNodeKind}
 	if len(expected) > 0 {
 		marks := strings.TrimRight(strings.Repeat("?,", len(expected)), ",")
 		query += " AND i.status IN (" + marks + ")"

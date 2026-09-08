@@ -45,6 +45,85 @@ func TestIntegrationNodeByIDLoadsAgentCapabilities(t *testing.T) {
 	}
 }
 
+func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *testing.T) {
+	setupIntegrationDB(t)
+	ctx := context.Background()
+	suffix := newID("revoke")
+	ownerID := "user_" + suffix
+	deviceID := "ctl_" + suffix
+	nodeID := "snode_" + suffix
+	instanceID := "shi_" + suffix
+	taskID := "task_" + suffix
+	runningTaskID := "task_running_" + suffix
+	workerID := "worker_" + suffix
+	executionToken := "exec_" + suffix
+
+	defer func() {
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_task_events WHERE task_id=?`, taskID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_task_events WHERE task_id=?`, runningTaskID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_tasks WHERE id=?`, taskID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_tasks WHERE id=?`, runningTaskID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_instances WHERE id=?`, instanceID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_routes WHERE device_id=?`, deviceID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_nodes WHERE id=?`, nodeID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_devices WHERE id=?`, deviceID)
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_audit_logs WHERE target_type='control_device' AND target_id=?`, deviceID)
+	}()
+
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_control_devices (id,owner_id,name,public_key,credential_hash,status,client_version,created_at,updated_at) VALUES (?,?,?,?,?,'enabled','test',NOW(),NOW())`, deviceID, ownerID, "test-control", "test-key", controlHash(deviceID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_control_routes (id,owner_id,device_id,route_key,target_url,status,access_address,created_at,updated_at) VALUES (?,?,?,?,?,'enabled',?,NOW(),NOW())`, "ctr_"+suffix, ownerID, deviceID, "r"+suffix[:16], "", "https://example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,node_kind,owner_id,control_device_id,selfhosted_ready,created_at,updated_at) VALUES (?,?,?,1,1024,TRUE,'selfhosted',?,?,TRUE,NOW(),NOW())`, nodeID, "自建节点", "", ownerID, deviceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,node_id,placement_type,runtime_status) VALUES (?,?,?,?,?,?,?,'https://example.test',?,NOW(),?,'selfhosted','running')`, instanceID, ownerID, "test", "example/test", "latest", "1 核 / 1 GB", "running", "xcloud-"+suffix[:16], nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at) VALUES (?,?,? ,? ,?,0,NOW(),NOW(),NOW())`, taskID, instanceID, "restart", "revoke:"+taskID, taskPending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,claimed_at,heartbeat_at,claim_expires_at,worker_id,execution_token) VALUES (?,?,? ,? ,?,1,NOW(),NOW(),NOW(),NOW(),NOW(),DATE_ADD(NOW(), INTERVAL 5 MINUTE),?,?)`, runningTaskID, instanceID, "restart", "revoke:"+runningTaskID, taskRunning, workerID, executionToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET active_task_id=?,active_task_token=?,active_task_expires_at=DATE_ADD(NOW(), INTERVAL 5 MINUTE) WHERE id=?`, runningTaskID, executionToken, instanceID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := revokeSelfHostedDevice(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("revoke self-hosted device: %v", err)
+	}
+	if result.DeviceID != deviceID || result.NodeCount != 1 || len(result.CancelledTaskIDs) != 1 || result.CancelledTaskIDs[0] != taskID {
+		t.Fatalf("unexpected revoke result: %#v", result)
+	}
+	var deviceStatus, taskStatus, runningTaskStatus, instanceStatus, runtimeStatus string
+	var enabled, ready bool
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_control_devices WHERE id=?`, deviceID).Scan(&deviceStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT enabled,selfhosted_ready FROM xcloud_nodes WHERE id=?`, nodeID).Scan(&enabled, &ready); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status,runtime_status FROM xcloud_instances WHERE id=?`, instanceID).Scan(&instanceStatus, &runtimeStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_tasks WHERE id=?`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_tasks WHERE id=?`, runningTaskID).Scan(&runningTaskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if deviceStatus != "revoked" || enabled || ready || instanceStatus != "running" || runtimeStatus != "unknown" || taskStatus != taskCanceled || runningTaskStatus != taskRunning {
+		t.Fatalf("revoke cleanup mismatch: device=%s enabled=%v ready=%v instance=%s/%s task=%s runningTask=%s", deviceStatus, enabled, ready, instanceStatus, runtimeStatus, taskStatus, runningTaskStatus)
+	}
+	if err := taskMayCallAgent(ctx, controlTask{ID: runningTaskID, InstanceID: instanceID, Action: "restart", WorkerID: workerID, ExecutionToken: executionToken}); err == nil {
+		t.Fatal("a running task must be fenced from calling a revoked self-hosted node")
+	}
+}
+
 func TestIntegrationConcurrentRefundCreditsOnce(t *testing.T) {
 	setupIntegrationDB(t)
 	ctx := context.Background()

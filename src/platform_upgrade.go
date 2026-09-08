@@ -392,6 +392,9 @@ func nodeByID(ctx context.Context, id string) (node, error) {
 }
 
 func nodeRequest(ctx context.Context, n node, method, path string, payload any, result any) error {
+	if !n.Enabled {
+		return errors.New("实例节点已停用")
+	}
 	if n.NodeKind == selfHostedNodeKind {
 		return selfHostedNodeRequest(ctx, n, method, path, payload, result)
 	}

@@ -37,13 +37,6 @@ function NodeStatus({ online, ready = true }: { online: boolean; ready?: boolean
   )
 }
 
-function memory(value: number) {
-	if (value <= 0) return '等待上报'
-  return value >= 1024
-    ? `${(value / 1024).toFixed(value % 1024 ? 1 : 0)} GB`
-    : `${value} MB`
-}
-
 function storage(bytes: number) {
   if (bytes <= 0) return '等待上报'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -225,13 +218,6 @@ export function SelfHostedControlPanel({
           <CapacityMeter label="实例 CPU 已分配" used={node.cpuUsed} total={node.cpuQuota} unit="核" />
           <CapacityMeter label="实例内存已分配" used={node.memoryUsedMB} total={node.memoryQuotaMB} unit="MB" />
           <DiskMeter available={node.diskAvailableBytes} total={node.diskTotalBytes} />
-        </div>
-        <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 border-t border-slate-100 pt-3 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-300">
-          <span>设备资源 {node.cpuDetected} 核 / {memory(node.memoryDetectedMB)}</span>
-          {node.diskTotalBytes > 0 && <span>实例数据盘 {storage(node.diskTotalBytes)}</span>}
-          <span>“已分配”是实例预留配额，不是设备当前实时负载</span>
-          <span>Agent {node.agentVersion || '等待上报'}</span>
-          <span>实例共享最高 10 Mbps 出口带宽</span>
         </div>
       </section>
       {!node.ready && (

@@ -590,6 +590,10 @@ func (c *config) commandRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid command", 400)
 		return
 	}
+	if !c.deviceEnabled(r.Context(), req.DeviceID) {
+		http.Error(w, "device revoked or unavailable", http.StatusGone)
+		return
+	}
 	if remote, err := c.directory(r.Context(), req.DeviceID); err == nil && remote.GatewayID != c.id {
 		if !c.cluster {
 			http.Error(w, "gateway owner unavailable", http.StatusBadGateway)
@@ -652,9 +656,18 @@ func (c *config) refreshSession(s *tunnelSession) {
 		if sessionFor(s.deviceID) != s {
 			return
 		}
+		if !c.deviceEnabled(context.Background(), s.deviceID) {
+			_ = s.conn.Close()
+			return
+		}
 		c.setDirectory(context.Background(), s)
 		_, _ = c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID)
 	}
+}
+
+func (c *config) deviceEnabled(ctx context.Context, deviceID string) bool {
+	var status string
+	return c.db.QueryRowContext(ctx, `SELECT status FROM xcloud_control_devices WHERE id=?`, deviceID).Scan(&status) == nil && status == "enabled"
 }
 func (c *config) sendConfig(s *tunnelSession) {
 	var target, status string
