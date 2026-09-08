@@ -9,6 +9,7 @@ import {
   Dialog,
   EmptyState,
   LoadingState,
+  PageHeader,
   StatusBadge
 } from '@/components/ui'
 import {
@@ -249,7 +250,8 @@ export function InstancesPage({
   onCreate,
   onOpenLogs,
   onOpenTerminal,
-  onOpenExecutions
+  onOpenExecutions,
+  workspace
 }: {
   instances: Instance[]
   orders: Order[]
@@ -258,6 +260,13 @@ export function InstancesPage({
   onOpenLogs: (instanceID: string) => void
   onOpenTerminal: (instanceID: string) => void
   onOpenExecutions: (instanceID: string) => void
+  workspace?: {
+    title: string
+    description: string
+    eyebrow?: string
+    createLabel: string
+    selfHosted?: boolean
+  }
 }) {
   const [error, setError] = useState('')
   const [pending, setPending] = useState<{
@@ -493,18 +502,37 @@ export function InstancesPage({
       })
   }
 
+  const selfHosted = workspace?.selfHosted === true
+
   return (
-    <section className="page me-page">
+    <section className={workspace ? '' : 'page me-page'}>
+      {workspace && (
+        <PageHeader
+          eyebrow={workspace.eyebrow}
+          title={workspace.title}
+          description={workspace.description}
+          actions={
+            <Button onClick={onCreate}>
+              <span aria-hidden="true">＋</span> {workspace.createLabel}
+            </Button>
+          }
+        />
+      )}
       {error && <Alert tone="error">{error}</Alert>}
       {loading ? (
         <LoadingState>正在同步实例状态…</LoadingState>
       ) : sorted.length === 0 ? (
         <EmptyState
-          title="还没有实例"
-          description="从可信镜像和可售套餐创建第一个服务。"
+          title={selfHosted ? '该节点还没有实例' : '还没有实例'}
+          description={
+            selfHosted
+              ? '点击右上角“创建”，使用平台审核镜像部署第一个自建服务。'
+              : '从可信镜像和可售套餐创建第一个服务。'
+          }
           action={
             <Button onClick={onCreate}>
-              <span aria-hidden="true">＋</span> 创建服务
+              <span aria-hidden="true">＋</span>{' '}
+              {workspace?.createLabel ?? '创建服务'}
             </Button>
           }
         />
@@ -681,7 +709,9 @@ export function InstancesPage({
                           instanceID={item.id}
                           actions={[
                             { action: 'restart', label: '重启' },
-                            { action: 'update', label: '更新' },
+                            ...(!selfHosted
+                              ? [{ action: 'update' as const, label: '更新' }]
+                              : []),
                             {
                               action: 'reinstall',
                               label: '重装',
@@ -696,7 +726,8 @@ export function InstancesPage({
                           }
                         />
                       )}
-                    {['running', 'stopped'].includes(lifecycle) &&
+                    {!selfHosted &&
+                      ['running', 'stopped'].includes(lifecycle) &&
                       canOperate && (
                         <Button
                           tone="secondary"

@@ -447,7 +447,20 @@ export default function App() {
         onGoToSuper={activeSession.user.isAdmin ? () => navigate('/super') : undefined}
         onLogout={signOut}
       >
-        <SelfHostedControlPanel detail nodeID={selectedControlNodeID} onBack={() => navigate('/me/nodes')} />
+        <SelfHostedControlPanel
+          detail
+          nodeID={selectedControlNodeID}
+          onBack={() => navigate('/me/nodes')}
+          onOpenLogs={instanceID =>
+            navigate(`/me/instances/${encodeURIComponent(instanceID)}/logs`)
+          }
+          onOpenTerminal={instanceID =>
+            navigate(`/terminal/${encodeURIComponent(instanceID)}`)
+          }
+          onOpenExecutions={instanceID =>
+            navigate(`/me/instances/${encodeURIComponent(instanceID)}/executions`)
+          }
+        />
       </Shell>
     )
   }
