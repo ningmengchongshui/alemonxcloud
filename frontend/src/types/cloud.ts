@@ -47,7 +47,6 @@ export interface Instance {
   spec: string
   status: string
   runtimeStatus?: string
-  bandwidthMbps?: number
   destroyAt?: string
   destroyedAt?: string
   purgeAt?: string
@@ -63,12 +62,6 @@ export interface Instance {
   planChangeId?: string
 }
 
-export interface SelfHostedControl {
-  device: { id: string; name: string; version: string; lastHeartbeatAt?: string } | null
-  route: { id: string; routeKey: string; targetURL: string; status: 'enabled' | 'paused' | 'disabled'; accessAddress: string } | null
-  online: boolean
-  bandwidthMbps: number
-}
 export interface SelfHostedNode {
   id: string
   name: string
@@ -88,6 +81,12 @@ export interface SelfHostedNode {
   memoryUsedMB: number
   agentVersion?: string
   capabilities: string[]
+}
+export interface SelfHostedReadinessEvent {
+  ready: boolean
+  code: string
+  message: string
+  createdAt: string
 }
 export interface WorkspaceEntry { name: string; path: string; kind: 'file' | 'directory' | 'symlink'; size: number; modifiedAt: string }
 export interface WorkspaceListing { path: string; entries: WorkspaceEntry[] }
@@ -166,7 +165,6 @@ export interface Plan {
   name: string
   cpu: number
   memoryMB: number
-  bandwidthMbps: number
   monthlyPriceFen: number
   enabled: boolean
   sortOrder: number
@@ -270,6 +268,7 @@ export interface BenefitProgram {
 }
 export interface Node {
   id: string
+  nodeKind?: 'platform' | 'selfhosted'
   name: string
   agentURL: string
   agentToken?: string
@@ -306,6 +305,8 @@ export interface Task {
   workerId?: string
   heartbeatAt?: string
   recoveryCount?: number
+  agentOperationId?: string
+  agentOperationState?: 'running' | 'succeeded' | 'failed' | 'unknown'
 }
 export interface TaskEvent {
   id: number
@@ -318,6 +319,17 @@ export interface InstanceTaskRecord {
   task: Task
   events: TaskEvent[]
   diagnosticAvailable?: boolean
+}
+export interface AgentOperation {
+  operationId: string
+  taskId: string
+  action: string
+  desiredState: string
+  status: 'running' | 'succeeded' | 'failed' | 'unknown'
+  observedState?: string
+  safeError?: string
+  startedAt: string
+  finishedAt?: string
 }
 export interface TaskDiagnostic {
   taskId: string

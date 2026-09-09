@@ -22,7 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const version = "0.2.2"
+const version = "0.2.3"
 const protocol = "xcloud-control.v3"
 
 //go:embed xcloud-control.service

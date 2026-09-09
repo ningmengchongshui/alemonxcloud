@@ -69,17 +69,31 @@ type v2CommandRequest struct {
 	Payload  json.RawMessage `json:"payload"`
 }
 type managedPayload struct {
-	Name          string  `json:"name"`
-	Image         string  `json:"image"`
-	CPU           float64 `json:"cpu"`
-	MemoryMB      int     `json:"memoryMB"`
-	BandwidthMbps int     `json:"bandwidthMbps"`
-	Route         string  `json:"route"`
-	KeepStopped   bool    `json:"keepStopped"`
-	Path          string  `json:"path,omitempty"`
-	Content       string  `json:"content,omitempty"`
-	Tail          string  `json:"tail,omitempty"`
-	Since         string  `json:"since,omitempty"`
+	Name        string  `json:"name"`
+	Image       string  `json:"image"`
+	CPU         float64 `json:"cpu"`
+	MemoryMB    int     `json:"memoryMB"`
+	Route       string  `json:"route"`
+	KeepStopped bool    `json:"keepStopped"`
+	Path        string  `json:"path,omitempty"`
+	Content     string  `json:"content,omitempty"`
+	Tail        string  `json:"tail,omitempty"`
+	Since       string  `json:"since,omitempty"`
+	OperationID string  `json:"operationId,omitempty"`
+}
+
+// managedOperation is deliberately host-local.  It is the durable fact the
+// Control plane can query after a Tunnel disconnect or a cancelled Docker
+// client: cancelling a CLI process is not proof that Docker did not finish.
+type managedOperation struct {
+	ID            string    `json:"operationId"`
+	Action        string    `json:"action"`
+	DesiredState  string    `json:"desiredState"`
+	Status        string    `json:"status"`
+	ObservedState string    `json:"observedState,omitempty"`
+	SafeError     string    `json:"safeError,omitempty"`
+	StartedAt     time.Time `json:"startedAt"`
+	FinishedAt    time.Time `json:"finishedAt,omitempty"`
 }
 
 type readinessIssue struct {
@@ -179,6 +193,8 @@ func serveV2(cfg *config, path string) error {
 	}{values: map[string]context.CancelFunc{}}
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
+	cleanupTicker := time.NewTicker(time.Hour)
+	defer cleanupTicker.Stop()
 	done := make(chan struct{})
 	defer close(done)
 	reportStatus := func() {
@@ -201,6 +217,16 @@ func serveV2(cfg *config, path string) error {
 				return
 			case <-ticker.C:
 				reportStatus()
+			}
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-cleanupTicker.C:
+				cleanupManagedOperations()
 			}
 		}
 	}()
@@ -433,7 +459,7 @@ func localAgentStatus() map[string]any {
 			}
 		}
 	}
-	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "runtimeInventoryOK": inventoryOK, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1", "network.bandwidth.v1"}}
+	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "runtimeInventoryOK": inventoryOK, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1"}}
 }
 
 func safeDockerNetwork(value string) bool {
@@ -531,6 +557,12 @@ func handleV2Command(ctx context.Context, cfg *config, f v2Frame, send func(v2Fr
 	_ = send(v2Frame{kind: v2CommandResult, id: f.id, meta: raw})
 }
 func runManagedCommand(ctx context.Context, cfg config, action string, p managedPayload) (any, error) {
+	if action == "operation-status" {
+		if !safeManagedName(p.Name) || strings.TrimSpace(p.OperationID) == "" {
+			return nil, errors.New("操作标识无效")
+		}
+		return readManagedOperation(cfg, p.Name, p.OperationID)
+	}
 	if action == "logs" {
 		if !safeManagedName(p.Name) {
 			return nil, errors.New("受管实例标识无效")
@@ -605,14 +637,157 @@ func managedDir(cfg config, name string) (string, error) {
 	root := controlDataRoot()
 	return agentcore.InstanceDir(root, name)
 }
-func runManagedCompose(ctx context.Context, cfg config, action string, p managedPayload) error {
+
+func managedOperationPath(cfg config, name, operationID string) (string, error) {
+	if !safeManagedName(name) || len(operationID) < 8 || len(operationID) > 128 {
+		return "", errors.New("操作标识无效")
+	}
+	for _, ch := range operationID {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
+			return "", errors.New("操作标识无效")
+		}
+	}
+	// Keep audit records outside the instance directory: a confirmed purge may
+	// remove that directory before the final status is persisted.
+	return filepath.Join(controlDataRoot(), "operations", name, operationID+".json"), nil
+}
+
+func desiredManagedState(action string) string {
+	switch action {
+	case "stop":
+		return "stopped"
+	case "destroy", "purge":
+		return "absent"
+	default:
+		return "running"
+	}
+}
+
+func writeManagedOperation(cfg config, name string, operation managedOperation) {
+	path, err := managedOperationPath(cfg, name, operation.ID)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return
+	}
+	raw, err := json.Marshal(operation)
+	if err != nil {
+		return
+	}
+	temporary := path + ".tmp"
+	if os.WriteFile(temporary, raw, 0600) == nil {
+		_ = os.Rename(temporary, path)
+	}
+}
+
+func beginManagedOperation(cfg config, p managedPayload, action string) *managedOperation {
+	if strings.TrimSpace(p.OperationID) == "" {
+		return nil // Compatibility with pre-operation-audit control planes.
+	}
+	operation := &managedOperation{ID: p.OperationID, Action: action, DesiredState: desiredManagedState(action), Status: "running", StartedAt: time.Now().UTC()}
+	writeManagedOperation(cfg, p.Name, *operation)
+	return operation
+}
+
+func finishManagedOperation(cfg config, name string, operation *managedOperation, status, observed, message string) {
+	if operation == nil {
+		return
+	}
+	operation.Status, operation.ObservedState, operation.SafeError = status, observed, truncateOperationMessage(message)
+	operation.FinishedAt = time.Now().UTC()
+	writeManagedOperation(cfg, name, *operation)
+}
+
+func truncateOperationMessage(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 512 {
+		return value[:512]
+	}
+	return value
+}
+
+func inspectManagedState(name string) string {
+	if !safeManagedName(name) {
+		return ""
+	}
+	output, err := exec.Command("docker", "inspect", "--format", "{{.State.Status}}", name).CombinedOutput()
+	if err != nil {
+		return "absent"
+	}
+	state := strings.TrimSpace(string(output))
+	if state == "running" || state == "exited" || state == "created" || state == "paused" {
+		return state
+	}
+	return "unknown"
+}
+
+func readManagedOperation(cfg config, name, operationID string) (any, error) {
+	path, err := managedOperationPath(cfg, name, operationID)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]any{"operationId": operationID, "status": "unknown", "observedState": inspectManagedState(name), "safeError": "Agent 未找到本地操作记录"}, nil
+	}
+	if err != nil {
+		return nil, errors.New("无法读取操作状态")
+	}
+	var operation managedOperation
+	if json.Unmarshal(raw, &operation) != nil {
+		return nil, errors.New("操作状态记录无效")
+	}
+	operation.ObservedState = inspectManagedState(name)
+	return operation, nil
+}
+
+func cleanupManagedOperations() {
+	root := filepath.Join(controlDataRoot(), "operations")
+	nodes, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	for _, node := range nodes {
+		if !node.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, node.Name())
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if info, infoErr := entry.Info(); infoErr == nil && info.ModTime().Before(cutoff) {
+				_ = os.Remove(filepath.Join(dir, entry.Name()))
+			}
+		}
+		_ = os.Remove(dir)
+	}
+}
+func runManagedCompose(ctx context.Context, cfg config, action string, p managedPayload) (err error) {
 	dir, err := managedDir(cfg, p.Name)
 	if err != nil {
 		return err
 	}
-	allowed := map[string]bool{"create": true, "start": true, "stop": true, "restart": true, "destroy": true, "purge": true, "resize": true, "reinstall": true, "bandwidth": true, "pull-image": true}
+	allowed := map[string]bool{"create": true, "start": true, "stop": true, "restart": true, "destroy": true, "purge": true, "resize": true, "reinstall": true, "pull-image": true}
 	if !allowed[action] {
 		return errors.New("不支持的受管操作")
+	}
+	operation := beginManagedOperation(cfg, p, action)
+	if operation != nil {
+		defer func() {
+			observed := inspectManagedState(p.Name)
+			state, message := "succeeded", ""
+			if err != nil {
+				state, message = "failed", truncateOperationMessage(err.Error())
+			}
+			if ctx.Err() != nil {
+				state, message = "unknown", "控制面已取消操作，正在等待最终容器状态确认"
+			}
+			finishManagedOperation(cfg, p.Name, operation, state, observed, message)
+		}()
 	}
 	if readiness := checkRuntimeReadiness(); !readiness.Ready {
 		issue := readiness.Issues[0]
@@ -646,7 +821,7 @@ func runManagedCompose(ctx context.Context, cfg config, action string, p managed
 		if networkErr != nil {
 			return networkErr
 		}
-		compose, composeErr := agentcore.Compose(agentcore.ComposeInput{Name: p.Name, Image: p.Image, Route: p.Route, DataDir: filepath.Join(dir, "data"), WorkspaceDir: filepath.Join(dir, "workspace"), Network: network, CPU: p.CPU, MemoryMB: p.MemoryMB, BandwidthMbps: maxBandwidth(p.BandwidthMbps), TerminalMode: false})
+		compose, composeErr := agentcore.Compose(agentcore.ComposeInput{Name: p.Name, Image: p.Image, Route: p.Route, DataDir: filepath.Join(dir, "data"), WorkspaceDir: filepath.Join(dir, "workspace"), Network: network, CPU: p.CPU, MemoryMB: p.MemoryMB, TerminalMode: false})
 		if composeErr != nil {
 			return composeErr
 		}
@@ -673,16 +848,8 @@ func runManagedCompose(ctx context.Context, cfg config, action string, p managed
 			return composeCommand(ctx, dir, p.Name, "up", "-d", "--no-start")
 		}
 		return composeCommand(ctx, dir, p.Name, "up", "-d", "--remove-orphans")
-	case "bandwidth":
-		return nil
 	}
 	return nil
-}
-func maxBandwidth(value int) int {
-	if value < 1 {
-		return 10
-	}
-	return value
 }
 func composeCommand(ctx context.Context, dir, name string, args ...string) error {
 	base := []string{"compose", "--project-name", name, "--file", filepath.Join(dir, "docker-compose.yml")}

@@ -98,6 +98,59 @@ func selfHostedNodeDetail(c *gin.Context) {
 	}
 }
 
+func updateSelfHostedNode(c *gin.Context) {
+	item, ok := ownedSelfHostedNode(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	name := ""
+	if c.ShouldBindJSON(&body) == nil {
+		name = strings.TrimSpace(body.Name)
+	}
+	if name == "" || len(name) > 96 {
+		c.JSON(400, gin.H{"message": "节点名称应为 1 至 96 个字符"})
+		return
+	}
+	if _, err := instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_nodes SET name=?,updated_at=NOW() WHERE id=? AND owner_id=? AND node_kind='selfhosted' AND enabled=TRUE`, name, item.ID, c.MustGet("user").(oidcUser).ID); err != nil {
+		internalError(c, err)
+		return
+	}
+	_ = writeAudit(c.Request.Context(), c.MustGet("user").(oidcUser).ID, "selfhosted_node.rename", "node", item.ID, map[string]any{"name": name})
+	c.Status(http.StatusNoContent)
+}
+
+func selfHostedNodeReadinessEvents(c *gin.Context) {
+	item, ok := ownedSelfHostedNode(c)
+	if !ok {
+		return
+	}
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT ready,issue_code,message,created_at FROM xcloud_selfhosted_readiness_events WHERE node_id=? AND created_at>DATE_SUB(NOW(),INTERVAL 30 DAY) ORDER BY id DESC LIMIT 100`, item.ID)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer rows.Close()
+	items := []gin.H{}
+	for rows.Next() {
+		var ready bool
+		var code, message string
+		var createdAt time.Time
+		if err := rows.Scan(&ready, &code, &message, &createdAt); err != nil {
+			internalError(c, err)
+			return
+		}
+		items = append(items, gin.H{"ready": ready, "code": code, "message": message, "createdAt": createdAt})
+	}
+	if err := rows.Err(); err != nil {
+		internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
 func updateSelfHostedNodeQuota(c *gin.Context) {
 	item, ok := ownedSelfHostedNode(c)
 	if !ok {
@@ -219,7 +272,7 @@ func createSelfHostedInstance(c *gin.Context) {
 	name := strings.TrimSpace(body.Name)
 	container := "xcloud-" + route
 	address := "https://control-" + route + "." + env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com")
-	_, err = tx.ExecContext(c.Request.Context(), `INSERT INTO xcloud_instances (id,owner_id,name,image,image_digest,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,route_key,placement_type,runtime_status,bandwidth_mbps,bandwidth_status) VALUES (?,?,?,?,?,?,?,'deploying',?,?,NOW(),?,?,?,?,?,'running',10,'pending')`, id, user.ID, name, imageRef, nullableString(digest), body.ImageVersion, fmt.Sprintf("%g 核 / %d GB / 最高 10 Mbps", body.CPU, body.MemoryMB/1024), address, container, body.CPU, body.MemoryMB, n.ID, route, "selfhosted")
+	_, err = tx.ExecContext(c.Request.Context(), `INSERT INTO xcloud_instances (id,owner_id,name,image,image_digest,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,route_key,placement_type,runtime_status) VALUES (?,?,?,?,?,?,?,'deploying',?,?,NOW(),?,?,?,?,?,'running')`, id, user.ID, name, imageRef, nullableString(digest), body.ImageVersion, fmt.Sprintf("%g 核 / %d GB", body.CPU, body.MemoryMB/1024), address, container, body.CPU, body.MemoryMB, n.ID, route, "selfhosted")
 	if err != nil {
 		internalError(c, err)
 		return

@@ -104,8 +104,8 @@ func TestLifecycleTaskActionsRequireInstanceLock(t *testing.T) {
 			t.Fatalf("%s must acquire the instance lifecycle lock", action)
 		}
 	}
-	if lifecycleTask("bandwidth") {
-		t.Fatal("bandwidth reconciliation must not block lifecycle operations")
+	if lifecycleTask("unknown") {
+		t.Fatal("unknown task actions must not acquire lifecycle locks")
 	}
 }
 

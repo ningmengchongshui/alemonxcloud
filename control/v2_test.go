@@ -100,3 +100,14 @@ func TestLocalAgentStatusDoesNotClaimInventoryWhenDockerListFails(t *testing.T) 
 		t.Fatalf("runtime inventory must be false after a failed Docker list: %#v", status)
 	}
 }
+
+func TestManagedOperationPathStaysOutsideInstanceData(t *testing.T) {
+	t.Setenv("XCLOUD_CONTROL_DATA_ROOT", t.TempDir())
+	path, err := managedOperationPath(config{}, "xcloud-r0123456789abcdef", "aop_12345678")
+	if err != nil {
+		t.Fatalf("managedOperationPath: %v", err)
+	}
+	if strings.Contains(path, "/instances/") || !strings.Contains(path, "/operations/") {
+		t.Fatalf("operation path must survive instance purge: %s", path)
+	}
+}

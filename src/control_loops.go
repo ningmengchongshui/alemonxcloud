@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -23,13 +25,7 @@ func startControlLoops() {
 			syncNodeHeartbeat(context.Background())
 			syncInstanceStates(context.Background())
 			cleanupExpiredTaskDiagnostics(context.Background())
-		}
-	}()
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			reconcileBandwidthTasks(context.Background())
+			reconcileUncertainSelfHostedOperations(context.Background())
 		}
 	}()
 	syncNodeHeartbeat(context.Background())
@@ -37,8 +33,102 @@ func startControlLoops() {
 	syncInstanceStates(context.Background())
 	quarantineDangerousFailedTasks(context.Background())
 	recoverExpiredTaskLeases(context.Background())
-	reconcileBandwidthTasks(context.Background())
 	cleanupExpiredTaskDiagnostics(context.Background())
+	reconcileUncertainSelfHostedOperations(context.Background())
+}
+
+// reconcileUncertainSelfHostedOperations closes the gap between a cancelled
+// Docker CLI and Docker's eventual state.  Only simple lifecycle actions are
+// finalized automatically; billing or destructive actions deliberately stay
+// in needs_review even if their container state is known.
+func reconcileUncertainSelfHostedOperations(ctx context.Context) {
+	if instanceDB == nil {
+		return
+	}
+	rows, err := instanceDB.QueryContext(ctx, `SELECT o.id,o.task_id,o.instance_id,o.node_id,o.action,o.desired_state,i.container_name,i.status FROM xcloud_selfhosted_agent_operations o JOIN xcloud_tasks t ON t.id=o.task_id JOIN xcloud_instances i ON i.id=o.instance_id WHERE t.status='needs_review' AND o.status IN ('running','unknown') AND i.placement_type='selfhosted' ORDER BY o.updated_at LIMIT 100`)
+	if err != nil {
+		log.Printf("load uncertain Agent operations: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var operationID, taskID, instanceID, nodeID, action, desired, containerName, lifecycle string
+		if err := rows.Scan(&operationID, &taskID, &instanceID, &nodeID, &action, &desired, &containerName, &lifecycle); err != nil {
+			continue
+		}
+		n, nodeErr := nodeByID(ctx, nodeID)
+		if nodeErr != nil || n.NodeKind != selfHostedNodeKind || !n.Enabled {
+			continue
+		}
+		var live struct {
+			Status        string `json:"status"`
+			ObservedState string `json:"observedState"`
+			SafeError     string `json:"safeError"`
+		}
+		path := "/container/" + url.PathEscape(containerName) + "/operation-status?operationId=" + url.QueryEscape(operationID)
+		if nodeRequest(ctx, n, http.MethodGet, path, nil, &live) != nil {
+			continue
+		}
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_selfhosted_agent_operations SET observed_state=?,safe_error=?,updated_at=NOW() WHERE id=?`, nullableString(live.ObservedState), nullableString(live.SafeError), operationID)
+		if !operationMatchesDesired(desired, live.ObservedState) {
+			continue
+		}
+		if !finalizeSafeReconciledTask(ctx, taskID, instanceID, action, lifecycle, operationID, live.ObservedState) {
+			continue
+		}
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_selfhosted_agent_operations SET status='succeeded',finished_at=NOW(),updated_at=NOW() WHERE id=?`, operationID)
+		appendTaskEvent(ctx, taskID, "agent_operation_reconciled", "Agent 断线后已确认最终容器状态："+live.ObservedState)
+		_ = writeAudit(ctx, "system", "task.agent_operation_reconciled", "task", taskID, map[string]any{"instanceId": instanceID, "action": action, "operationId": operationID})
+	}
+}
+
+func operationMatchesDesired(desired, observed string) bool {
+	switch desired {
+	case "running":
+		return observed == "running"
+	case "stopped":
+		return observed == "exited" || observed == "created"
+	case "absent":
+		return observed == "absent"
+	default:
+		return false
+	}
+}
+
+func finalizeSafeReconciledTask(ctx context.Context, taskID, instanceID, action, lifecycle, operationID, observed string) bool {
+	// Resize changes wallet/order facts; update/reinstall change immutable image
+	// facts; destroy/purge have retention requirements. Those remain operator
+	// decisions rather than guessing from a container inspect result.
+	if action != "create" && action != "retry-deploy" && action != "start" && action != "stop" && action != "restart" {
+		return false
+	}
+	next, runtime := lifecycle, "running"
+	if action == "create" || action == "retry-deploy" {
+		next = "running"
+	}
+	if action == "stop" {
+		runtime = "stopped"
+		if lifecycle != "destroy_scheduled" {
+			next = "stopped"
+		}
+	}
+	if action == "start" || action == "restart" {
+		if lifecycle != "destroy_scheduled" {
+			next = "running"
+		}
+	}
+	if changed, err := transitionInstance(ctx, instanceDB, instanceID, []string{lifecycle}, next, &runtime, ""); err != nil || !changed {
+		return false
+	}
+	if next == "running" && (action == "create" || action == "retry-deploy" || action == "start") {
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_orders SET status=?,updated_at=NOW() WHERE instance_id=? AND status=?`, orderActive, instanceID, orderDeploy)
+	}
+	result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status='succeeded',last_error=NULL,finished_at=NOW(),agent_operation_state='succeeded',updated_at=NOW() WHERE id=? AND status='needs_review' AND agent_operation_id=?`, taskID, operationID)
+	if err != nil {
+		return false
+	}
+	changed, _ := result.RowsAffected()
+	return changed == 1
 }
 
 func syncBenefitProgramStates(ctx context.Context) {
@@ -56,65 +146,6 @@ func syncBenefitProgramStates(ctx context.Context) {
 	}
 }
 
-// reconcileBandwidthTasks is intentionally limited to running instances on a
-// healthy node. A stopped container has no reliable veth to shape; its start
-// action reapplies bandwidth instead of generating a false failure task.
-func reconcileBandwidthTasks(ctx context.Context) {
-	if instanceDB == nil {
-		return
-	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,COALESCE(n.agent_capabilities,JSON_ARRAY())
-		FROM xcloud_instances i
-		JOIN xcloud_nodes n ON n.id=i.node_id
-		WHERE i.status IN ('running','destroy_scheduled')
-		  AND COALESCE(i.runtime_status,i.status)='running'
-		  AND COALESCE(i.bandwidth_status,'pending') IN ('pending','failed')
-		  AND n.enabled=TRUE AND n.last_heartbeat_at>=?`, time.Now().Add(-nodeHeartbeatTTL()))
-	if err != nil {
-		log.Printf("load bandwidth reconciliation: %v", err)
-		return
-	}
-	defer rows.Close()
-	instanceIDs := make([]string, 0)
-	for rows.Next() {
-		var instanceID string
-		var rawCapabilities []byte
-		if err := rows.Scan(&instanceID, &rawCapabilities); err != nil {
-			continue
-		}
-		var capabilities []string
-		_ = json.Unmarshal(rawCapabilities, &capabilities)
-		statusSupported := false
-		queueSupported := false
-		for _, capability := range capabilities {
-			if capability == "network.bandwidth.status.v1" {
-				statusSupported = true
-			}
-			if capability == "network.bandwidth.queue.v1" {
-				queueSupported = true
-			}
-		}
-		if statusSupported && queueSupported {
-			instanceIDs = append(instanceIDs, instanceID)
-		}
-	}
-	if err := rows.Close(); err != nil {
-		log.Printf("close bandwidth reconciliation rows: %v", err)
-		return
-	}
-	for _, instanceID := range instanceIDs {
-		task, scheduled, err := scheduleBandwidthTask(ctx, instanceID, "system")
-		if err != nil {
-			log.Printf("schedule bandwidth reconciliation for %s: %v", instanceID, err)
-			continue
-		}
-		if scheduled {
-			if err := enqueuePersistedTask(ctx, task); err != nil {
-				log.Printf("enqueue bandwidth reconciliation for %s: %v", instanceID, err)
-			}
-		}
-	}
-}
 func enabledNodes(ctx context.Context) ([]node, error) {
 	rows, err := instanceDB.QueryContext(ctx, `SELECT id,name,agent_url,cpu_total,memory_total_mb,enabled,last_heartbeat_at,COALESCE(agent_token_ciphertext,''),COALESCE(agent_version,''),COALESCE(agent_api_version,0),COALESCE(agent_capabilities,JSON_ARRAY()) FROM xcloud_nodes WHERE enabled=TRUE AND node_kind='platform' AND last_heartbeat_at>=?`, time.Now().Add(-nodeHeartbeatTTL()))
 	if err != nil {
@@ -176,7 +207,6 @@ func syncNodeHeartbeat(ctx context.Context) {
 			DiskAvailableBytes    int64    `json:"diskAvailableBytes"`
 			DiskTotalBytes        int64    `json:"diskTotalBytes"`
 			ManagedContainerCount int      `json:"managedContainerCount"`
-			BandwidthToolsReady   bool     `json:"bandwidthToolsReady"`
 		}
 		probe, cancel := context.WithTimeout(ctx, 8*time.Second)
 		err := nodeRequest(probe, n, "GET", "/container/status", nil, &s)
@@ -185,9 +215,6 @@ func syncNodeHeartbeat(ctx context.Context) {
 			log.Printf("node %s heartbeat: %v", n.ID, err)
 			_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_nodes SET last_agent_error=?,updated_at=NOW() WHERE id=?`, truncateError(err.Error()), n.ID)
 			continue
-		}
-		if !s.BandwidthToolsReady {
-			s.Capabilities = removeAgentCapability(s.Capabilities, "network.bandwidth.v1")
 		}
 		capabilities, _ := json.Marshal(s.Capabilities)
 		query := `UPDATE xcloud_nodes SET last_heartbeat_at=NOW(),last_agent_error=NULL,docker_version=?,agent_version=?,agent_api_version=?,agent_capabilities=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,updated_at=NOW() WHERE id=?`

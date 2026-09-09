@@ -765,51 +765,6 @@ func adminTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
-func reconcileAllBandwidthHandler(c *gin.Context) {
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT i.id,COALESCE(n.agent_capabilities,JSON_ARRAY()) FROM xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.status IN ('running','destroy_scheduled') AND COALESCE(i.runtime_status,i.status)='running'`)
-	if err != nil {
-		internalError(c, err)
-		return
-	}
-	instanceIDs := make([]string, 0)
-	for rows.Next() {
-		var id string
-		var rawCapabilities []byte
-		if rows.Scan(&id, &rawCapabilities) != nil {
-			continue
-		}
-		var capabilities []string
-		_ = json.Unmarshal(rawCapabilities, &capabilities)
-		statusSupported := false
-		queueSupported := false
-		for _, capability := range capabilities {
-			if capability == "network.bandwidth.status.v1" {
-				statusSupported = true
-			}
-			if capability == "network.bandwidth.queue.v1" {
-				queueSupported = true
-			}
-		}
-		if statusSupported && queueSupported {
-			instanceIDs = append(instanceIDs, id)
-		}
-	}
-	if err := rows.Close(); err != nil {
-		internalError(c, err)
-		return
-	}
-	count := 0
-	for _, id := range instanceIDs {
-		task, scheduled, e := scheduleBandwidthTask(c.Request.Context(), id, "system")
-		if e == nil && scheduled {
-			_ = enqueuePersistedTask(c.Request.Context(), task)
-			count++
-		}
-	}
-	user := c.MustGet("user").(oidcUser)
-	_ = writeAudit(c.Request.Context(), user.ID, "bandwidth.reconcile", "instance", "all", map[string]any{"tasks": count})
-	c.JSON(http.StatusAccepted, gin.H{"tasks": count})
-}
 func adminAuditLogs(c *gin.Context) {
 	items, err := listAuditLogs(c.Request.Context(), 200)
 	if err != nil {

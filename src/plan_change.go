@@ -658,11 +658,10 @@ func completePlanChange(ctx context.Context, task controlTask) error {
 		}
 	}
 	var currentStatus string
-	var bandwidthMbps int
-	if err = tx.QueryRowContext(ctx, `SELECT status,bandwidth_mbps FROM xcloud_instances WHERE id=? FOR UPDATE`, task.InstanceID).Scan(&currentStatus, &bandwidthMbps); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT status FROM xcloud_instances WHERE id=? FOR UPDATE`, task.InstanceID).Scan(&currentStatus); err != nil {
 		return err
 	}
-	spec := fmt.Sprintf("%g 核 / %d GB / 最高 %d Mbps", p.CPU, p.MemoryMB/1024, bandwidthMbps)
+	spec := fmt.Sprintf("%g 核 / %d GB", p.CPU, p.MemoryMB/1024)
 	result, err := tx.ExecContext(ctx, `UPDATE xcloud_instances SET cpu=?,memory_mb=?,spec=? WHERE id=? AND status IN ('running','stopped')`, p.CPU, p.MemoryMB, spec, task.InstanceID)
 	if err != nil {
 		return err

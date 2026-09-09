@@ -1,5 +1,6 @@
 import { NodeConfigButton, NodeEditor } from '@/components/NodeEditor'
-import { useGetAdminNodesQuery } from '@/services/cloudApi'
+import { useState } from 'react'
+import { useGetAdminNodesQuery, useLazyGetAdminRevokedSelfHostedReadinessEventsQuery } from '@/services/cloudApi'
 import {
   Button,
   EmptyState,
@@ -62,6 +63,8 @@ function Capacity({
 
 export function AdminNodesPage() {
   const nodes = useGetAdminNodesQuery()
+  const [loadRevokedEvents, revokedEvents] = useLazyGetAdminRevokedSelfHostedReadinessEventsQuery()
+  const [diagnosticNodeID, setDiagnosticNodeID] = useState<string | null>(null)
   const values = nodes.data ?? []
   const online = values.filter(node => node.enabled && node.lastHeartbeatAt)
   const cpu = values.reduce((total, node) => total + node.cpuTotal, 0)
@@ -217,7 +220,14 @@ export function AdminNodesPage() {
                     </StatusBadge>
                   </div>
                   <div className="flex justify-end lg:justify-self-end">
-                    <NodeConfigButton node={node} />
+                    {!node.enabled && node.nodeKind === 'selfhosted' ? (
+                      <Button
+                        tone="secondary"
+                        onClick={() => { setDiagnosticNodeID(node.id); void loadRevokedEvents(node.id) }}
+                      >
+                        查看撤销诊断
+                      </Button>
+                    ) : <NodeConfigButton node={node} />}
                   </div>
                   {hasRisk && (
                     <div className="lg:col-span-4 flex flex-wrap gap-x-3 gap-y-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
@@ -237,6 +247,16 @@ export function AdminNodesPage() {
                         >
                           Agent：{node.lastAgentError}
                         </span>
+                      )}
+                    </div>
+                  )}
+                  {!node.enabled && node.nodeKind === 'selfhosted' && diagnosticNodeID === node.id && revokedEvents.data && (
+                    <div className="lg:col-span-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                      <b>撤销节点诊断（30 天）</b>
+                      {revokedEvents.data.length === 0 ? <span className="ml-2">没有保留的安全诊断。</span> : (
+                        <ul className="mb-0 mt-1 space-y-1 pl-4">
+                          {revokedEvents.data.slice(0, 5).map(event => <li key={`${event.createdAt}-${event.code}`}>{event.message}</li>)}
+                        </ul>
                       )}
                     </div>
                   )}

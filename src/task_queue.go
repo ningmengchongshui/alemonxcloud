@@ -353,7 +353,7 @@ func dangerousRecoveredTask(action string) bool {
 }
 func safeRecoveryState(ctx context.Context, task controlTask) bool {
 	if task.Action != "create" && task.Action != "start" {
-		return task.Action == "bandwidth"
+		return false
 	}
 	var status string
 	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_instances WHERE id=?`, task.InstanceID).Scan(&status); err != nil {

@@ -58,8 +58,7 @@ function PlanChoice({
       <span>
         <b>{plan.name}</b>
         <small>
-          {plan.cpu} 核 CPU · {plan.memoryMB / 1024} GB 内存 · 共享网络参考{' '}
-          {plan.bandwidthMbps} Mbps
+          {plan.cpu} 核 CPU · {plan.memoryMB / 1024} GB 内存
         </small>
       </span>
       <em>
@@ -358,7 +357,7 @@ export function CreateServicePage({
               <dt>资源</dt>
               <dd>
                 {selectedPlan
-                  ? `${selectedPlan.cpu} 核 CPU · ${selectedPlan.memoryMB / 1024} GB 内存 · 共享网络参考 ${selectedPlan.bandwidthMbps} Mbps`
+                  ? `${selectedPlan.cpu} 核 CPU · ${selectedPlan.memoryMB / 1024} GB 内存`
                   : '—'}
               </dd>
             </div>

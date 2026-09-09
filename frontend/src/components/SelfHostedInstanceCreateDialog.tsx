@@ -134,7 +134,7 @@ export function SelfHostedInstanceCreateDialog({
           </select>
         </label>
         <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2.5 text-xs leading-5 text-blue-800 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-100">
-          仅可选择平台审核并已发布的镜像版本。所有实例共同使用节点最高 10 Mbps 的共享出口带宽。
+          仅可选择平台审核并已发布的镜像版本。实例资源由节点 CPU、内存和数据盘共同决定。
         </div>
         <label className={dialogLabelClass}>
           CPU 核数

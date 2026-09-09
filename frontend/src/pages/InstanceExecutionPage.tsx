@@ -10,6 +10,7 @@ import {
 import {
   useCancelAllInstanceTasksMutation,
   useCancelInstanceTaskMutation,
+  useGetInstanceAgentOperationQuery,
   useGetInstanceTaskDiagnosticQuery,
   useGetInstanceTasksQuery
 } from '@/services/cloudApi'
@@ -55,6 +56,7 @@ export function InstanceExecutionPage({
 }) {
   const [onlyProblems, setOnlyProblems] = useState(false)
   const [diagnosticTaskID, setDiagnosticTaskID] = useState('')
+  const [operationTaskID, setOperationTaskID] = useState('')
   const tasks = useGetInstanceTasksQuery(instanceID, {
     pollingInterval: 5000,
     refetchOnFocus: true
@@ -64,6 +66,10 @@ export function InstanceExecutionPage({
   const diagnostic = useGetInstanceTaskDiagnosticQuery(
     { instanceId: instanceID, taskId: diagnosticTaskID },
     { skip: !diagnosticTaskID }
+  )
+  const operation = useGetInstanceAgentOperationQuery(
+    { instanceId: instanceID, taskId: operationTaskID },
+    { skip: !operationTaskID, pollingInterval: operationTaskID ? 3000 : 0 }
   )
   const records = useMemo(() => tasks.data ?? [], [tasks.data])
   const visible = records.filter(
@@ -200,6 +206,11 @@ export function InstanceExecutionPage({
                       节点诊断
                     </Button>
                   )}
+                  {task.agentOperationId && (
+                    <Button tone="secondary" onClick={() => setOperationTaskID(task.id)}>
+                      操作状态
+                    </Button>
+                  )}
                 </div>
               </div>
               {task.lastError && (
@@ -223,6 +234,17 @@ export function InstanceExecutionPage({
                   ) : (
                     <p className="mb-0 mt-2 text-rose-700 dark:text-rose-300">节点诊断已过期或暂不可读取。</p>
                   )}
+                </section>
+              )}
+              {operationTaskID === task.id && (
+                <section className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-900">
+                  <div className="flex items-center justify-between gap-3">
+                    <b>Agent 操作状态</b>
+                    <button className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-white" onClick={() => setOperationTaskID('')}>关闭</button>
+                  </div>
+                  {operation.isFetching ? <p className="mb-0 mt-2 text-slate-500">正在回查容器最终状态…</p> : operation.data ? (
+                    <p className="mb-0 mt-2 text-slate-600 dark:text-slate-200">目标：{operation.data.desiredState}；Agent：{operation.data.status}；容器：{operation.data.observedState || '未确认'}{operation.data.safeError ? `；${operation.data.safeError}` : ''}</p>
+                  ) : <p className="mb-0 mt-2 text-rose-700 dark:text-rose-300">操作记录暂不可读取。</p>}
                 </section>
               )}
               <ol className="mb-0 mt-4 space-y-3 border-l-2 border-slate-200 pl-4 dark:border-slate-600">

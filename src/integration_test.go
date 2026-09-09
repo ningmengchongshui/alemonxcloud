@@ -101,7 +101,7 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 	if err != nil {
 		t.Fatalf("revoke self-hosted device: %v", err)
 	}
-	if result.DeviceID != deviceID || result.NodeCount != 1 || result.RevokedTokenCount != 1 || len(result.CancelledTaskIDs) != 1 || result.CancelledTaskIDs[0] != taskID {
+	if result.DeviceID != deviceID || result.NodeCount != 1 || result.RevokedTokenCount != 1 || len(result.CancelledTaskIDs) != 1 || result.CancelledTaskIDs[0] != taskID || len(result.IsolatedTaskIDs) != 1 || result.IsolatedTaskIDs[0] != runningTaskID {
 		t.Fatalf("unexpected revoke result: %#v", result)
 	}
 	var deviceStatus, taskStatus, runningTaskStatus, instanceStatus, runtimeStatus string
@@ -125,7 +125,7 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_tasks WHERE id=?`, runningTaskID).Scan(&runningTaskStatus); err != nil {
 		t.Fatal(err)
 	}
-	if deviceStatus != "revoked" || !tokenRevoked.Valid || enabled || ready || instanceStatus != "running" || runtimeStatus != "unknown" || taskStatus != taskCanceled || runningTaskStatus != taskRunning {
+	if deviceStatus != "revoked" || !tokenRevoked.Valid || enabled || ready || instanceStatus != "running" || runtimeStatus != "unknown" || taskStatus != taskCanceled || runningTaskStatus != taskReview {
 		t.Fatalf("revoke cleanup mismatch: device=%s tokenRevoked=%v enabled=%v ready=%v instance=%s/%s task=%s runningTask=%s", deviceStatus, tokenRevoked.Valid, enabled, ready, instanceStatus, runtimeStatus, taskStatus, runningTaskStatus)
 	}
 	if err := taskMayCallAgent(ctx, controlTask{ID: runningTaskID, InstanceID: instanceID, Action: "restart", WorkerID: workerID, ExecutionToken: executionToken}); err == nil {
@@ -147,6 +147,55 @@ func TestIntegrationRevokeSelfHostedDeviceReleasesNodeAndCancelsPendingTasks(t *
 	}
 	if alreadyUnbound.DeviceID != "" || alreadyUnbound.NodeCount != 1 || len(alreadyUnbound.CancelledTaskIDs) != 1 || alreadyUnbound.CancelledTaskIDs[0] != taskID {
 		t.Fatalf("already-unbound cleanup mismatch: %#v", alreadyUnbound)
+	}
+}
+
+func TestIntegrationTargetedSelfHostedRevokePreservesOtherNode(t *testing.T) {
+	setupIntegrationDB(t)
+	ctx := context.Background()
+	suffix := newID("multi_revoke")
+	ownerID := "user_" + suffix
+	deviceA, deviceB := "ctl_a_"+suffix, "ctl_b_"+suffix
+	nodeA, nodeB := "snode_a_"+suffix, "snode_b_"+suffix
+	t.Cleanup(func() {
+		for _, id := range []string{deviceA, deviceB} {
+			_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_routes WHERE device_id=?`, id)
+			_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_control_devices WHERE id=?`, id)
+		}
+		for _, id := range []string{nodeA, nodeB} {
+			_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_selfhosted_readiness_events WHERE node_id=?`, id)
+			_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_nodes WHERE id=?`, id)
+		}
+		_, _ = instanceDB.ExecContext(ctx, `DELETE FROM xcloud_audit_logs WHERE actor_id=? AND action='control.device.revoke'`, ownerID)
+	})
+	for _, item := range []struct{ device, node string }{{deviceA, nodeA}, {deviceB, nodeB}} {
+		if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_control_devices (id,owner_id,name,public_key,credential_hash,status,client_version,created_at,updated_at) VALUES (?,?,?,?,?,'enabled','test',NOW(),NOW())`, item.device, ownerID, item.node, "test-key-"+item.node, controlHash(item.device)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,node_kind,owner_id,control_device_id,selfhosted_ready,created_at,updated_at) VALUES (?,?,?,1,1024,TRUE,'selfhosted',?,?,TRUE,NOW(),NOW())`, item.node, item.node, "", ownerID, item.device); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := revokeSelfHostedDevice(ctx, ownerID, nodeA)
+	if err != nil || result.NodeID != nodeA || result.DeviceID != deviceA || result.NodeCount != 1 {
+		t.Fatalf("targeted revoke = %#v, %v", result, err)
+	}
+	var enabledA, enabledB bool
+	var statusA, statusB string
+	if err := instanceDB.QueryRowContext(ctx, `SELECT enabled FROM xcloud_nodes WHERE id=?`, nodeA).Scan(&enabledA); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT enabled FROM xcloud_nodes WHERE id=?`, nodeB).Scan(&enabledB); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_control_devices WHERE id=?`, deviceA).Scan(&statusA); err != nil {
+		t.Fatal(err)
+	}
+	if err := instanceDB.QueryRowContext(ctx, `SELECT status FROM xcloud_control_devices WHERE id=?`, deviceB).Scan(&statusB); err != nil {
+		t.Fatal(err)
+	}
+	if enabledA || !enabledB || statusA != "revoked" || statusB != "enabled" {
+		t.Fatalf("targeted revoke leaked across nodes: A=%v/%s B=%v/%s", enabledA, statusA, enabledB, statusB)
 	}
 }
 
@@ -284,7 +333,9 @@ func TestIntegrationLifecycleTransitionAndLeaseRecovery(t *testing.T) {
 	if err != nil || changed {
 		t.Fatalf("stale transition must not overwrite newer state: changed=%v err=%v", changed, err)
 	}
-	if _, err = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,claimed_at,claim_expires_at,worker_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, taskID, instanceID, "start", "lease:"+taskID, taskRunning, 1, now, now, now, now.Add(-10*time.Minute), now.Add(-time.Minute), "crashed-worker"); err != nil {
+	// Use the database clock: this test deliberately verifies that lease
+	// recovery is immune to application/MySQL timezone differences.
+	if _, err = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,claimed_at,claim_expires_at,worker_id) VALUES (?,?,?,?,?,1,NOW(),NOW(),NOW(),DATE_SUB(NOW(),INTERVAL 10 MINUTE),DATE_SUB(NOW(),INTERVAL 1 MINUTE),?)`, taskID, instanceID, "start", "lease:"+taskID, taskRunning, "crashed-worker"); err != nil {
 		t.Fatal(err)
 	}
 	recoverExpiredTaskLeases(ctx)

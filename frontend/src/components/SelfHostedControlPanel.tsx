@@ -13,7 +13,9 @@ import {
   useGetSelfHostedNodeInstancesQuery,
   useGetSelfHostedNodeQuery,
   useGetSelfHostedNodesQuery,
-  useRevokeSelfHostedControlMutation
+  useGetSelfHostedReadinessEventsQuery,
+  useRevokeSelfHostedNodeMutation,
+  useUpdateSelfHostedNodeMutation
 } from '@/services/cloudApi'
 
 type Props = {
@@ -137,13 +139,20 @@ export function SelfHostedControlPanel({
     })
   const [createToken, { isLoading: creatingToken }] =
     useCreateControlEnrollmentTokenMutation()
-  const [revoke, { isLoading: revoking }] = useRevokeSelfHostedControlMutation()
+  const [revoke, { isLoading: revoking }] = useRevokeSelfHostedNodeMutation()
+  const [rename, { isLoading: renaming }] = useUpdateSelfHostedNodeMutation()
   const [enrollmentToken, setEnrollmentToken] = useState('')
+  const [nodeName, setNodeName] = useState('')
+  const [editingName, setEditingName] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  const { data: readinessEvents = [] } = useGetSelfHostedReadinessEventsQuery(
+    nodeID ?? '',
+    { skip: !detail || !nodeID }
+  )
 
   async function generateToken() {
     try {
-      const result = await createToken().unwrap()
+      const result = await createToken({ name: nodeName.trim() }).unwrap()
       setEnrollmentToken(result.token)
     } catch {
       /* cloudApi presents request errors through the global Toast. */
@@ -156,8 +165,16 @@ export function SelfHostedControlPanel({
         {nodesLoading ? (
           <LoadingState>正在加载自建节点…</LoadingState>
         ) : nodes.length > 0 ? (
-          <div className="grid gap-3">
-            {nodes.map(item => (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-200">
+                新节点名称
+                <input value={nodeName} onChange={event => setNodeName(event.target.value)} placeholder="例如：香港云主机" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+              </label>
+              <Button className="mt-3" loading={creatingToken} disabled={!nodeName.trim()} onClick={() => void generateToken()}>生成新节点接入 Token</Button>
+              {enrollmentToken && <input readOnly value={enrollmentToken} className="mt-3 w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-amber-800 dark:bg-amber-950 dark:text-white" />}
+            </div>
+            <div className="grid gap-3">{nodes.map(item => (
               <button
                 key={item.id}
                 type="button"
@@ -186,7 +203,7 @@ export function SelfHostedControlPanel({
                   </span>
                 </span>
               </button>
-            ))}
+            ))}</div>
           </div>
         ) : (
           <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
@@ -195,8 +212,18 @@ export function SelfHostedControlPanel({
               description="生成 Token 后按部署说明启动 Agent。"
             />
             <div className="mx-auto mt-4 max-w-xl space-y-3">
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-200">
+                节点名称
+                <input
+                  value={nodeName}
+                  onChange={event => setNodeName(event.target.value)}
+                  placeholder="例如：上海家用服务器"
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                />
+              </label>
               <Button
                 loading={creatingToken}
+                disabled={!nodeName.trim()}
                 onClick={() => void generateToken()}
               >
                 生成接入 Token
@@ -235,7 +262,19 @@ export function SelfHostedControlPanel({
   return (
     <section className="page me-page space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3"></div>
+        <div className="flex min-w-0 items-center gap-2">
+          <input
+            value={editingName || node.name}
+            onChange={event => setEditingName(event.target.value)}
+            className="min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm font-bold text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+          />
+          <Button
+            tone="secondary"
+            loading={renaming}
+            disabled={!editingName.trim() || editingName.trim() === node.name}
+            onClick={() => void rename({ id: node.id, name: editingName.trim() })}
+          >保存名称</Button>
+        </div>
         <NodeStatus online={node.status === 'online'} ready={node.ready} />
       </header>
       <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
@@ -268,6 +307,17 @@ export function SelfHostedControlPanel({
               : '当前连接的 Agent 未上报部署就绪状态，通常是旧版 xcloud-control。请升级 Agent 后重新连接。')}
         </Alert>
       )}
+      <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
+        <h2 className="text-sm font-bold text-slate-900 dark:text-white">运行环境检查记录</h2>
+        <div className="mt-3 space-y-2 text-xs">
+          {readinessEvents.length === 0 ? <p className="text-slate-500">尚未收到 Agent 检查记录。</p> : readinessEvents.map(event => (
+            <div key={`${event.createdAt}-${event.code}`} className="flex flex-wrap justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-900">
+              <span className={event.ready ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}>{event.ready ? '环境就绪' : event.message || '环境检查失败'}</span>
+              <time className="text-slate-500">{new Date(event.createdAt).toLocaleString()}</time>
+            </div>
+          ))}
+        </div>
+      </section>
       <InstancesPage
         instances={nodeInstances}
         orders={[]}
@@ -294,7 +344,7 @@ export function SelfHostedControlPanel({
             tone="danger"
             loading={revoking}
             onClick={() => {
-              if (window.confirm('确认撤销该自建节点吗？')) void revoke()
+              if (window.confirm('确认撤销该自建节点吗？')) void revoke(node.id)
             }}
           >
             撤销节点

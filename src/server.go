@@ -45,7 +45,6 @@ type instance struct {
 	Spec             string     `json:"spec"`
 	Status           string     `json:"status"`
 	RuntimeStatus    string     `json:"runtimeStatus,omitempty"`
-	BandwidthMbps    int        `json:"bandwidthMbps,omitempty"`
 	DestroyAt        *time.Time `json:"destroyAt,omitempty"`
 	DestroyedAt      *time.Time `json:"destroyedAt,omitempty"`
 	PurgeAt          *time.Time `json:"purgeAt,omitempty"`
@@ -156,15 +155,21 @@ func Run() {
 	router.GET("/api/control/connect", func(c *gin.Context) {
 		c.JSON(http.StatusGone, gin.H{"message": "xcloud-control v1 已下线，请重新接入新版自建 Agent"})
 	})
-	router.GET("/api/control/selfhosted", requireSession, controlSelfHosted)
+	retiredSelfHosted := func(c *gin.Context) {
+		c.JSON(http.StatusGone, gin.H{"message": "旧版单节点自建接口已下线，请改用 /api/selfhosted/nodes/:nodeID"})
+	}
+	router.GET("/api/control/selfhosted", requireSession, retiredSelfHosted)
 	router.GET("/api/selfhosted/nodes", requireSession, selfHostedNodes)
 	router.GET("/api/selfhosted/nodes/:nodeID", requireSession, selfHostedNodeDetail)
+	router.PUT("/api/selfhosted/nodes/:nodeID", requireSession, updateSelfHostedNode)
 	router.PUT("/api/selfhosted/nodes/:nodeID/quota", requireSession, updateSelfHostedNodeQuota)
+	router.GET("/api/selfhosted/nodes/:nodeID/readiness-events", requireSession, selfHostedNodeReadinessEvents)
+	router.POST("/api/selfhosted/nodes/:nodeID/revoke", requireSession, controlSelfHostedNodeRevoke)
 	router.GET("/api/selfhosted/nodes/:nodeID/instances", requireSession, selfHostedNodeInstances)
 	router.POST("/api/selfhosted/nodes/:nodeID/instances", requireSession, createSelfHostedInstance)
-	router.PUT("/api/control/selfhosted/route", requireSession, controlRouteUpdate)
-	router.POST("/api/control/selfhosted/route/:action", requireSession, controlRouteAction)
-	router.POST("/api/control/selfhosted/revoke", requireSession, controlDeviceRevoke)
+	router.PUT("/api/control/selfhosted/route", requireSession, retiredSelfHosted)
+	router.POST("/api/control/selfhosted/route/:action", requireSession, retiredSelfHosted)
+	router.POST("/api/control/selfhosted/revoke", requireSession, retiredSelfHosted)
 	router.GET("/api/instances", requireSession, listInstances)
 	router.POST("/api/instances", requireSession, createInstance)
 	router.POST("/api/instances/:id/:action", requireSession, queueInstanceAction)
@@ -190,6 +195,7 @@ func Run() {
 	router.GET("/api/tasks/:id", requireSession, taskStatusHandler)
 	router.GET("/api/instances/:id/tasks", requireSession, instanceTasksHandler)
 	router.GET("/api/instances/:id/tasks/:taskID/diagnostic", requireSession, instanceTaskDiagnosticHandler)
+	router.GET("/api/instances/:id/tasks/:taskID/agent-operation", requireSession, instanceAgentOperationHandler)
 	router.GET("/api/instances/:id/terminal", requireSession, instanceTerminalSocket)
 	router.POST("/api/instances/:id/tasks/:taskID/cancel", requireSession, cancelInstanceTaskHandler)
 	router.POST("/api/instances/:id/tasks/cancel-all", requireSession, cancelAllInstanceTasksHandler)
@@ -238,9 +244,9 @@ func Run() {
 	router.POST("/api/admin/orders/:id/confirm", requireAdmin, manualPaymentDisabled)
 	router.POST("/api/admin/orders/:id/reject", requireAdmin, manualPaymentDisabled)
 	router.GET("/api/admin/nodes", requireAdmin, adminNodes)
+	router.GET("/api/admin/selfhosted/nodes/:nodeID/readiness-events", requireAdmin, adminRevokedSelfHostedReadinessEvents)
 	router.POST("/api/admin/nodes", requireAdmin, adminSaveNode)
 	router.PUT("/api/admin/nodes/:id", requireAdmin, adminSaveNode)
-	router.POST("/api/admin/instances/bandwidth/reconcile", requireAdmin, reconcileAllBandwidthHandler)
 	router.GET("/api/admin/users", requireAdmin, adminUsers)
 	router.GET("/api/admin/users/:id/wallet/entries", requireAdmin, adminWalletEntries)
 	router.POST("/api/admin/users/:id/wallet/adjust", requireAdmin, adminAdjustWallet)

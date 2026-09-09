@@ -20,6 +20,7 @@ import type {
   WalletEntry,
   Ticket,
   InstanceTaskRecord,
+  AgentOperation,
   TaskDiagnostic,
   TicketDetail,
   TicketPriority,
@@ -31,8 +32,7 @@ import type {
   PlanChangeQuote,
   WorkspaceListing,
   WorkspaceFile,
-  SelfHostedControl
-  , SelfHostedNode
+  SelfHostedNode
 } from '@/types/cloud'
 
 interface SessionResponse {
@@ -89,10 +89,6 @@ export const cloudApi = createApi({
       query: () => '/instances',
       providesTags: ['Instances']
     }),
-    getSelfHostedControl: builder.query<SelfHostedControl, void>({
-      query: () => '/control/selfhosted',
-      providesTags: ['Instances']
-    }),
     getSelfHostedNodes: builder.query<SelfHostedNode[], void>({
       query: () => '/selfhosted/nodes',
       providesTags: ['Instances']
@@ -113,20 +109,20 @@ export const cloudApi = createApi({
       query: ({ id, ...body }) => ({ url: `/selfhosted/nodes/${id}/quota`, method: 'PUT', body }),
       invalidatesTags: ['Instances']
     }),
-    saveSelfHostedRoute: builder.mutation<void, { targetURL: string; enabled: boolean }>({
-      query: body => ({ url: '/control/selfhosted/route', method: 'PUT', body }),
+    revokeSelfHostedNode: builder.mutation<void, string>({
+      query: id => ({ url: `/selfhosted/nodes/${id}/revoke`, method: 'POST' }),
       invalidatesTags: ['Instances', 'Notifications']
     }),
-    selfHostedRouteAction: builder.mutation<void, 'pause' | 'resume'>({
-      query: action => ({ url: `/control/selfhosted/route/${action}`, method: 'POST' }),
-      invalidatesTags: ['Instances', 'Notifications']
+    updateSelfHostedNode: builder.mutation<void, { id: string; name: string }>({
+      query: ({ id, ...body }) => ({ url: `/selfhosted/nodes/${id}`, method: 'PUT', body }),
+      invalidatesTags: ['Instances']
     }),
-    revokeSelfHostedControl: builder.mutation<void, void>({
-      query: () => ({ url: '/control/selfhosted/revoke', method: 'POST' }),
-      invalidatesTags: ['Instances', 'Notifications']
+    getSelfHostedReadinessEvents: builder.query<import('@/types/cloud').SelfHostedReadinessEvent[], string>({
+      query: id => `/selfhosted/nodes/${id}/readiness-events`,
+      providesTags: ['Instances']
     }),
-    createControlEnrollmentToken: builder.mutation<{ id: string; token: string; expiresAt: string }, void>({
-      query: () => ({ url: '/control/enrollment-tokens', method: 'POST' }),
+    createControlEnrollmentToken: builder.mutation<{ id: string; name: string; token: string; expiresAt: string }, { name: string }>({
+      query: body => ({ url: '/control/enrollment-tokens', method: 'POST', body }),
       invalidatesTags: ['Instances']
     }),
     instanceAction: builder.mutation<
@@ -267,6 +263,10 @@ export const cloudApi = createApi({
     }),
     getInstanceTaskDiagnostic: builder.query<TaskDiagnostic, { instanceId: string; taskId: string }>({
       query: ({ instanceId, taskId }) => `/instances/${instanceId}/tasks/${taskId}/diagnostic`
+    }),
+    getInstanceAgentOperation: builder.query<AgentOperation, { instanceId: string; taskId: string }>({
+      query: ({ instanceId, taskId }) => `/instances/${instanceId}/tasks/${taskId}/agent-operation`,
+      providesTags: ['Instances']
     }),
     cancelInstanceTask: builder.mutation<
       void,
@@ -514,6 +514,10 @@ export const cloudApi = createApi({
       query: () => '/admin/nodes',
       providesTags: ['Admin']
     }),
+    getAdminRevokedSelfHostedReadinessEvents: builder.query<import('@/types/cloud').SelfHostedReadinessEvent[], string>({
+      query: id => `/admin/selfhosted/nodes/${id}/readiness-events`,
+      providesTags: ['Admin']
+    }),
     getAdminTasks: builder.query<Task[], void>({
       query: () => '/admin/tasks',
       providesTags: ['Admin']
@@ -665,15 +669,14 @@ export const cloudApi = createApi({
 export const {
   useGetSessionQuery,
   useGetInstancesQuery,
-  useGetSelfHostedControlQuery,
   useGetSelfHostedNodesQuery,
   useGetSelfHostedNodeQuery,
   useGetSelfHostedNodeInstancesQuery,
   useCreateSelfHostedNodeInstanceMutation,
   useUpdateSelfHostedNodeQuotaMutation,
-  useSaveSelfHostedRouteMutation,
-  useSelfHostedRouteActionMutation,
-  useRevokeSelfHostedControlMutation,
+  useRevokeSelfHostedNodeMutation,
+  useUpdateSelfHostedNodeMutation,
+  useGetSelfHostedReadinessEventsQuery,
   useCreateControlEnrollmentTokenMutation,
   useInstanceActionMutation,
   useQuotePlanChangeMutation,
@@ -697,6 +700,7 @@ export const {
   useReadAllNotificationsMutation,
   useGetInstanceTasksQuery,
   useGetInstanceTaskDiagnosticQuery,
+  useGetInstanceAgentOperationQuery,
   useCancelInstanceTaskMutation,
   useCancelAllInstanceTasksMutation,
   useGetTaskQuery,
@@ -726,6 +730,7 @@ export const {
   useAdminUpdateTicketStatusMutation,
   useAdminUpdateTicketPriorityMutation,
   useGetAdminNodesQuery,
+  useLazyGetAdminRevokedSelfHostedReadinessEventsQuery,
   useGetAdminTasksQuery,
   useLazyGetAdminTaskDiagnosticQuery,
   useGetAdminAuditLogsQuery,

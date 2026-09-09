@@ -26,7 +26,6 @@ import (
 )
 
 const controlProtocolVersion = "xcloud-control.v1"
-const controlBandwidthBytesPerSecond = 10 * 1000 * 1000 / 8
 
 type controlFrame struct {
 	Type       string      `json:"type"`
@@ -61,8 +60,6 @@ type controlSession struct {
 	mu       sync.Mutex
 	streams  map[string]chan controlFrame
 	streamMu sync.Mutex
-	limitMu  sync.Mutex
-	nextByte time.Time
 }
 
 var controlSessions = struct {
@@ -82,6 +79,13 @@ func controlHash(value string) string {
 // returned only once; the database keeps only its SHA-256 hash.
 func controlEnrollmentTokenCreate(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
+	var body struct {
+		Name string `json:"name"`
+	}
+	if c.ShouldBindJSON(&body) != nil || len(strings.TrimSpace(body.Name)) == 0 || len(strings.TrimSpace(body.Name)) > 96 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "节点名称应为 1 至 96 个字符"})
+		return
+	}
 	token, err := randomToken()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法生成接入令牌"})
@@ -89,17 +93,17 @@ func controlEnrollmentTokenCreate(c *gin.Context) {
 	}
 	id := newID("cet")
 	value := "xctl_enroll_" + token
-	_, err = instanceDB.ExecContext(c.Request.Context(), `INSERT INTO xcloud_control_enrollment_tokens (id,owner_id,token_hash,expires_at,created_at) VALUES (?,?,?,DATE_ADD(NOW(),INTERVAL 10 MINUTE),NOW())`, id, user.ID, controlHash(value))
+	_, err = instanceDB.ExecContext(c.Request.Context(), `INSERT INTO xcloud_control_enrollment_tokens (id,owner_id,token_hash,node_name,expires_at,created_at) VALUES (?,?,?,?,DATE_ADD(NOW(),INTERVAL 10 MINUTE),NOW())`, id, user.ID, controlHash(value), strings.TrimSpace(body.Name))
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "服务暂不可用，请稍后重试"})
 		return
 	}
 	_ = writeAudit(c.Request.Context(), user.ID, "control.enrollment_token.create", "control_enrollment_token", id, nil)
-	c.JSON(http.StatusCreated, gin.H{"id": id, "token": value, "expiresIn": 600, "expiresAt": time.Now().Add(10 * time.Minute)})
+	c.JSON(http.StatusCreated, gin.H{"id": id, "name": strings.TrimSpace(body.Name), "token": value, "expiresIn": 600, "expiresAt": time.Now().Add(10 * time.Minute)})
 }
 func controlEnrollmentTokens(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id,expires_at,used_at,revoked_at,COALESCE(device_id,'') FROM xcloud_control_enrollment_tokens WHERE owner_id=? ORDER BY created_at DESC LIMIT 20`, user.ID)
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id,COALESCE(node_name,''),expires_at,used_at,revoked_at,COALESCE(device_id,'') FROM xcloud_control_enrollment_tokens WHERE owner_id=? ORDER BY created_at DESC LIMIT 20`, user.ID)
 	if err != nil {
 		c.JSON(503, gin.H{"message": "服务暂不可用，请稍后重试"})
 		return
@@ -107,10 +111,10 @@ func controlEnrollmentTokens(c *gin.Context) {
 	defer rows.Close()
 	items := []gin.H{}
 	for rows.Next() {
-		var id, device string
+		var id, name, device string
 		var expires time.Time
 		var used, revoked sql.NullTime
-		if rows.Scan(&id, &expires, &used, &revoked, &device) != nil {
+		if rows.Scan(&id, &name, &expires, &used, &revoked, &device) != nil {
 			continue
 		}
 		status := "pending"
@@ -121,7 +125,7 @@ func controlEnrollmentTokens(c *gin.Context) {
 		} else if !expires.After(time.Now()) {
 			status = "expired"
 		}
-		items = append(items, gin.H{"id": id, "status": status, "expiresAt": expires, "deviceId": device})
+		items = append(items, gin.H{"id": id, "name": name, "status": status, "expiresAt": expires, "deviceId": device})
 	}
 	c.JSON(200, items)
 }
@@ -192,7 +196,8 @@ func controlAuthorizationApprove(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	// Lock the user directory row so parallel browser confirmations cannot bypass the one-device quota.
+	// Lock the user directory row so parallel browser confirmations remain
+	// serialized while creating independent self-hosted devices.
 	var lockedUser string
 	if err = tx.QueryRowContext(c.Request.Context(), `SELECT id FROM xcloud_users WHERE id=? FOR UPDATE`, user.ID).Scan(&lockedUser); err != nil {
 		c.JSON(409, gin.H{"message": "请先登录 xCloud 后再绑定设备"})
@@ -203,15 +208,6 @@ func controlAuthorizationApprove(c *gin.Context) {
 	err = tx.QueryRowContext(c.Request.Context(), `SELECT name,public_key,client_version,status,expires_at FROM xcloud_control_authorizations WHERE id=? AND poll_token_hash=? FOR UPDATE`, id, controlHash(token)).Scan(&name, &pub, &version, &status, &expires)
 	if err != nil || status != "pending" || !expires.After(time.Now()) {
 		c.JSON(410, gin.H{"message": "设备授权已失效或已完成"})
-		return
-	}
-	var count int
-	if err = tx.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM xcloud_control_devices WHERE owner_id=? AND status='enabled'`, user.ID).Scan(&count); err != nil {
-		c.JSON(503, gin.H{"message": "服务暂不可用，请稍后重试"})
-		return
-	}
-	if count > 0 {
-		c.JSON(409, gin.H{"message": "每个用户仅可启用一台 xcloud-control，请先撤销旧设备"})
 		return
 	}
 	credential, err := randomToken()
@@ -231,10 +227,9 @@ func controlAuthorizationApprove(c *gin.Context) {
 		return
 	}
 	// The browser-approval flow is retained for older xcloud-control clients.
-	// It must create the same self-hosted node record as the enrollment-token
-	// flow; otherwise the device consumes the one-device quota but can never
-	// receive resources or create an instance.
-	if _, err = tx.ExecContext(c.Request.Context(), `INSERT INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,node_kind,owner_id,control_device_id,created_at,updated_at) VALUES (?,?, '',0,0,TRUE,'selfhosted',?,?,NOW(),NOW())`, nodeID, "自建节点", user.ID, deviceID); err != nil {
+	// It creates the same node record as token enrollment, using its submitted
+	// device name as the initial user-visible node name.
+	if _, err = tx.ExecContext(c.Request.Context(), `INSERT INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,node_kind,owner_id,control_device_id,created_at,updated_at) VALUES (?,?, '',0,0,TRUE,'selfhosted',?,?,NOW(),NOW())`, nodeID, name, user.ID, deviceID); err != nil {
 		c.JSON(503, gin.H{"message": "无法创建自建节点"})
 		return
 	}
@@ -295,7 +290,7 @@ func controlSelfHosted(c *gin.Context) {
 	var heartbeat sql.NullTime
 	err := instanceDB.QueryRowContext(c.Request.Context(), `SELECT r.id,r.device_id,r.owner_id,r.route_key,r.target_url,r.status,r.access_address,d.name,d.client_version,d.last_heartbeat_at FROM xcloud_control_routes r JOIN xcloud_control_devices d ON d.id=r.device_id WHERE r.owner_id=? AND d.status='enabled' LIMIT 1`, user.ID).Scan(&r.ID, &r.DeviceID, &r.OwnerID, &r.RouteKey, &r.TargetURL, &r.Status, &r.AccessAddress, &r.DeviceName, &r.ClientVersion, &heartbeat)
 	if err == sql.ErrNoRows {
-		c.JSON(200, gin.H{"device": nil, "route": nil, "online": false, "bandwidthMbps": 10})
+		c.JSON(200, gin.H{"device": nil, "route": nil, "online": false})
 		return
 	}
 	if err != nil {
@@ -306,7 +301,7 @@ func controlSelfHosted(c *gin.Context) {
 		r.LastHeartbeat = &heartbeat.Time
 	}
 	online := controlSessionFor(r.DeviceID) != nil
-	c.JSON(200, gin.H{"device": gin.H{"id": r.DeviceID, "name": r.DeviceName, "version": r.ClientVersion, "lastHeartbeatAt": r.LastHeartbeat}, "route": r, "online": online, "bandwidthMbps": 10})
+	c.JSON(200, gin.H{"device": gin.H{"id": r.DeviceID, "name": r.DeviceName, "version": r.ClientVersion, "lastHeartbeatAt": r.LastHeartbeat}, "route": r, "online": online})
 }
 
 func validControlTarget(raw string) (string, error) {
@@ -386,6 +381,10 @@ func controlRouteAction(c *gin.Context) {
 func controlDeviceRevoke(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
 	result, err := revokeSelfHostedDevice(c.Request.Context(), user.ID)
+	if errors.Is(err, errSelfHostedNodeSelectionRequired) {
+		c.JSON(409, gin.H{"message": "已绑定多个自建节点，请在节点详情中选择要撤销的节点"})
+		return
+	}
 	if err != nil {
 		log.Printf("revoke self-hosted node for user %q: %v", user.ID, err)
 		c.JSON(503, gin.H{"message": "撤销失败，请稍后重试"})
@@ -401,17 +400,48 @@ func controlDeviceRevoke(c *gin.Context) {
 	c.Status(204)
 }
 
+// controlSelfHostedNodeRevoke is the non-ambiguous multi-node variant of the
+// legacy global revoke endpoint.
+func controlSelfHostedNodeRevoke(c *gin.Context) {
+	user := c.MustGet("user").(oidcUser)
+	result, err := revokeSelfHostedDevice(c.Request.Context(), user.ID, c.Param("nodeID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(404, gin.H{"message": "自建节点不存在或已撤销"})
+		return
+	}
+	if err != nil {
+		log.Printf("revoke self-hosted node for user %q: %v", user.ID, err)
+		c.JSON(503, gin.H{"message": "撤销失败，请稍后重试"})
+		return
+	}
+	if result.DeviceID != "" {
+		controlRemoveSession(result.DeviceID)
+	}
+	for _, taskID := range result.CancelledTaskIDs {
+		appendTaskEvent(c.Request.Context(), taskID, "cancelled_by_node_revoke", "自建节点已撤销，任务尚未开始执行，已取消")
+	}
+	for _, taskID := range result.IsolatedTaskIDs {
+		appendTaskEvent(c.Request.Context(), taskID, "isolated_by_node_revoke", "自建节点已撤销，运行中的任务已转入人工复核")
+	}
+	_ = createNotification(c.Request.Context(), user.ID, "control_device", "自建节点已撤销", "该节点的远端容器与数据目录未删除；等待任务已取消，运行任务已隔离。", map[string]any{"deviceId": result.DeviceID, "nodeId": result.NodeID, "cancelledTaskCount": len(result.CancelledTaskIDs), "isolatedTaskCount": len(result.IsolatedTaskIDs)})
+	c.Status(204)
+}
+
 // revokedSelfHostedDeviceResult describes only control-plane cleanup. Revoking
 // a device must never call the customer's Agent: the remote containers and
 // data directory remain entirely under the owner's control.
 type revokedSelfHostedDeviceResult struct {
 	DeviceID          string
+	NodeID            string
 	NodeCount         int64
 	RevokedTokenCount int64
 	CancelledTaskIDs  []string
+	IsolatedTaskIDs   []string
 }
 
-func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHostedDeviceResult, error) {
+var errSelfHostedNodeSelectionRequired = errors.New("self-hosted node selection required")
+
+func revokeSelfHostedDevice(ctx context.Context, ownerID string, requestedNodeID ...string) (revokedSelfHostedDeviceResult, error) {
 	tx, err := instanceDB.BeginTx(ctx, nil)
 	if err != nil {
 		return revokedSelfHostedDeviceResult{}, err
@@ -419,11 +449,35 @@ func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHos
 	defer tx.Rollback()
 
 	var result revokedSelfHostedDeviceResult
-	err = tx.QueryRowContext(ctx, `SELECT id FROM xcloud_control_devices WHERE owner_id=? AND status='enabled' FOR UPDATE`, ownerID).Scan(&result.DeviceID)
+	nodeID := ""
+	if len(requestedNodeID) > 0 {
+		nodeID = strings.TrimSpace(requestedNodeID[0])
+	}
+	if nodeID == "" {
+		var count int
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_nodes WHERE owner_id=? AND node_kind='selfhosted' AND enabled=TRUE`, ownerID).Scan(&count); err != nil {
+			return result, err
+		}
+		if count > 1 {
+			return result, errSelfHostedNodeSelectionRequired
+		}
+		err = tx.QueryRowContext(ctx, `SELECT n.id,n.control_device_id FROM xcloud_nodes n JOIN xcloud_control_devices d ON d.id=n.control_device_id WHERE n.owner_id=? AND n.node_kind='selfhosted' AND n.enabled=TRUE AND d.status='enabled' FOR UPDATE`, ownerID).Scan(&result.NodeID, &result.DeviceID)
+	} else {
+		err = tx.QueryRowContext(ctx, `SELECT n.id,n.control_device_id FROM xcloud_nodes n JOIN xcloud_control_devices d ON d.id=n.control_device_id WHERE n.id=? AND n.owner_id=? AND n.node_kind='selfhosted' AND n.enabled=TRUE AND d.status='enabled' FOR UPDATE`, nodeID, ownerID).Scan(&result.NodeID, &result.DeviceID)
+	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return revokedSelfHostedDeviceResult{}, err
 	}
 	if errors.Is(err, sql.ErrNoRows) {
+		if nodeID != "" {
+			return revokedSelfHostedDeviceResult{}, sql.ErrNoRows
+		}
+		// A pre-upgrade release can leave an enabled node behind after its
+		// device was already revoked.  The legacy endpoint remains idempotent
+		// and cleans up that one stale node.
+		if staleErr := tx.QueryRowContext(ctx, `SELECT id FROM xcloud_nodes WHERE owner_id=? AND node_kind='selfhosted' AND enabled=TRUE FOR UPDATE`, ownerID).Scan(&result.NodeID); staleErr != nil && !errors.Is(staleErr, sql.ErrNoRows) {
+			return revokedSelfHostedDeviceResult{}, staleErr
+		}
 		result.DeviceID = ""
 	} else {
 		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_control_devices SET status='revoked',revoked_at=NOW(),updated_at=NOW() WHERE id=?`, result.DeviceID); err != nil {
@@ -433,32 +487,36 @@ func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHos
 			return revokedSelfHostedDeviceResult{}, err
 		}
 	}
-	// Revoking the device must also revoke leaked, unused enrollment tokens.
-	// Otherwise an old 10-minute token can immediately bind another machine
-	// after the owner believes the self-hosted connection was removed.
-	tokenResult, err := tx.ExecContext(ctx, `UPDATE xcloud_control_enrollment_tokens SET revoked_at=NOW() WHERE owner_id=? AND used_at IS NULL AND revoked_at IS NULL`, ownerID)
-	if err != nil {
-		return revokedSelfHostedDeviceResult{}, err
+	// The legacy global endpoint represents "unbind this account's only
+	// device". Keep its old cleanup behavior for a single-node account, while
+	// targeted revocation must leave tokens for additional nodes untouched.
+	if nodeID == "" {
+		tokenResult, tokenErr := tx.ExecContext(ctx, `UPDATE xcloud_control_enrollment_tokens SET revoked_at=NOW() WHERE owner_id=? AND used_at IS NULL AND revoked_at IS NULL`, ownerID)
+		if tokenErr != nil {
+			return revokedSelfHostedDeviceResult{}, tokenErr
+		}
+		result.RevokedTokenCount, _ = tokenResult.RowsAffected()
 	}
-	result.RevokedTokenCount, _ = tokenResult.RowsAffected()
-
 	// A revoked device must release its node slot. Keep the record as history
 	// rather than deleting it, so existing instances and audit records remain
 	// referentially meaningful, but make it unavailable for all scheduling/UI.
-	nodeResult, err := tx.ExecContext(ctx, `UPDATE xcloud_nodes SET enabled=FALSE,selfhosted_ready=FALSE,selfhosted_readiness=JSON_ARRAY(JSON_OBJECT('code','device_revoked','message','自建节点已解绑，请重新绑定节点后再创建实例')),last_agent_error='自建节点已解绑',updated_at=NOW() WHERE owner_id=? AND node_kind='selfhosted' AND enabled=TRUE`, ownerID)
+	nodeResult, err := tx.ExecContext(ctx, `UPDATE xcloud_nodes SET enabled=FALSE,selfhosted_ready=FALSE,selfhosted_readiness=JSON_ARRAY(JSON_OBJECT('code','device_revoked','message','自建节点已解绑，请重新绑定节点后再创建实例')),last_agent_error='自建节点已解绑',updated_at=NOW() WHERE id=? AND node_kind='selfhosted' AND enabled=TRUE`, result.NodeID)
 	if err != nil {
 		return revokedSelfHostedDeviceResult{}, err
 	}
 	result.NodeCount, _ = nodeResult.RowsAffected()
+	if result.NodeCount > 0 {
+		_, _ = tx.ExecContext(ctx, `INSERT INTO xcloud_selfhosted_readiness_events (node_id,ready,issue_code,message,created_at) VALUES (?,FALSE,'device_revoked','自建节点已撤销，远端容器和数据目录未被删除',NOW())`, result.NodeID)
+	}
 
 	// "unknown" means the control plane intentionally no longer observes the
 	// runtime. It is distinct from "missing", which is reserved for an Agent
 	// confirmed container 404. No instance lifecycle state is changed here.
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status='unknown' WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.owner_id=? AND n.node_kind='selfhosted' AND i.status IN ('deploying','running','stopped','destroy_scheduled')`, ownerID, ownerID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status='unknown' WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.id=? AND n.node_kind='selfhosted' AND i.status IN ('deploying','running','stopped','destroy_scheduled')`, ownerID, result.NodeID); err != nil {
 		return revokedSelfHostedDeviceResult{}, err
 	}
 
-	rows, err := tx.QueryContext(ctx, `SELECT t.id FROM xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.owner_id=? AND n.node_kind='selfhosted' AND t.status=? FOR UPDATE`, ownerID, ownerID, taskPending)
+	rows, err := tx.QueryContext(ctx, `SELECT t.id FROM xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id JOIN xcloud_nodes n ON n.id=i.node_id WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.id=? AND n.node_kind='selfhosted' AND t.status=? FOR UPDATE`, ownerID, result.NodeID, taskPending)
 	if err != nil {
 		return revokedSelfHostedDeviceResult{}, err
 	}
@@ -478,15 +536,40 @@ func revokeSelfHostedDevice(ctx context.Context, ownerID string) (revokedSelfHos
 		return revokedSelfHostedDeviceResult{}, err
 	}
 	if len(result.CancelledTaskIDs) > 0 {
-		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id JOIN xcloud_nodes n ON n.id=i.node_id SET t.status=?,t.last_error='自建节点已解绑，任务尚未开始执行，已取消',t.finished_at=NOW(),t.claimed_at=NULL,t.heartbeat_at=NULL,t.claim_expires_at=NULL,t.worker_id=NULL,t.execution_token=NULL,t.updated_at=NOW() WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.owner_id=? AND n.node_kind='selfhosted' AND t.status=?`, taskCanceled, ownerID, ownerID, taskPending); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id JOIN xcloud_nodes n ON n.id=i.node_id SET t.status=?,t.last_error='自建节点已解绑，任务尚未开始执行，已取消',t.finished_at=NOW(),t.claimed_at=NULL,t.heartbeat_at=NULL,t.claim_expires_at=NULL,t.worker_id=NULL,t.execution_token=NULL,t.updated_at=NOW() WHERE i.owner_id=? AND i.placement_type='selfhosted' AND n.id=? AND n.node_kind='selfhosted' AND t.status=?`, taskCanceled, ownerID, result.NodeID, taskPending); err != nil {
 			return revokedSelfHostedDeviceResult{}, err
+		}
+	}
+	// A running task might already be inside Docker when the device is revoked.
+	// It must not later commit a result through an expired node relationship.
+	runningRows, runningErr := tx.QueryContext(ctx, `SELECT t.id FROM xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id WHERE i.owner_id=? AND i.placement_type='selfhosted' AND i.node_id=? AND t.status=? FOR UPDATE`, ownerID, result.NodeID, taskRunning)
+	if runningErr != nil {
+		return revokedSelfHostedDeviceResult{}, runningErr
+	}
+	for runningRows.Next() {
+		var taskID string
+		if runningErr = runningRows.Scan(&taskID); runningErr != nil {
+			_ = runningRows.Close()
+			return revokedSelfHostedDeviceResult{}, runningErr
+		}
+		result.IsolatedTaskIDs = append(result.IsolatedTaskIDs, taskID)
+	}
+	if runningErr = runningRows.Close(); runningErr != nil {
+		return revokedSelfHostedDeviceResult{}, runningErr
+	}
+	if len(result.IsolatedTaskIDs) > 0 {
+		if _, runningErr = tx.ExecContext(ctx, `UPDATE xcloud_tasks t JOIN xcloud_instances i ON i.id=t.instance_id SET t.status=?,t.last_error=CONCAT(COALESCE(t.last_error,''),'\n自建节点已撤销，运行任务已隔离'),t.finished_at=NOW(),t.claimed_at=NULL,t.heartbeat_at=NULL,t.claim_expires_at=NULL,t.worker_id=NULL,t.execution_token=NULL,t.agent_operation_state='unknown',t.updated_at=NOW() WHERE i.owner_id=? AND i.placement_type='selfhosted' AND i.node_id=? AND t.status=?`, taskReview, ownerID, result.NodeID, taskRunning); runningErr != nil {
+			return revokedSelfHostedDeviceResult{}, runningErr
+		}
+		if _, runningErr = tx.ExecContext(ctx, `UPDATE xcloud_instances SET active_task_id=NULL,active_task_token=NULL,active_task_expires_at=NULL WHERE node_id=?`, result.NodeID); runningErr != nil {
+			return revokedSelfHostedDeviceResult{}, runningErr
 		}
 	}
 	targetType, targetID := "control_device", result.DeviceID
 	if targetID == "" {
 		targetType, targetID = "selfhosted_nodes", ownerID
 	}
-	if err = writeAuditTx(ctx, tx, ownerID, "control.device.revoke", targetType, targetID, map[string]any{"nodeCount": result.NodeCount, "revokedTokenCount": result.RevokedTokenCount, "cancelledTaskCount": len(result.CancelledTaskIDs), "remoteDataPreserved": true, "alreadyUnbound": result.DeviceID == ""}); err != nil {
+	if err = writeAuditTx(ctx, tx, ownerID, "control.device.revoke", targetType, targetID, map[string]any{"nodeCount": result.NodeCount, "revokedTokenCount": result.RevokedTokenCount, "cancelledTaskCount": len(result.CancelledTaskIDs), "isolatedTaskCount": len(result.IsolatedTaskIDs), "remoteDataPreserved": true, "alreadyUnbound": result.DeviceID == ""}); err != nil {
 		return revokedSelfHostedDeviceResult{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -566,19 +649,6 @@ func controlRemoveSession(id string) {
 		_ = s.conn.Close()
 	}
 }
-func (s *controlSession) waitBytes(n int) {
-	s.limitMu.Lock()
-	defer s.limitMu.Unlock()
-	d := time.Duration(int64(n) * int64(time.Second) / controlBandwidthBytesPerSecond)
-	now := time.Now()
-	if s.nextByte.Before(now) {
-		s.nextByte = now
-	}
-	s.nextByte = s.nextByte.Add(d)
-	if wait := time.Until(s.nextByte); wait > 0 {
-		time.Sleep(wait)
-	}
-}
 func controlPushConfig(owner string) {
 	var deviceID, target, status string
 	err := instanceDB.QueryRow(`SELECT r.device_id,r.target_url,r.status FROM xcloud_control_routes r JOIN xcloud_control_devices d ON d.id=r.device_id WHERE r.owner_id=? AND d.status='enabled' LIMIT 1`, owner).Scan(&deviceID, &target, &status)
@@ -614,7 +684,6 @@ func controlGateway(c *gin.Context) {
 		c.JSON(413, gin.H{"message": "请求体过大"})
 		return
 	}
-	s.waitBytes(len(body))
 	id := newID("cs")
 	ch := make(chan controlFrame, 1)
 	s.streamMu.Lock()
@@ -643,7 +712,6 @@ func controlGateway(c *gin.Context) {
 				c.Header(k, v)
 			}
 		}
-		s.waitBytes(len(response.Body))
 		c.Data(response.Status, "application/octet-stream", response.Body)
 	case <-time.After(65 * time.Second):
 		c.JSON(504, gin.H{"message": "自建设备响应超时"})
@@ -701,7 +769,6 @@ func controlWebsocketGateway(c *gin.Context, s *controlSession) {
 				_ = s.send(controlFrame{Type: "ws_close", ID: id})
 				return
 			}
-			s.waitBytes(len(item.Body))
 			if err := s.send(item); err != nil {
 				return
 			}
@@ -709,7 +776,6 @@ func controlWebsocketGateway(c *gin.Context, s *controlSession) {
 			if item.Type == "ws_close" || item.Type == "error" {
 				return
 			}
-			s.waitBytes(len(item.Body))
 			if err := browser.WriteMessage(item.Status, item.Body); err != nil {
 				return
 			}

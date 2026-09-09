@@ -9,7 +9,7 @@ import (
 )
 
 func TestComposeKeepsManagedBoundaryAndWorkspace(t *testing.T) {
-	compose, err := Compose(ComposeInput{Name: "xcloud-r0123456789abcdef", Image: "registry.example/app@sha256:abc", Route: "r0123456789abcdef", DataDir: "/data", WorkspaceDir: "/workspace", CPU: 2, MemoryMB: 2048, BandwidthMbps: 10})
+	compose, err := Compose(ComposeInput{Name: "xcloud-r0123456789abcdef", Image: "registry.example/app@sha256:abc", Route: "r0123456789abcdef", DataDir: "/data", WorkspaceDir: "/workspace", CPU: 2, MemoryMB: 2048})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -17,6 +17,9 @@ func TestComposeKeepsManagedBoundaryAndWorkspace(t *testing.T) {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("compose missing %s", want)
 		}
+	}
+	if strings.Contains(compose, "bandwidth") || strings.Contains(compose, "Mbps") {
+		t.Fatal("managed Compose must not contain traffic-control metadata")
 	}
 }
 func TestWorkspacePathRejectsTraversal(t *testing.T) {

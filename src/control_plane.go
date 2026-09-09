@@ -129,7 +129,6 @@ type plan struct {
 	Name          string      `json:"name"`
 	CPU           float64     `json:"cpu"`
 	MemoryMB      int         `json:"memoryMB"`
-	BandwidthMbps int         `json:"bandwidthMbps"`
 	MonthlyFen    int         `json:"monthlyPriceFen"`
 	Enabled       bool        `json:"enabled"`
 	SortOrder     int         `json:"sortOrder"`
@@ -217,23 +216,25 @@ type order struct {
 }
 
 type controlTask struct {
-	ID             string          `json:"id"`
-	InstanceID     string          `json:"instanceId"`
-	Action         string          `json:"action"`
-	IdempotencyKey string          `json:"-"`
-	Status         string          `json:"status"`
-	LastError      string          `json:"lastError"`
-	Attempts       int             `json:"attempts"`
-	RunAfter       time.Time       `json:"runAfter"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	UpdatedAt      time.Time       `json:"updatedAt"`
-	ClaimedAt      *time.Time      `json:"claimedAt,omitempty"`
-	ClaimExpiresAt *time.Time      `json:"claimExpiresAt,omitempty"`
-	WorkerID       string          `json:"workerId,omitempty"`
-	ExecutionToken string          `json:"-"`
-	HeartbeatAt    *time.Time      `json:"heartbeatAt,omitempty"`
-	RecoveryCount  int             `json:"recoveryCount"`
-	Payload        json.RawMessage `json:"-"`
+	ID                  string          `json:"id"`
+	InstanceID          string          `json:"instanceId"`
+	Action              string          `json:"action"`
+	IdempotencyKey      string          `json:"-"`
+	Status              string          `json:"status"`
+	LastError           string          `json:"lastError"`
+	Attempts            int             `json:"attempts"`
+	RunAfter            time.Time       `json:"runAfter"`
+	CreatedAt           time.Time       `json:"createdAt"`
+	UpdatedAt           time.Time       `json:"updatedAt"`
+	ClaimedAt           *time.Time      `json:"claimedAt,omitempty"`
+	ClaimExpiresAt      *time.Time      `json:"claimExpiresAt,omitempty"`
+	WorkerID            string          `json:"workerId,omitempty"`
+	ExecutionToken      string          `json:"-"`
+	HeartbeatAt         *time.Time      `json:"heartbeatAt,omitempty"`
+	RecoveryCount       int             `json:"recoveryCount"`
+	AgentOperationID    string          `json:"agentOperationId,omitempty"`
+	AgentOperationState string          `json:"agentOperationState,omitempty"`
+	Payload             json.RawMessage `json:"-"`
 }
 type auditLog struct {
 	ID         int64     `json:"id"`
@@ -245,7 +246,19 @@ type auditLog struct {
 }
 
 func initializeControlPlane(ctx context.Context) error {
-	_ = ctx
+	if instanceDB == nil {
+		return nil
+	}
+	// A rolling upgrade can leave an old worker with a queued bandwidth task
+	// after the migration has already run on another process.  Fence it again
+	// at every control-plane start; this is intentionally idempotent.
+	result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status='cancelled',last_error=CONCAT(COALESCE(last_error,''),'\\n带宽控制已下线，任务已作废'),finished_at=NOW(),claimed_at=NULL,heartbeat_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE action='bandwidth' AND status IN ('pending','running','needs_review')`)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count > 0 {
+		log.Printf("retired %d legacy bandwidth task(s) during startup", count)
+	}
 	return nil
 }
 
@@ -262,7 +275,7 @@ func listCatalog(ctx context.Context, includeDisabled bool) ([]catalogImage, []p
 		return nil, nil, errors.New("开发模式未配置 MySQL")
 	}
 	imageSQL := `SELECT id,name,image_ref,COALESCE(image_digest,''),version,enabled,COALESCE(terminal_only,FALSE),created_at FROM xcloud_images`
-	planSQL := `SELECT id,name,cpu,memory_mb,bandwidth_mbps,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans`
+	planSQL := `SELECT id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans`
 	if !includeDisabled {
 		imageSQL += ` WHERE enabled=TRUE`
 		planSQL += ` WHERE enabled=TRUE`
@@ -409,7 +422,7 @@ func scanPlans(ctx context.Context, statement string, args ...any) ([]plan, erro
 	items := []plan{}
 	for rows.Next() {
 		var item plan
-		if err := rows.Scan(&item.ID, &item.Name, &item.CPU, &item.MemoryMB, &item.BandwidthMbps, &item.MonthlyFen, &item.Enabled, &item.SortOrder, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.CPU, &item.MemoryMB, &item.MonthlyFen, &item.Enabled, &item.SortOrder, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -484,10 +497,7 @@ func savePlan(ctx context.Context, value plan) error {
 	if value.CreatedAt.IsZero() {
 		value.CreatedAt = time.Now()
 	}
-	if value.BandwidthMbps < 1 || value.BandwidthMbps > 10000 {
-		return errors.New("套餐最高带宽应为 1 至 10000 Mbps")
-	}
-	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_plans (id,name,cpu,memory_mb,bandwidth_mbps,monthly_price_fen,enabled,sort_order,created_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),cpu=VALUES(cpu),memory_mb=VALUES(memory_mb),bandwidth_mbps=VALUES(bandwidth_mbps),monthly_price_fen=VALUES(monthly_price_fen),enabled=VALUES(enabled),sort_order=VALUES(sort_order)`, value.ID, value.Name, value.CPU, value.MemoryMB, value.BandwidthMbps, value.MonthlyFen, value.Enabled, value.SortOrder, value.CreatedAt)
+	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_plans (id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),cpu=VALUES(cpu),memory_mb=VALUES(memory_mb),monthly_price_fen=VALUES(monthly_price_fen),enabled=VALUES(enabled),sort_order=VALUES(sort_order)`, value.ID, value.Name, value.CPU, value.MemoryMB, value.MonthlyFen, value.Enabled, value.SortOrder, value.CreatedAt)
 	return err
 }
 
@@ -610,7 +620,7 @@ func confirmOrder(ctx context.Context, id, actorID string) (controlTask, error) 
 	var o order
 	var p plan
 	var img catalogImage
-	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,o.amount_fen,o.status,p.id,p.name,p.cpu,p.memory_mb,p.bandwidth_mbps,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.id=? FOR UPDATE`, id).Scan(&o.ID, &o.OwnerID, &o.PlanID, &o.ImageID, &o.AmountFen, &o.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.BandwidthMbps, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt)
+	err = tx.QueryRowContext(ctx, `SELECT o.id,o.owner_id,o.plan_id,o.image_id,o.amount_fen,o.status,p.id,p.name,p.cpu,p.memory_mb,p.monthly_price_fen,p.enabled,p.sort_order,p.created_at,i.id,i.name,i.image_ref,COALESCE(i.image_digest,''),i.version,i.enabled,i.created_at FROM xcloud_orders o JOIN xcloud_plans p ON p.id=o.plan_id JOIN xcloud_images i ON i.id=o.image_id WHERE o.id=? FOR UPDATE`, id).Scan(&o.ID, &o.OwnerID, &o.PlanID, &o.ImageID, &o.AmountFen, &o.Status, &p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt, &img.ID, &img.Name, &img.ImageRef, &img.ImageDigest, &img.Version, &img.Enabled, &img.CreatedAt)
 	if err != nil {
 		return controlTask{}, err
 	}
@@ -690,7 +700,7 @@ func confirmOrder(ctx context.Context, id, actorID string) (controlTask, error) 
 		months = 1
 	}
 	expires := now.AddDate(0, months, 0)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,bandwidth_mbps,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, o.OwnerID, "AlemonX", img.ImageRef, img.Version, fmt.Sprintf("%g 核 / %d GB / 最高 %d Mbps", p.CPU, p.MemoryMB/1024, p.BandwidthMbps), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, p.BandwidthMbps, n.ID, o.ID, route, expires); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, o.OwnerID, "AlemonX", img.ImageRef, img.Version, fmt.Sprintf("%g 核 / %d GB", p.CPU, p.MemoryMB/1024), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, n.ID, o.ID, route, expires); err != nil {
 		return controlTask{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_orders SET instance_id=?,status=?,service_starts_at=?,expires_at=?,updated_at=? WHERE id=?`, instanceID, orderDeploy, now, expires, now, o.ID); err != nil {
@@ -767,10 +777,10 @@ func nodeHeartbeatTTL() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-const taskSelectFields = `id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at,claimed_at,claim_expires_at,COALESCE(worker_id,''),COALESCE(execution_token,''),heartbeat_at,COALESCE(recovery_count,0),COALESCE(payload,JSON_OBJECT())`
+const taskSelectFields = `id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at,claimed_at,claim_expires_at,COALESCE(worker_id,''),COALESCE(execution_token,''),heartbeat_at,COALESCE(recovery_count,0),COALESCE(agent_operation_id,''),COALESCE(agent_operation_state,''),COALESCE(payload,JSON_OBJECT())`
 
 func scanControlTask(scanner interface{ Scan(...any) error }, task *controlTask) error {
-	return scanner.Scan(&task.ID, &task.InstanceID, &task.Action, &task.IdempotencyKey, &task.Status, &task.Attempts, &task.LastError, &task.RunAfter, &task.CreatedAt, &task.UpdatedAt, &task.ClaimedAt, &task.ClaimExpiresAt, &task.WorkerID, &task.ExecutionToken, &task.HeartbeatAt, &task.RecoveryCount, &task.Payload)
+	return scanner.Scan(&task.ID, &task.InstanceID, &task.Action, &task.IdempotencyKey, &task.Status, &task.Attempts, &task.LastError, &task.RunAfter, &task.CreatedAt, &task.UpdatedAt, &task.ClaimedAt, &task.ClaimExpiresAt, &task.WorkerID, &task.ExecutionToken, &task.HeartbeatAt, &task.RecoveryCount, &task.AgentOperationID, &task.AgentOperationState, &task.Payload)
 }
 
 func loadTask(ctx context.Context, id string) (controlTask, error) {
@@ -932,6 +942,7 @@ func finishTask(ctx context.Context, task controlTask, err error) (bool, error) 
 			return false, e
 		}
 		if affected, _ := result.RowsAffected(); affected == 1 {
+			finishTaskAgentOperation(ctx, task, "succeeded", "")
 			releaseInstanceTaskLock(ctx, task)
 			appendTaskEvent(ctx, task.ID, "succeeded", "任务执行成功")
 			return true, nil
@@ -939,12 +950,30 @@ func finishTask(ctx context.Context, task controlTask, err error) (bool, error) 
 		return false, nil
 	}
 	message := truncateError(err.Error())
+	var selfHostedFailure *selfHostedCommandError
+	if errors.As(err, &selfHostedFailure) && selfHostedFailure.Code == "command_cancelled" {
+		// A cancelled Docker CLI can still leave the daemon completing the
+		// operation.  Never retry it automatically; retain the operation record
+		// for the controlled status check and require an operator decision.
+		result, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,agent_operation_state='unknown',updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND execution_token=? AND claim_expires_at>NOW()`, taskReview, message+"；Agent 操作结果待确认", task.ID, taskRunning, workerID, task.ExecutionToken)
+		if e != nil {
+			return false, e
+		}
+		if affected, _ := result.RowsAffected(); affected == 1 {
+			finishTaskAgentOperation(ctx, task, "unknown", "控制面取消后需要回查最终容器状态")
+			releaseInstanceTaskLock(ctx, task)
+			appendTaskEvent(ctx, task.ID, "agent_operation_needs_review", "Agent 操作被取消，未执行反向 Docker 操作")
+			return true, nil
+		}
+		return false, nil
+	}
 	if task.Attempts >= 3 {
 		result, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND execution_token=? AND claim_expires_at>NOW()`, taskFailed, message, task.ID, taskRunning, workerID, task.ExecutionToken)
 		if e != nil {
 			return false, e
 		}
 		if affected, _ := result.RowsAffected(); affected == 1 {
+			finishTaskAgentOperation(ctx, task, "failed", message)
 			releaseInstanceTaskLock(ctx, task)
 			appendTaskEvent(ctx, task.ID, "dead_letter", message)
 			return true, nil
@@ -957,11 +986,19 @@ func finishTask(ctx context.Context, task controlTask, err error) (bool, error) 
 		return false, e
 	}
 	if affected, _ := result.RowsAffected(); affected == 1 {
+		finishTaskAgentOperation(ctx, task, "failed", message)
 		releaseInstanceTaskLock(ctx, task)
 		appendTaskEvent(ctx, task.ID, "retry", message)
 		return true, nil
 	}
 	return false, nil
+}
+
+func finishTaskAgentOperation(ctx context.Context, task controlTask, status, message string) {
+	if instanceDB == nil {
+		return
+	}
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_selfhosted_agent_operations SET status=?,safe_error=?,finished_at=NOW(),updated_at=NOW() WHERE task_id=? AND execution_token=? AND status='running'`, status, nullableString(message), task.ID, task.ExecutionToken)
 }
 
 func releaseInstanceTaskLock(ctx context.Context, task controlTask) {
@@ -980,12 +1017,10 @@ func failDeployment(ctx context.Context, task controlTask, cause error) {
 		return
 	}
 	if task.Action == "update" && task.Attempts >= 3 {
-		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET runtime_status='missing' WHERE id=? AND status='running'`, task.InstanceID)
+		// An image update failure is not evidence that the container vanished.
+		// Reserve `missing` for an Agent-confirmed not-found response.
+		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET runtime_status='unknown' WHERE id=? AND status='running'`, task.InstanceID)
 		_ = writeAudit(ctx, "system", "instance.update_failed", "instance", task.InstanceID, map[string]any{"taskId": task.ID, "error": truncateError(cause.Error())})
-		return
-	}
-	if task.Action == "bandwidth" {
-		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='failed',bandwidth_last_error=? WHERE id=?`, truncateError(cause.Error()), task.InstanceID)
 		return
 	}
 	if (task.Action != "create" && task.Action != "retry-deploy") || task.Attempts < 3 {
@@ -1013,28 +1048,6 @@ func truncateError(value string) string {
 		return value[:1000]
 	}
 	return value
-}
-
-type agentLifecycleResult struct {
-	BandwidthApplied *bool  `json:"bandwidthApplied"`
-	BandwidthWarning string `json:"bandwidthWarning"`
-}
-
-// persistBandwidthOutcome deliberately never fails the lifecycle action. A
-// running instance is useful even if traffic control needs later remediation.
-func persistBandwidthOutcome(ctx context.Context, instanceID string, result agentLifecycleResult) {
-	if result.BandwidthApplied == nil {
-		return // An older Agent has no structured bandwidth result yet.
-	}
-	if *result.BandwidthApplied {
-		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='applied',bandwidth_applied_at=NOW(),bandwidth_last_error=NULL WHERE id=?`, instanceID)
-		return
-	}
-	warning := result.BandwidthWarning
-	if warning == "" {
-		warning = "节点未确认带宽规则已应用"
-	}
-	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET bandwidth_status='failed',bandwidth_last_error=? WHERE id=?`, truncateError(warning), instanceID)
 }
 
 func executeTask(ctx context.Context, task controlTask) error {
@@ -1066,16 +1079,39 @@ func executeTask(ctx context.Context, task controlTask) error {
 	if err != nil {
 		return fmt.Errorf("实例节点不可用: %w", err)
 	}
+	if n.NodeKind == selfHostedNodeKind {
+		operationID := newID("aop")
+		desired := "running"
+		if task.Action == "stop" {
+			desired = "stopped"
+		}
+		if task.Action == "destroy" || task.Action == "purge" {
+			desired = "absent"
+		}
+		// The operation row is both an audit record and a fence: a later worker
+		// can never present a stale result as the current task execution.
+		configSummary := fmt.Sprintf("%s:%s:%s", task.Action, item.ContainerName, item.Version)
+		_, err = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_selfhosted_agent_operations (id,task_id,instance_id,node_id,action,execution_token,desired_state,config_summary,status,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'running',NOW(),NOW(),NOW())`, operationID, task.ID, item.ID, n.ID, task.Action, task.ExecutionToken, desired, configSummary)
+		if err != nil {
+			return fmt.Errorf("创建 Agent 操作记录失败: %w", err)
+		}
+		result, updateErr := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET agent_operation_id=?,agent_operation_state='running',updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND execution_token=?`, operationID, task.ID, taskRunning, task.WorkerID, task.ExecutionToken)
+		if updateErr != nil {
+			return updateErr
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return errors.New("任务已失去 Agent 操作归属")
+		}
+		ctx = context.WithValue(ctx, selfHostedOperationContextKey{}, selfHostedOperationContext{ID: operationID})
+	}
 	switch task.Action {
 	case "create":
 		payload, payloadErr := instanceRuntimePayload(ctx, item.ID, item.ContainerName, route)
 		if payloadErr != nil {
 			return payloadErr
 		}
-		var lifecycleResult agentLifecycleResult
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", payload, &lifecycleResult)
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", payload, nil)
 		if err == nil {
-			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"
 			changed, transitionErr := transitionInstance(ctx, instanceDB, item.ID, []string{"deploying"}, "running", &runtime, "")
 			if transitionErr != nil {
@@ -1098,13 +1134,11 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if payloadErr != nil {
 			return payloadErr
 		}
-		var lifecycleResult agentLifecycleResult
 		if err = taskMayCallAgent(ctx, task, "deploying"); err != nil {
 			return err
 		}
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", payload, &lifecycleResult)
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/create", payload, nil)
 		if err == nil {
-			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"
 			changed, transitionErr := transitionInstance(ctx, instanceDB, item.ID, []string{"deploying"}, "running", &runtime, "")
 			if transitionErr != nil {
@@ -1121,10 +1155,8 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if payloadErr != nil {
 			return payloadErr
 		}
-		var lifecycleResult agentLifecycleResult
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/restart", payload, &lifecycleResult)
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/restart", payload, nil)
 		if err == nil {
-			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"
 			next := "running"
 			if item.Status == "destroy_scheduled" {
@@ -1155,11 +1187,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if payloadErr != nil {
 			return payloadErr
 		}
-		var lifecycleResult agentLifecycleResult
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/restart", payload, &lifecycleResult)
-		if err == nil {
-			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
-		}
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/restart", payload, nil)
 		if err == nil {
 			runtime := "running"
 			next := "running"
@@ -1177,18 +1205,16 @@ func executeTask(ctx context.Context, task controlTask) error {
 			return errors.New("重装任务缺少有效的软件版本快照")
 		}
 		var cpu float64
-		var memoryMB, bandwidthMbps int
-		if err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb,bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB, &bandwidthMbps); err != nil {
+		var memoryMB int
+		if err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB); err != nil {
 			return err
 		}
-		payload := map[string]any{"name": item.ContainerName, "image": deploymentImage(selected.ImageRef, selected.ImageVersion, selected.ImageDigest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route, "terminalMode": selected.TerminalMode}
+		payload := map[string]any{"name": item.ContainerName, "image": deploymentImage(selected.ImageRef, selected.ImageVersion, selected.ImageDigest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": selected.TerminalMode}
 		if err = taskMayCallAgent(ctx, task, item.Status); err != nil {
 			return err
 		}
-		var lifecycleResult agentLifecycleResult
-		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/reinstall", payload, &lifecycleResult)
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/reinstall", payload, nil)
 		if err == nil {
-			persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
 			runtime := "running"
 			changed, transitionErr := transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, "running", &runtime, "image=?,version=?,image_digest=?", selected.ImageRef, selected.ImageVersion, nullableString(selected.ImageDigest))
 			if transitionErr != nil {
@@ -1196,24 +1222,6 @@ func executeTask(ctx context.Context, task controlTask) error {
 			} else if !changed {
 				err = errInstanceStateConflict
 			}
-		}
-	case "bandwidth":
-		var mbps int
-		err = instanceDB.QueryRowContext(ctx, `SELECT bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&mbps)
-		if err == nil {
-			var lifecycleResult agentLifecycleResult
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/bandwidth", map[string]any{"bandwidthMbps": mbps}, &lifecycleResult)
-			if err == nil {
-				persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
-			}
-		}
-		if err == nil {
-			runtime := "running"
-			next := "running"
-			if item.Status == "destroy_scheduled" {
-				next = item.Status
-			}
-			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{item.Status}, next, &runtime, "")
 		}
 	case "update":
 		if !validImageTag(item.Version) {
@@ -1231,22 +1239,18 @@ func executeTask(ctx context.Context, task controlTask) error {
 			return errors.New("节点未返回可验证的镜像摘要")
 		}
 		var cpu float64
-		var memoryMB, bandwidthMbps int
-		if err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb,bandwidth_mbps FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB, &bandwidthMbps); err == nil {
+		var memoryMB int
+		if err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB); err == nil {
 			if err = taskMayCallAgent(ctx, task, "running"); err != nil {
 				return err
 			}
 			err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/destroy", nil, nil)
 		}
 		if err == nil {
-			var lifecycleResult agentLifecycleResult
 			if err = taskMayCallAgent(ctx, task, "running"); err != nil {
 				return err
 			}
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route, "terminalMode": item.TerminalOnly}, &lifecycleResult)
-			if err == nil {
-				persistBandwidthOutcome(ctx, item.ID, lifecycleResult)
-			}
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": item.TerminalOnly}, nil)
 		}
 		if err == nil {
 			runtime := "running"
@@ -1301,8 +1305,8 @@ func executeTask(ctx context.Context, task controlTask) error {
 // while historical order snapshots remain untouched.
 func instanceRuntimePayload(ctx context.Context, instanceID, containerName, route string) (map[string]any, error) {
 	var cpu float64
-	var memoryMB, bandwidthMbps int
-	if err := instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb,bandwidth_mbps FROM xcloud_instances WHERE id=?`, instanceID).Scan(&cpu, &memoryMB, &bandwidthMbps); err != nil {
+	var memoryMB int
+	if err := instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb FROM xcloud_instances WHERE id=?`, instanceID).Scan(&cpu, &memoryMB); err != nil {
 		return nil, err
 	}
 	var imageRef, digest, selectedVersion string
@@ -1310,7 +1314,7 @@ func instanceRuntimePayload(ctx context.Context, instanceID, containerName, rout
 	if err := instanceDB.QueryRowContext(ctx, `SELECT ins.image,COALESCE(ins.image_digest,''),ins.version,COALESCE(i.terminal_only,TRUE) FROM xcloud_instances ins LEFT JOIN xcloud_images i ON i.image_ref=ins.image WHERE ins.id=?`, instanceID).Scan(&imageRef, &digest, &selectedVersion, &terminalMode); err != nil {
 		return nil, err
 	}
-	return map[string]any{"name": containerName, "image": deploymentImage(imageRef, selectedVersion, digest), "cpu": cpu, "memoryMB": memoryMB, "bandwidthMbps": bandwidthMbps, "route": route, "terminalMode": terminalMode}, nil
+	return map[string]any{"name": containerName, "image": deploymentImage(imageRef, selectedVersion, digest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": terminalMode}, nil
 }
 
 func executePurgeTask(ctx context.Context, task controlTask, instanceID, containerName string, n node) error {
@@ -1435,42 +1439,6 @@ func scheduleInstanceTask(ctx context.Context, instanceID, action, actorID strin
 	}
 	appendTaskEvent(ctx, t.ID, "queued", source+"：等待执行 "+action)
 	return t, nil
-}
-
-// scheduleBandwidthTask keeps a single active remediation task per instance.
-// Unlike user actions, it is invoked by the periodic reconciler and may run on
-// multiple control-plane processes, so the INSERT itself carries the guard.
-func scheduleBandwidthTask(ctx context.Context, instanceID, actorID string) (controlTask, bool, error) {
-	if instanceDB == nil {
-		return controlTask{}, false, errors.New("开发模式未配置 MySQL")
-	}
-	now := time.Now()
-	t := controlTask{
-		ID:             newID("task"),
-		InstanceID:     instanceID,
-		Action:         "bandwidth",
-		IdempotencyKey: "bandwidth:" + instanceID + ":" + now.UTC().Truncate(5*time.Minute).Format("200601021504"),
-		Status:         taskPending,
-		RunAfter:       now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-	result, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at)
-		SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (
-			SELECT 1 FROM xcloud_tasks WHERE instance_id=? AND action='bandwidth' AND status IN ('pending','running')
-		)`, t.ID, t.InstanceID, t.Action, t.IdempotencyKey, t.Status, 0, t.RunAfter, now, now, instanceID)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-			return controlTask{}, false, nil
-		}
-		return controlTask{}, false, err
-	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
-		return controlTask{}, false, nil
-	}
-	_ = writeAudit(ctx, actorID, "bandwidth.reconcile", "instance", instanceID, map[string]any{"taskId": t.ID})
-	appendTaskEvent(ctx, t.ID, "queued", "等待执行 bandwidth")
-	return t, true, nil
 }
 
 func scheduleLifecycle(ctx context.Context) {
@@ -1609,7 +1577,7 @@ func notifyRetentionReminders(ctx context.Context) {
 }
 
 func listNodesWithUsage(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.disk_total_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(n.last_agent_error,''),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('destroy_scheduled','destroyed') THEN 1 ELSE 0 END),0),COALESCE((SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances ti ON ti.id=t.instance_id WHERE ti.node_id=n.id AND t.action IN ('destroy','purge') AND t.status IN ('pending','running')),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
+	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,COALESCE(n.node_kind,'platform'),n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.disk_total_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(n.last_agent_error,''),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('destroy_scheduled','destroyed') THEN 1 ELSE 0 END),0),COALESCE((SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances ti ON ti.id=t.instance_id WHERE ti.node_id=n.id AND t.action IN ('destroy','purge') AND t.status IN ('pending','running')),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -1618,7 +1586,7 @@ func listNodesWithUsage(ctx context.Context) ([]node, error) {
 	for rows.Next() {
 		var item node
 		var capabilities []byte
-		if err := rows.Scan(&item.ID, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.DockerVersion, &item.DiskAvailableBytes, &item.DiskTotalBytes, &item.ManagedContainerCount, &item.AgentVersion, &item.AgentAPIVersion, &capabilities, &item.LastAgentError, &item.CPUReserved, &item.MemoryReservedMB, &item.OfflineInstanceCount, &item.PendingCleanupTasks); err != nil {
+		if err := rows.Scan(&item.ID, &item.NodeKind, &item.Name, &item.AgentURL, &item.CPUTotal, &item.MemoryTotalMB, &item.CPUDetected, &item.MemoryDetectedMB, &item.Enabled, &item.LastHeartbeatAt, &item.DockerVersion, &item.DiskAvailableBytes, &item.DiskTotalBytes, &item.ManagedContainerCount, &item.AgentVersion, &item.AgentAPIVersion, &capabilities, &item.LastAgentError, &item.CPUReserved, &item.MemoryReservedMB, &item.OfflineInstanceCount, &item.PendingCleanupTasks); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(capabilities, &item.AgentCapabilities)

@@ -391,11 +391,28 @@ func nodeByID(ctx context.Context, id string) (node, error) {
 	return n, err
 }
 
+type selfHostedOperationContext struct{ ID string }
+type selfHostedOperationContextKey struct{}
+
 func nodeRequest(ctx context.Context, n node, method, path string, payload any, result any) error {
 	if !n.Enabled {
 		return errors.New("实例节点已停用")
 	}
 	if n.NodeKind == selfHostedNodeKind {
+		if operation, ok := ctx.Value(selfHostedOperationContextKey{}).(selfHostedOperationContext); ok && operation.ID != "" {
+			decorated := map[string]any{"operationId": operation.ID}
+			if payload != nil {
+				raw, marshalErr := json.Marshal(payload)
+				if marshalErr != nil {
+					return marshalErr
+				}
+				if unmarshalErr := json.Unmarshal(raw, &decorated); unmarshalErr != nil {
+					return unmarshalErr
+				}
+				decorated["operationId"] = operation.ID
+			}
+			payload = decorated
+		}
 		return selfHostedNodeRequest(ctx, n, method, path, payload, result)
 	}
 	token, err := decryptNodeToken(n.AgentToken)
@@ -463,7 +480,7 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 	}
 	defer tx.Rollback()
 	var p plan
-	if err = tx.QueryRowContext(ctx, `SELECT id,name,cpu,memory_mb,bandwidth_mbps,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans WHERE id=? AND enabled=TRUE FOR UPDATE`, planID).Scan(&p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.BandwidthMbps, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT id,name,cpu,memory_mb,monthly_price_fen,enabled,sort_order,created_at FROM xcloud_plans WHERE id=? AND enabled=TRUE FOR UPDATE`, planID).Scan(&p.ID, &p.Name, &p.CPU, &p.MemoryMB, &p.MonthlyFen, &p.Enabled, &p.SortOrder, &p.CreatedAt); err != nil {
 		return order{}, controlTask{}, errors.New("套餐不可购买")
 	}
 	var img catalogImage
@@ -520,13 +537,13 @@ func purchaseWithWallet(ctx context.Context, ownerID, planID, imageID, imageVers
 		}
 	}
 	o := order{ID: orderID, OwnerID: ownerID, PlanID: p.ID, ImageID: img.ID, InstanceID: instanceID, AmountFen: amount, ListAmountFen: quote.ListAmountFen, DiscountAmountFen: quote.DiscountAmountFen, Status: orderDeploy, ServiceStartsAt: &now, ExpiresAt: &expires, CreatedAt: &now, UpdatedAt: &now, PlanName: p.Name, ImageName: img.Name, ImageVersion: imageVersion}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,list_amount_fen,discount_amount_fen,bandwidth_mbps,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,selected_image_digest,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, quote.ListAmountFen, quote.DiscountAmountFen, p.BandwidthMbps, orderDeploy, "wallet", nullableString(entry.ID), n.ID, imageVersion, nullableString(selectedDigest), now, expires, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_orders (id,owner_id,plan_id,image_id,instance_id,amount_fen,list_amount_fen,discount_amount_fen,status,payment_source,wallet_entry_id,scheduled_node_id,selected_image_version,selected_image_digest,service_starts_at,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, o.ID, ownerID, p.ID, img.ID, instanceID, amount, quote.ListAmountFen, quote.DiscountAmountFen, orderDeploy, "wallet", nullableString(entry.ID), n.ID, imageVersion, nullableString(selectedDigest), now, expires, now, now); err != nil {
 		return order{}, controlTask{}, err
 	}
 	if err = consumeCommercialBenefitTx(ctx, tx, ownerID, o.ID, quote); err != nil {
 		return order{}, controlTask{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,image_digest,spec,status,access_address,container_name,created_at,cpu,memory_mb,bandwidth_mbps,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, img.Name, img.ImageRef, imageVersion, nullableString(selectedDigest), fmt.Sprintf("%g 核 / %d GB / 最高 %d Mbps", p.CPU, p.MemoryMB/1024, p.BandwidthMbps), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, p.BandwidthMbps, n.ID, o.ID, route, expires); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instances (id,owner_id,name,image,version,image_digest,spec,status,access_address,container_name,created_at,cpu,memory_mb,node_id,order_id,route_key,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, instanceID, ownerID, img.Name, img.ImageRef, imageVersion, nullableString(selectedDigest), fmt.Sprintf("%g 核 / %d GB", p.CPU, p.MemoryMB/1024), "deploying", "https://xcloud-"+route+"."+env("XCLOUD_INSTANCE_DOMAIN", "alemonjs.com"), container, now, p.CPU, p.MemoryMB, n.ID, o.ID, route, expires); err != nil {
 		return order{}, controlTask{}, err
 	}
 	t := controlTask{ID: newID("task"), InstanceID: instanceID, Action: "create", IdempotencyKey: "create:" + instanceID, Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,7 +59,7 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		}
 		return items, nil
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,COALESCE((SELECT MIN(o.service_starts_at) FROM xcloud_orders o WHERE o.instance_id=i.id AND o.owner_id=i.owner_id AND o.status IN ('active','expired') AND o.service_starts_at IS NOT NULL),i.created_at),i.expires_at,i.bandwidth_mbps,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE),COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.cpu,i.memory_mb,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,COALESCE((SELECT MIN(o.service_starts_at) FROM xcloud_orders o WHERE o.instance_id=i.id AND o.owner_id=i.owner_id AND o.status IN ('active','expired') AND o.service_starts_at IS NOT NULL),i.created_at),i.expires_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE),COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
 		FROM xcloud_instances i
 		LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id
 		LEFT JOIN xcloud_images img ON img.id=source_order.image_id
@@ -79,11 +80,14 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		var created time.Time
 		var serviceStart time.Time
 		var serviceEnd sql.NullTime
+		var cpu float64
+		var memoryMB int
 		var activeTask instanceActiveTask
-		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &serviceStart, &serviceEnd, &item.BandwidthMbps, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &cpu, &memoryMB, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &serviceStart, &serviceEnd, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Format("2006-01-02 15:04")
+		item.Spec = displayInstanceSpec(cpu, memoryMB, item.Spec)
 		item.ServiceStartsAt = &serviceStart
 		if serviceEnd.Valid {
 			item.ServiceExpiresAt = &serviceEnd.Time
@@ -124,7 +128,9 @@ func getStoredInstance(ctx context.Context, id, ownerID string) (instance, bool,
 	}
 	var item instance
 	var created time.Time
-	err := instanceDB.QueryRowContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE) FROM xcloud_instances i LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id LEFT JOIN xcloud_images img ON img.id=source_order.image_id WHERE i.id=? AND i.owner_id=? AND i.archived_at IS NULL`, id, ownerID).Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly)
+	var cpu float64
+	var memoryMB int
+	err := instanceDB.QueryRowContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.cpu,i.memory_mb,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE) FROM xcloud_instances i LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id LEFT JOIN xcloud_images img ON img.id=source_order.image_id WHERE i.id=? AND i.owner_id=? AND i.archived_at IS NULL`, id, ownerID).Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &cpu, &memoryMB, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly)
 	if err == sql.ErrNoRows {
 		return instance{}, false, nil
 	}
@@ -132,8 +138,21 @@ func getStoredInstance(ctx context.Context, id, ownerID string) (instance, bool,
 		return instance{}, false, err
 	}
 	item.OwnerID = ownerID
+	item.Spec = displayInstanceSpec(cpu, memoryMB, item.Spec)
 	item.CreatedAt = created.Format("2006-01-02 15:04")
 	return item, true, nil
+}
+
+func displayInstanceSpec(cpu float64, memoryMB int, fallback string) string {
+	if cpu > 0 && memoryMB > 0 {
+		return fmt.Sprintf("%g 核 / %d GB", cpu, (memoryMB+1023)/1024)
+	}
+	// A pre-upgrade row may lack CPU/memory columns.  Never expose its old
+	// bandwidth suffix in that narrow compatibility case.
+	if index := strings.Index(fallback, "/"); index >= 0 {
+		return strings.TrimSpace(fallback[:index])
+	}
+	return fallback
 }
 
 func removeStoredInstance(ctx context.Context, id, ownerID string) error {

@@ -102,6 +102,8 @@ type tunnelSession struct {
 	streams                              map[string]chan frame
 	commands                             map[string]chan frame
 	terminals                            map[string]chan frame
+	done                                 chan struct{}
+	doneOnce                             sync.Once
 	mu                                   sync.RWMutex
 }
 
@@ -226,10 +228,10 @@ func (c *config) enroll(ctx context.Context, token, publicKey string) (string, s
 		return "", "", "", "", err
 	}
 	defer tx.Rollback()
-	var owner string
+	var owner, nodeName string
 	var expires time.Time
 	var used, revoked sql.NullTime
-	err = tx.QueryRowContext(ctx, `SELECT owner_id,expires_at,used_at,revoked_at FROM xcloud_control_enrollment_tokens WHERE token_hash=? FOR UPDATE`, hash(token)).Scan(&owner, &expires, &used, &revoked)
+	err = tx.QueryRowContext(ctx, `SELECT owner_id,COALESCE(node_name,''),expires_at,used_at,revoked_at FROM xcloud_control_enrollment_tokens WHERE token_hash=? FOR UPDATE`, hash(token)).Scan(&owner, &nodeName, &expires, &used, &revoked)
 	if err != nil || used.Valid || revoked.Valid || !expires.After(time.Now()) {
 		return "", "", "", "", errors.New("enrollment token invalid")
 	}
@@ -237,12 +239,8 @@ func (c *config) enroll(ctx context.Context, token, publicKey string) (string, s
 	if err = tx.QueryRowContext(ctx, `SELECT id FROM xcloud_users WHERE id=? FOR UPDATE`, owner).Scan(&locked); err != nil {
 		return "", "", "", "", err
 	}
-	var count int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_control_devices WHERE owner_id=? AND status='enabled'`, owner).Scan(&count); err != nil {
-		return "", "", "", "", err
-	}
-	if count > 0 {
-		return "", "", "", "", errors.New("device quota exhausted")
+	if strings.TrimSpace(nodeName) == "" {
+		nodeName = "自建节点"
 	}
 	deviceID := "ctl_" + randomID()
 	credential := "xctl_device_" + randomID()
@@ -259,7 +257,7 @@ func (c *config) enroll(ctx context.Context, token, publicKey string) (string, s
 	// Enrollment is the only provisioning path for a self-hosted node. Keep
 	// the node linked to the long-lived device identity; it is intentionally
 	// not a platform Agent URL and must never enter platform scheduling.
-	_, err = tx.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,node_kind,owner_id,control_device_id,created_at,updated_at) VALUES (?,?, '',0,0,TRUE,'selfhosted',?,?,NOW(),NOW())`, "snode_"+randomID(), "自建节点", owner, deviceID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO xcloud_nodes (id,name,agent_url,cpu_total,memory_total_mb,enabled,node_kind,owner_id,control_device_id,created_at,updated_at) VALUES (?,?, '',0,0,TRUE,'selfhosted',?,?,NOW(),NOW())`, "snode_"+randomID(), strings.TrimSpace(nodeName), owner, deviceID)
 	if err != nil {
 		return "", "", "", "", err
 	}
@@ -309,7 +307,7 @@ func (c *config) connect(w http.ResponseWriter, r *http.Request) {
 	if err != nil || proof.kind != fAuth || !ed25519.Verify(ed25519.PublicKey(decodeKey(pub)), challenge, proof.data) {
 		return
 	}
-	s := &tunnelSession{deviceID: h.DeviceID, ownerID: owner, credential: h.Credential, epoch: randomID(), conn: conn, streams: map[string]chan frame{}, commands: map[string]chan frame{}, terminals: map[string]chan frame{}}
+	s := &tunnelSession{deviceID: h.DeviceID, ownerID: owner, credential: h.Credential, epoch: randomID(), conn: conn, streams: map[string]chan frame{}, commands: map[string]chan frame{}, terminals: map[string]chan frame{}, done: make(chan struct{})}
 	c.putSession(s)
 	defer c.dropSession(s)
 	c.setDirectory(r.Context(), s)
@@ -399,6 +397,7 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 			"message": "Agent 未完整上报 CPU、内存和运行环境检查结果；请升级并重启 xcloud-control",
 		}})
 		_, _ = c.db.Exec(`UPDATE xcloud_nodes SET selfhosted_ready=FALSE,selfhosted_readiness=?,last_agent_error='Agent 运行环境状态上报不完整',updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, string(issues), s.deviceID)
+		c.recordSelfHostedReadinessEvent(s.deviceID, false, "runtime_status_incomplete", "Agent 未完整上报 CPU、内存和运行环境检查结果；请升级并重启 xcloud-control")
 		_, _ = c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID)
 		return
 	}
@@ -419,6 +418,11 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 		problem = report.ReadinessIssues[0].Message
 	}
 	_, _ = c.db.Exec(`UPDATE xcloud_nodes SET cpu_detected=?,memory_detected_mb=?,cpu_total=?,memory_total_mb=?,cpu_quota=IF(selfhosted_quota_mode='auto' OR cpu_quota<=0,ROUND(?*0.8,2),cpu_quota),memory_quota_mb=IF(selfhosted_quota_mode='auto' OR memory_quota_mb<=0,FLOOR(?*0.8),memory_quota_mb),docker_version=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,agent_version=?,agent_api_version=?,agent_capabilities=?,selfhosted_ready=?,selfhosted_readiness=?,last_agent_error=IF(?,NULL,?),last_heartbeat_at=NOW(),updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.DockerVersion, report.DiskAvailableBytes, report.DiskTotalBytes, report.ManagedContainerCount, report.AgentVersion, report.AgentAPIVersion, string(caps), ready, string(issues), ready, problem, s.deviceID)
+	issueCode := ""
+	if len(report.ReadinessIssues) > 0 {
+		issueCode = report.ReadinessIssues[0].Code
+	}
+	c.recordSelfHostedReadinessEvent(s.deviceID, ready, issueCode, problem)
 	_, _ = c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID)
 	if report.RuntimeInventoryOK != nil && *report.RuntimeInventoryOK {
 		// A complete inventory may say that a record is not currently present,
@@ -433,6 +437,23 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 			_, _ = c.db.Exec(`UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status=? WHERE i.route_key=? AND i.placement_type='selfhosted' AND n.control_device_id=? AND i.status IN ('running','stopped','destroy_scheduled')`, runtime, item.Route, s.deviceID)
 		}
 	}
+}
+
+// recordSelfHostedReadinessEvent keeps an operator-friendly history without
+// turning the 15-second heartbeat into an unbounded log stream.  A new row is
+// written only for the first report or when the safe status summary changes.
+func (c *config) recordSelfHostedReadinessEvent(deviceID string, ready bool, code, message string) {
+	var nodeID string
+	if err := c.db.QueryRow(`SELECT id FROM xcloud_nodes WHERE control_device_id=? AND node_kind='selfhosted'`, deviceID).Scan(&nodeID); err != nil {
+		return
+	}
+	var lastReady bool
+	var lastCode, lastMessage string
+	err := c.db.QueryRow(`SELECT ready,issue_code,message FROM xcloud_selfhosted_readiness_events WHERE node_id=? ORDER BY id DESC LIMIT 1`, nodeID).Scan(&lastReady, &lastCode, &lastMessage)
+	if err == nil && lastReady == ready && lastCode == code && lastMessage == message {
+		return
+	}
+	_, _ = c.db.Exec(`INSERT INTO xcloud_selfhosted_readiness_events (node_id,ready,issue_code,message,created_at) VALUES (?,?,?,?,NOW())`, nodeID, ready, code, message)
 }
 
 func (c *config) command(w http.ResponseWriter, r *http.Request) {
@@ -663,13 +684,19 @@ func (c *config) commandRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	select {
-	case f := <-ch:
+	case f, ok := <-ch:
+		if !ok {
+			http.Error(w, "device unavailable", 502)
+			return
+		}
 		completed = true
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(f.meta)
 	case <-time.After(commandTimeout):
 		http.Error(w, "command timeout", 504)
 	case <-r.Context().Done():
+	case <-s.done:
+		http.Error(w, "device offline", 502)
 	}
 }
 func decodeKey(v string) []byte {
@@ -735,6 +762,10 @@ func (c *config) dropSession(s *tunnelSession) {
 		delete(sessions.values, s.deviceID)
 	}
 	sessions.Unlock()
+	// Wake all waiters without closing their per-request channels: the read
+	// loop can already be holding one, and closing it would race with a send.
+	s.doneOnce.Do(func() { close(s.done) })
+	c.recordSelfHostedReadinessEvent(s.deviceID, false, "tunnel_disconnected", "自建节点 Tunnel 已断开，等待自动重连")
 }
 func sessionFor(id string) *tunnelSession {
 	sessions.RLock()
@@ -864,7 +895,11 @@ func (c *config) proxyLocal(w http.ResponseWriter, r *http.Request, device strin
 		}
 	}()
 	select {
-	case first := <-in:
+	case first, ok := <-in:
+		if !ok {
+			http.Error(w, "自建设备离线", 502)
+			return
+		}
 		if first.kind == fError {
 			http.Error(w, "本地服务不可用", 502)
 			return
@@ -896,8 +931,13 @@ func (c *config) proxyLocal(w http.ResponseWriter, r *http.Request, device strin
 				return
 			}
 		}
-	case <-time.After(30 * time.Second):
-		http.Error(w, "自建设备响应超时", 504)
+	case <-r.Context().Done():
+		// The browser cancelled the request.  The deferred cancel frame releases
+		// the corresponding Control-side request without killing the tunnel.
+		return
+	case <-s.done:
+		http.Error(w, "自建设备离线", 502)
+		return
 	}
 }
 func safeHeaders(h http.Header) http.Header {

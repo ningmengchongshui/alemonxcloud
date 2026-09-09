@@ -24,47 +24,55 @@ func (e *selfHostedCommandError) Error() string {
 	return "节点 " + e.Message
 }
 
+func selfHostedCommandAction(method, path string) (string, error) {
+	if method != httpMethodPost && method != httpMethodDelete && method != http.MethodGet {
+		return "", errors.New("自建节点不支持该操作")
+	}
+	switch {
+	case strings.Contains(path, "/operation-status") && method == http.MethodGet:
+		return "operation-status", nil
+	case path == "/container/create":
+		return "create", nil
+	case path == "/container/pull":
+		return "pull-image", nil
+	case strings.Contains(path, "/logs") && method == http.MethodGet:
+		return "logs", nil
+	case strings.Contains(path, "/files/content") && method == http.MethodGet:
+		return "file-read", nil
+	case strings.Contains(path, "/files/content") && method == httpMethodPost:
+		return "file-write", nil
+	case strings.Contains(path, "/files/upload") && method == httpMethodPost:
+		return "file-upload", nil
+	case strings.Contains(path, "/files") && method == http.MethodGet:
+		return "files", nil
+	case strings.HasSuffix(path, "/start"):
+		return "start", nil
+	case strings.HasSuffix(path, "/stop"):
+		return "stop", nil
+	case strings.HasSuffix(path, "/restart"):
+		return "restart", nil
+	case strings.HasSuffix(path, "/resize"):
+		return "resize", nil
+	case strings.HasSuffix(path, "/reinstall"):
+		return "reinstall", nil
+	case strings.Contains(path, "?purge=true"):
+		return "purge", nil
+	case strings.HasSuffix(path, "/destroy"):
+		return "destroy", nil
+	default:
+		return "", errors.New("自建 Agent 尚不支持该受管接口")
+	}
+}
+
 // selfHostedNodeRequest is the narrow command bridge to a customer-owned
 // node. It only translates structured xCloud lifecycle calls; it never sends
 // shell text, host paths, or arbitrary Docker IDs through the tunnel.
 func selfHostedNodeRequest(ctx context.Context, n node, method, path string, payload any, result any) error {
-	if method != httpMethodPost && method != httpMethodDelete {
-		return errors.New("自建节点不支持该操作")
-	}
-	action := ""
-	switch {
-	case path == "/container/create":
-		action = "create"
-	case path == "/container/pull":
-		action = "pull-image"
-	case strings.Contains(path, "/logs"):
-		action = "logs"
-	case strings.Contains(path, "/files/content") && method == http.MethodGet:
-		action = "file-read"
-	case strings.Contains(path, "/files/content"):
-		action = "file-write"
-	case strings.Contains(path, "/files/upload"):
-		action = "file-upload"
-	case strings.Contains(path, "/files") && method == http.MethodGet:
-		action = "files"
-	case strings.HasSuffix(path, "/start"):
-		action = "start"
-	case strings.HasSuffix(path, "/stop"):
-		action = "stop"
-	case strings.HasSuffix(path, "/restart"):
-		action = "restart"
-	case strings.HasSuffix(path, "/resize"):
-		action = "resize"
-	case strings.HasSuffix(path, "/reinstall"):
-		action = "reinstall"
-	case strings.HasSuffix(path, "/bandwidth"):
-		action = "bandwidth"
-	case strings.Contains(path, "?purge=true"):
-		action = "purge"
-	case strings.HasSuffix(path, "/destroy"):
-		action = "destroy"
-	default:
-		return errors.New("自建 Agent 尚不支持该受管接口")
+	// The fixed action table is the authorization boundary: accepting GET must
+	// not turn the tunnel into a generic host HTTP proxy.
+	action, err := selfHostedCommandAction(method, path)
+	if err != nil {
+		return err
 	}
 	endpoint, token := tunnelInternalURL(), env("XCLOUD_TUNNEL_COMMAND_TOKEN", "")
 	if endpoint == "" || token == "" {
@@ -84,6 +92,7 @@ func selfHostedNodeRequest(ctx context.Context, n node, method, path string, pay
 		commandPayload["path"] = parsed.Query().Get("path")
 		commandPayload["tail"] = parsed.Query().Get("tail")
 		commandPayload["since"] = parsed.Query().Get("since")
+		commandPayload["operationId"] = parsed.Query().Get("operationId")
 	}
 	raw, err := json.Marshal(map[string]any{"deviceId": n.ControlDeviceID, "action": action, "payload": commandPayload})
 	if err != nil {
