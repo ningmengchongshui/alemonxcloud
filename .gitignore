@@ -51,7 +51,7 @@ pnpm-lock.yaml
 
 agent/xcloud-agent
 agent/.env
-# control/xcloud-control
+control/xcloud-control
 /.xcloud/
 
 *.env

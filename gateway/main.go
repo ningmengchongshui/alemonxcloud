@@ -396,9 +396,13 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 			"code":    "runtime_status_incomplete",
 			"message": "Agent 未完整上报 CPU、内存和运行环境检查结果；请升级并重启 xcloud-control",
 		}})
-		_, _ = c.db.Exec(`UPDATE xcloud_nodes SET selfhosted_ready=FALSE,selfhosted_readiness=?,last_agent_error='Agent 运行环境状态上报不完整',updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, string(issues), s.deviceID)
-		c.recordSelfHostedReadinessEvent(s.deviceID, false, "runtime_status_incomplete", "Agent 未完整上报 CPU、内存和运行环境检查结果；请升级并重启 xcloud-control")
-		_, _ = c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID)
+		result, err := c.db.Exec(`UPDATE xcloud_nodes SET selfhosted_ready=FALSE,selfhosted_readiness=?,last_agent_error='Agent 运行环境状态上报不完整',updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, string(issues), s.deviceID)
+		if c.logSelfHostedNodeHeartbeatResult("incomplete runtime report", s.deviceID, result, err) {
+			c.recordSelfHostedReadinessEvent(s.deviceID, false, "runtime_status_incomplete", "Agent 未完整上报 CPU、内存和运行环境检查结果；请升级并重启 xcloud-control")
+		}
+		if _, err := c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID); err != nil {
+			log.Printf("self-hosted device heartbeat update failed device=%s: %v", s.deviceID, err)
+		}
 		return
 	}
 	caps, _ := json.Marshal(report.Capabilities)
@@ -417,13 +421,17 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 	if !ready && len(report.ReadinessIssues) > 0 {
 		problem = report.ReadinessIssues[0].Message
 	}
-	_, _ = c.db.Exec(`UPDATE xcloud_nodes SET cpu_detected=?,memory_detected_mb=?,cpu_total=?,memory_total_mb=?,cpu_quota=IF(selfhosted_quota_mode='auto' OR cpu_quota<=0,ROUND(?*0.8,2),cpu_quota),memory_quota_mb=IF(selfhosted_quota_mode='auto' OR memory_quota_mb<=0,FLOOR(?*0.8),memory_quota_mb),docker_version=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,agent_version=?,agent_api_version=?,agent_capabilities=?,selfhosted_ready=?,selfhosted_readiness=?,last_agent_error=IF(?,NULL,?),last_heartbeat_at=NOW(),updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.DockerVersion, report.DiskAvailableBytes, report.DiskTotalBytes, report.ManagedContainerCount, report.AgentVersion, report.AgentAPIVersion, string(caps), ready, string(issues), ready, problem, s.deviceID)
+	result, err := c.db.Exec(`UPDATE xcloud_nodes SET cpu_detected=?,memory_detected_mb=?,cpu_total=?,memory_total_mb=?,cpu_quota=IF(selfhosted_quota_mode='auto' OR cpu_quota<=0,ROUND(?*0.8,2),cpu_quota),memory_quota_mb=IF(selfhosted_quota_mode='auto' OR memory_quota_mb<=0,FLOOR(?*0.8),memory_quota_mb),docker_version=?,disk_available_bytes=?,disk_total_bytes=?,managed_container_count=?,agent_version=?,agent_api_version=?,agent_capabilities=?,selfhosted_ready=?,selfhosted_readiness=?,last_agent_error=IF(?,NULL,?),last_heartbeat_at=NOW(),updated_at=NOW() WHERE control_device_id=? AND node_kind='selfhosted'`, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.CPUDetected, report.MemoryDetectedMB, report.DockerVersion, report.DiskAvailableBytes, report.DiskTotalBytes, report.ManagedContainerCount, report.AgentVersion, report.AgentAPIVersion, string(caps), ready, string(issues), ready, problem, s.deviceID)
 	issueCode := ""
 	if len(report.ReadinessIssues) > 0 {
 		issueCode = report.ReadinessIssues[0].Code
 	}
-	c.recordSelfHostedReadinessEvent(s.deviceID, ready, issueCode, problem)
-	_, _ = c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID)
+	if c.logSelfHostedNodeHeartbeatResult("runtime report", s.deviceID, result, err) {
+		c.recordSelfHostedReadinessEvent(s.deviceID, ready, issueCode, problem)
+	}
+	if _, err := c.db.Exec(`UPDATE xcloud_control_devices SET last_heartbeat_at=NOW(),last_connected_at=NOW(),gateway_id=?,last_error=NULL,updated_at=NOW() WHERE id=?`, c.id, s.deviceID); err != nil {
+		log.Printf("self-hosted device heartbeat update failed device=%s: %v", s.deviceID, err)
+	}
 	if report.RuntimeInventoryOK != nil && *report.RuntimeInventoryOK {
 		// A complete inventory may say that a record is not currently present,
 		// but that is not an Agent-confirmed 404. Preserve the stronger
@@ -437,6 +445,27 @@ func (c *config) updateSelfHostedHeartbeat(s *tunnelSession, raw []byte) {
 			_, _ = c.db.Exec(`UPDATE xcloud_instances i JOIN xcloud_nodes n ON n.id=i.node_id SET i.runtime_status=? WHERE i.route_key=? AND i.placement_type='selfhosted' AND n.control_device_id=? AND i.status IN ('running','stopped','destroy_scheduled')`, runtime, item.Route, s.deviceID)
 		}
 	}
+}
+
+// logSelfHostedNodeHeartbeatResult makes a lost readiness report actionable.
+// Previously heartbeat writes deliberately ignored both SQL errors and the
+// zero-row case. In either case the Agent could report ready=true forever
+// while the UI continued to display its initial ready=false state.
+func (c *config) logSelfHostedNodeHeartbeatResult(kind, deviceID string, result sql.Result, err error) bool {
+	if err != nil {
+		log.Printf("self-hosted node heartbeat %s failed device=%s: %v", kind, deviceID, err)
+		return false
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("self-hosted node heartbeat %s rows affected unavailable device=%s: %v", kind, deviceID, err)
+		return false
+	}
+	if rows == 0 {
+		log.Printf("self-hosted node heartbeat %s ignored device=%s: no active self-hosted node is bound to this device", kind, deviceID)
+		return false
+	}
+	return true
 }
 
 // recordSelfHostedReadinessEvent keeps an operator-friendly history without
