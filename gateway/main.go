@@ -143,6 +143,20 @@ func newConfig() (*config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Managed MySQL services commonly close idle TCP sessions before the
+	// process exits. Keep the pool deliberately small and retire connections
+	// before they become stale, otherwise a heartbeat can be received but its
+	// readiness update is lost on a broken pipe.
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(4)
+	db.SetConnMaxLifetime(4 * time.Minute)
+	db.SetConnMaxIdleTime(90 * time.Second)
+	probe, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(probe); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("gateway MySQL unavailable: %w", err)
+	}
 	r, err := redis.ParseURL(env("SESSION_REDIS_URL", ""))
 	if err != nil {
 		return nil, err
