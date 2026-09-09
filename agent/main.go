@@ -72,9 +72,6 @@ var agentCapabilities = []string{
 	"image.list.v1",
 	"route.proxy.v1",
 	"node.resources.v1",
-	"network.bandwidth.v1",
-	"network.bandwidth.status.v1",
-	"network.bandwidth.queue.v1",
 }
 
 const (
@@ -85,14 +82,16 @@ const (
 )
 
 type createRequest struct {
-	Name          string  `json:"name" binding:"required"`
-	Image         string  `json:"image" binding:"required"`
-	CPU           float64 `json:"cpu" binding:"required"`
-	MemoryMB      int     `json:"memoryMB" binding:"required"`
-	BandwidthMbps int     `json:"bandwidthMbps" binding:"required"`
-	Route         string  `json:"route" binding:"required"`
-	TerminalMode  bool    `json:"terminalMode,omitempty"`
-	KeepStopped   bool    `json:"keepStopped,omitempty"`
+	Name     string  `json:"name" binding:"required"`
+	Image    string  `json:"image" binding:"required"`
+	CPU      float64 `json:"cpu" binding:"required"`
+	MemoryMB int     `json:"memoryMB" binding:"required"`
+	// Kept only to accept requests from an older control plane during a rolling
+	// upgrade. It is ignored and never reaches Compose or traffic control.
+	BandwidthMbps int    `json:"bandwidthMbps,omitempty"`
+	Route         string `json:"route" binding:"required"`
+	TerminalMode  bool   `json:"terminalMode,omitempty"`
+	KeepStopped   bool   `json:"keepStopped,omitempty"`
 }
 
 func main() {
@@ -150,7 +149,6 @@ func runServer() {
 	control.POST("/:name/resize", resizeContainer)
 	control.POST("/:name/reinstall", reinstallContainer)
 	control.POST("/:name/destroy", destroyContainer)
-	control.POST("/:name/bandwidth", applyContainerBandwidth)
 	control.GET("/:name/status", containerStatus)
 	control.GET("/:name/inspect", inspectContainer)
 	control.GET("/:name/logs", containerLogs)
@@ -166,12 +164,6 @@ func runServer() {
 	// Docker bridge gateway.  Exposure is constrained by the host firewall;
 	// See docs/03-部署指南.md for the required allow rule.
 	address := env("AGENT_ADDR", "0.0.0.0:13092")
-	if bandwidthShapingEnabled() {
-		go reconcileBandwidthLoop()
-	} else if strings.EqualFold(env("XCLOUD_CLEAR_LEGACY_TRAFFIC_CONTROL", "true"), "true") {
-		// Remove rules left by older releases once, outside all request paths.
-		go clearLegacyBandwidthRules()
-	}
 	refreshRouteTargetCache(context.Background())
 	go refreshRouteTargetCacheLoop()
 	log.Printf("xcloud agent listening on %s", address)
@@ -414,7 +406,7 @@ func createContainer(c *gin.Context) {
 		// A worker may retry after the Docker command succeeded but before its
 		// database acknowledgement. Treat the managed name as an idempotent key.
 		cacheRouteTarget(ctx, input.Name, input.Route)
-		respondWithBandwidthStatus(c, http.StatusOK, input.Name, "existing", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
+		c.JSON(http.StatusOK, gin.H{"name": input.Name, "status": "existing"})
 		return
 	}
 	instanceDir, homeDir, workspaceDir := instancePaths(input.Name)
@@ -432,18 +424,7 @@ func createContainer(c *gin.Context) {
 		return
 	}
 	cacheRouteTarget(ctx, input.Name, input.Route)
-	// Resource availability comes first. A transient traffic-control failure
-	// must never turn a successful deployment into a destroyed container.
-	respondWithBandwidthStatus(c, http.StatusCreated, input.Name, "running", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
-}
-
-func respondWithBandwidthStatus(c *gin.Context, code int, name, status string, err error) {
-	if err != nil {
-		log.Printf("bandwidth apply warning for %s: %v", name, err)
-		c.JSON(code, gin.H{"name": name, "status": status, "bandwidthApplied": false, "bandwidthWarning": "带宽规则暂未应用，实例保持运行并将自动重试"})
-		return
-	}
-	c.JSON(code, gin.H{"name": name, "status": status, "bandwidthApplied": true})
+	c.JSON(http.StatusCreated, gin.H{"name": input.Name, "status": "running"})
 }
 
 func bandwidthToolsAvailable() bool {
@@ -544,11 +525,9 @@ func applyBandwidthLimit(ctx context.Context, name string, mbps int) error {
 }
 
 func bandwidthShapingEnabled() bool {
-	// This is a deliberate hard default-off switch. The former
-	// XCLOUD_ENABLE_BANDWIDTH_SHAPING setting is ignored so a stale node env
-	// file cannot silently re-enable traffic control after this rollout.
-	// Re-enabling later requires an explicit, reviewed opt-in.
-	return strings.EqualFold(strings.TrimSpace(env("XCLOUD_TRAFFIC_CONTROL_ENABLED", "false")), "true")
+	// Retained only so old helper code stays inert during a rolling binary
+	// upgrade. No environment variable can re-enable shaping in this release.
+	return false
 }
 
 func burstBandwidthMbps(stableMbps int) int {
@@ -690,7 +669,7 @@ func reconcileBandwidth(ctx context.Context) {
 func instanceCompose(input createRequest, homeDir, workspaceDir string) string {
 	// Compose policy is shared with self-hosted control. Keeping the platform
 	// adapter here preserves its HTTP API while preventing two policy forks.
-	compose, err := agentcore.Compose(agentcore.ComposeInput{Name: input.Name, Image: input.Image, Route: input.Route, DataDir: homeDir, WorkspaceDir: workspaceDir, Network: envString("XCLOUD_DOCKER_NETWORK", "xcloud_network"), CPU: input.CPU, MemoryMB: input.MemoryMB, BandwidthMbps: input.BandwidthMbps, TerminalMode: input.TerminalMode})
+	compose, err := agentcore.Compose(agentcore.ComposeInput{Name: input.Name, Image: input.Image, Route: input.Route, DataDir: homeDir, WorkspaceDir: workspaceDir, Network: envString("XCLOUD_DOCKER_NETWORK", "xcloud_network"), CPU: input.CPU, MemoryMB: input.MemoryMB, TerminalMode: input.TerminalMode})
 	if err != nil {
 		return ""
 	}
@@ -820,7 +799,7 @@ func restartContainer(c *gin.Context) {
 		return
 	}
 	cacheRouteTarget(ctx, input.Name, input.Route)
-	respondWithBandwidthStatus(c, http.StatusOK, input.Name, "restarted", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
+	c.JSON(http.StatusOK, gin.H{"name": input.Name, "status": "restarted"})
 }
 
 // resizeContainer reconciles only CPU and memory. It deliberately does not
@@ -912,7 +891,6 @@ func reinstallContainer(c *gin.Context) {
 			return
 		}
 	}
-	_ = clearBandwidthLimit(ctx, input.Name)
 	if err := os.RemoveAll(instanceDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "无法清理实例数据目录"})
 		return
@@ -930,7 +908,7 @@ func reinstallContainer(c *gin.Context) {
 		return
 	}
 	cacheRouteTarget(ctx, input.Name, input.Route)
-	respondWithBandwidthStatus(c, http.StatusOK, input.Name, "reinstalled", applyBandwidthLimit(ctx, input.Name, input.BandwidthMbps))
+	c.JSON(http.StatusOK, gin.H{"name": input.Name, "status": "reinstalled"})
 }
 func deleteContainer(c *gin.Context) {
 	name, ok := checkedName(c)
@@ -977,7 +955,6 @@ func destroyContainer(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Minute)
 	defer cancel()
-	_ = clearBandwidthLimit(ctx, name)
 	dataRoot := filepath.Clean(env("XCLOUD_INSTANCE_DATA_ROOT", "/var/lib/xcloud/instances"))
 	dataDir := filepath.Join(dataRoot, name)
 	if !strings.HasPrefix(filepath.Clean(dataDir)+string(os.PathSeparator), dataRoot+string(os.PathSeparator)) {
@@ -1329,19 +1306,9 @@ func agentStatus(c *gin.Context) {
 			count++
 		}
 	}
-	queueCheck, queueCancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-	toolsReady := bandwidthShapingEnabled() && bandwidthQueueReady(queueCheck)
-	queueCancel()
-	capabilities := make([]string, 0, len(agentCapabilities))
-	for _, capability := range agentCapabilities {
-		if !toolsReady && (capability == "network.bandwidth.v1" || capability == "network.bandwidth.status.v1" || capability == "network.bandwidth.queue.v1") {
-			continue
-		}
-		capabilities = append(capabilities, capability)
-	}
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok", "agentVersion": Version, "apiVersion": AgentAPIVersion,
-		"capabilities": capabilities, "bandwidthToolsReady": toolsReady, "dockerVersion": strings.TrimSpace(output),
+		"capabilities": agentCapabilities, "dockerVersion": strings.TrimSpace(output),
 		"cpuTotal": runtime.NumCPU(), "memoryTotalMB": hostMemoryMB(),
 		"diskAvailableBytes":    int64(stat.Bavail) * int64(stat.Bsize),
 		"diskTotalBytes":        int64(stat.Blocks) * int64(stat.Bsize),
@@ -1385,15 +1352,14 @@ func containerAction(c *gin.Context, action string) {
 			// impossible to recover when a node temporarily lost tc/ip/nsenter or its
 			// veth could not be resolved. The periodic reconciler can retry later.
 			log.Printf("bandwidth restore warning for %s after %s: inspect=%v parse=%v mbps=%d", name, action, err, parseErr, mbps)
-			respondWithBandwidthStatus(c, http.StatusOK, name, action, errors.New("带宽规则恢复失败"))
-			return
+			log.Printf("ignored retired bandwidth rule for %s after %s: inspect=%v parse=%v mbps=%d", name, action, err, parseErr, mbps)
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"name": name, "status": action, "bandwidthApplied": true})
+	c.JSON(http.StatusOK, gin.H{"name": name, "status": action})
 }
 
 func validCreateRequest(input createRequest) bool {
-	return agentcore.ValidName(input.Name) && agentcore.ValidRoute(input.Route) && validManagedImage(input.Image) && input.CPU > 0 && input.CPU <= 64 && input.MemoryMB >= 256 && input.MemoryMB <= 262144 && input.BandwidthMbps >= 1 && input.BandwidthMbps <= 10000
+	return agentcore.ValidName(input.Name) && agentcore.ValidRoute(input.Route) && validManagedImage(input.Image) && input.CPU > 0 && input.CPU <= 64 && input.MemoryMB >= 256 && input.MemoryMB <= 262144
 }
 func checkedName(c *gin.Context) (string, bool) {
 	name := c.Param("name")

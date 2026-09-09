@@ -8,7 +8,7 @@
 
 ```bash
 docker network create xcloud_network
-make agent-build VERSION=v1.0.21
+make agent-build VERSION=v1.0.22
 sudo install -d -m 0750 /var/lib/xcloud/instances
 sudo install -m 0755 agent/xcloud-agent /usr/local/bin/xcloud-agent
 sudo install -m 0644 deploy/xcloud-agent.service /etc/systemd/system/xcloud-agent.service

@@ -9,14 +9,17 @@ import (
 )
 
 func TestInstanceComposeCarriesPlanLimitsAndRuntimeTuning(t *testing.T) {
-	compose := instanceCompose(createRequest{Name: "xcloud-12345678", Image: "registry.example/alemonx:latest", CPU: 4, MemoryMB: 8192, BandwidthMbps: 10, Route: "r0123456789abcdef"}, "/data/xcloud-12345678/data", "/data/xcloud-12345678/workspace")
-	for _, expected := range []string{"container_name: \"xcloud-12345678\"", "cpus: \"4\"", "mem_limit: \"8192m\"", "memswap_limit: \"8192m\"", "GOMAXPROCS: \"4\"", "NODE_OPTIONS: \"--max-old-space-size=6144\"", "xcloud.bandwidth_mbps: \"10\"", "xcloud.route: \"r0123456789abcdef\"", "\"/data/xcloud-12345678/data:/root\"", "\"/data/xcloud-12345678/workspace:/app/workspace\""} {
+	compose := instanceCompose(createRequest{Name: "xcloud-12345678", Image: "registry.example/alemonx:latest", CPU: 4, MemoryMB: 8192, Route: "r0123456789abcdef"}, "/data/xcloud-12345678/data", "/data/xcloud-12345678/workspace")
+	for _, expected := range []string{"container_name: \"xcloud-12345678\"", "cpus: \"4\"", "mem_limit: \"8192m\"", "memswap_limit: \"8192m\"", "GOMAXPROCS: \"4\"", "NODE_OPTIONS: \"--max-old-space-size=6144\"", "xcloud.route: \"r0123456789abcdef\"", "\"/data/xcloud-12345678/data:/root\"", "\"/data/xcloud-12345678/workspace:/app/workspace\""} {
 		if !strings.Contains(compose, expected) {
 			t.Fatalf("compose missing %q:\n%s", expected, compose)
 		}
 	}
 	if strings.Contains(compose, "ports:") {
 		t.Fatal("user container must not publish host ports")
+	}
+	if strings.Contains(compose, "bandwidth") || strings.Contains(compose, "Mbps") {
+		t.Fatalf("Compose must not contain retired bandwidth settings:\n%s", compose)
 	}
 	for _, incompatible := range []string{"cap_drop:", "no-new-privileges", "cgroup: private", "pids_limit:"} {
 		if strings.Contains(compose, incompatible) {
@@ -26,8 +29,8 @@ func TestInstanceComposeCarriesPlanLimitsAndRuntimeTuning(t *testing.T) {
 }
 
 func TestInstanceComposeEnablesInteractiveTerminalModeOnlyWhenRequested(t *testing.T) {
-	base := createRequest{Name: "xcloud-12345678", Image: "registry.example/alemonx:latest", CPU: 1, MemoryMB: 1024, BandwidthMbps: 10, Route: "r0123456789abcdef"}
-	terminalCompose := instanceCompose(createRequest{Name: base.Name, Image: base.Image, CPU: base.CPU, MemoryMB: base.MemoryMB, BandwidthMbps: base.BandwidthMbps, Route: base.Route, TerminalMode: true}, "/data/home", "/data/workspace")
+	base := createRequest{Name: "xcloud-12345678", Image: "registry.example/alemonx:latest", CPU: 1, MemoryMB: 1024, Route: "r0123456789abcdef"}
+	terminalCompose := instanceCompose(createRequest{Name: base.Name, Image: base.Image, CPU: base.CPU, MemoryMB: base.MemoryMB, Route: base.Route, TerminalMode: true}, "/data/home", "/data/workspace")
 	if !strings.Contains(terminalCompose, "    stdin_open: true\n    tty: true\n") {
 		t.Fatalf("terminal compose must allocate an interactive TTY:\n%s", terminalCompose)
 	}
@@ -77,9 +80,7 @@ func TestAgentProtocolDeclaresStableExecutionCapabilities(t *testing.T) {
 		"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1",
 		"container.list.v1", "container.compose.v1", "container.destroy.v1", "image.pull.v1",
 		"container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1",
-		"image.inspect.v1", "image.list.v1", "route.proxy.v1", "node.resources.v1", "network.bandwidth.v1",
-		"network.bandwidth.status.v1",
-		"network.bandwidth.queue.v1",
+		"image.inspect.v1", "image.list.v1", "route.proxy.v1", "node.resources.v1",
 	}
 	declared := strings.Join(agentCapabilities, ",")
 	for _, capability := range required {
@@ -92,38 +93,9 @@ func TestAgentProtocolDeclaresStableExecutionCapabilities(t *testing.T) {
 	}
 }
 
-func TestBandwidthIFBNameIsStableAndFitsLinuxInterfaceLimit(t *testing.T) {
-	name := bandwidthIFBName("xcloud-0123456789abcdef0123456789abcdef")
-	if name != bandwidthIFBName("xcloud-0123456789abcdef0123456789abcdef") {
-		t.Fatal("IFB name must be stable")
-	}
-	if !strings.HasPrefix(name, "ifb-xc-") || len(name) > 15 {
-		t.Fatalf("unsafe IFB name %q", name)
-	}
-}
-
-func TestBurstBandwidthBorrowsIdleCapacityWithinConfiguredLimit(t *testing.T) {
-	t.Setenv("XCLOUD_BANDWIDTH_BURST_MULTIPLIER", "5")
-	if got := burstBandwidthMbps(6); got != 30 {
-		t.Fatalf("burst rate = %d, want 30", got)
-	}
-	t.Setenv("XCLOUD_BANDWIDTH_BURST_MULTIPLIER", "invalid")
-	if got := burstBandwidthMbps(6); got != 24 {
-		t.Fatalf("fallback burst rate = %d, want 24", got)
-	}
-}
-
-func TestBandwidthShapingIsOptIn(t *testing.T) {
-	t.Setenv("XCLOUD_TRAFFIC_CONTROL_ENABLED", "")
-	if bandwidthShapingEnabled() {
-		t.Fatal("bandwidth shaping must be disabled by default")
-	}
-	t.Setenv("XCLOUD_ENABLE_BANDWIDTH_SHAPING", "true")
-	if bandwidthShapingEnabled() {
-		t.Fatal("legacy enable setting must not override the hard default-off switch")
-	}
+func TestBandwidthShapingCannotBeReenabledByEnvironment(t *testing.T) {
 	t.Setenv("XCLOUD_TRAFFIC_CONTROL_ENABLED", "true")
-	if !bandwidthShapingEnabled() {
-		t.Fatal("explicit traffic-control opt-in was ignored")
+	if bandwidthShapingEnabled() {
+		t.Fatal("retired traffic shaping must stay disabled")
 	}
 }
