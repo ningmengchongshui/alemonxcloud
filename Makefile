@@ -1,6 +1,7 @@
 .PHONY: help go-check dev build test format lint frontend-dev frontend-build agent-build agent-test agent-install agent-install-artifact agent-enable agent-restart agent-verify agent-deploy agent-deploy-artifact release-linux-amd64 release-linux-arm64 docker-build docker-run integration-up test-integration integration-down gateway-build gateway-install gateway-install-artifact gateway-enable gateway-restart gateway-verify gateway-deploy gateway-deploy-artifact control-build control-install control-install-artifact control-enable control-restart control-verify control-deploy control-deploy-artifact
 
 VERSION ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo dev)
+GO ?= go
 SYSTEMCTL ?= systemctl
 GATEWAY_BIN ?= /opt/xcloud-tunnel-gateway/xcloud-tunnel-gateway
 CONTROL_BIN ?= /usr/local/bin/xcloud-control
@@ -15,23 +16,23 @@ help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 go-check: ## Verify that the Go compiler needed for source builds is installed
-	@command -v go >/dev/null 2>&1 || { echo "Go is not installed. Build release artifacts on a build machine with 'make release-linux-amd64', copy dist/linux-amd64/ to this host, then run the matching *-deploy-artifact target."; exit 2; }
+	@command -v "$(GO)" >/dev/null 2>&1 || { echo "Go compiler '$(GO)' was not found. Pass its absolute path, for example: make GO=/usr/local/go/bin/go gateway-deploy. If Go is genuinely unavailable, build release artifacts on a build machine with 'make release-linux-amd64', then use the matching *-deploy-artifact target."; exit 2; }
 
 dev: ## Start the Go API server
 	go run .
 
 build: ## Build the production binary
-	go build -o app .
+	$(GO) build -o app .
 
 test: ## Run Go tests
-	go test ./...
+	$(GO) test ./...
 
 format: ## Format Go files
-	go fmt ./... 
+	$(GO) fmt ./...
 	yarn --cwd frontend format
 
 lint: ## Run Go vet
-	go vet ./...
+	$(GO) vet ./...
 
 dev-fe: ## Start the Vite development server
 	cd frontend && yarn dev
@@ -40,13 +41,13 @@ build-fe: ## Build the frontend into dist/
 	cd frontend && yarn build
 
 agent-build: go-check ## Build the bare-metal systemd agent
-	cd agent && go build -ldflags "-X main.Version=$(VERSION)" -o xcloud-agent .
+	cd agent && $(GO) build -ldflags "-X main.Version=$(VERSION)" -o xcloud-agent .
 
 agent-run: ## Build the bare-metal systemd agent
 	./agent/xcloud-agent --serve
 
 agent-test: ## Run the bare-metal agent tests
-	cd agent && go test ./...
+	cd agent && $(GO) test ./...
 
 agent-install: agent-build ## Replace platform Agent binary and unit, never its environment file
 	install -d -m 0750 /var/lib/xcloud/instances
@@ -81,7 +82,7 @@ agent-deploy-artifact: agent-install-artifact agent-restart agent-verify ## Inst
 # Run them as root (for example: sudo make gateway-deploy) only after the
 # corresponding service has been configured for the first time.
 gateway-build: go-check ## Build Gateway with the current Git revision
-	cd gateway && go build -trimpath -ldflags "-X main.version=$(VERSION)" -o xcloud-tunnel-gateway .
+	cd gateway && $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o xcloud-tunnel-gateway .
 	./gateway/xcloud-tunnel-gateway version
 
 gateway-install: gateway-build ## Replace Gateway binary and systemd unit, never its environment file
@@ -114,7 +115,7 @@ gateway-deploy: gateway-install gateway-restart gateway-verify ## Build, install
 gateway-deploy-artifact: gateway-install-artifact gateway-restart gateway-verify ## Install, restart and verify a prebuilt Gateway without changing config
 
 control-build: go-check ## Build xcloud-control with the current Git revision
-	cd control && go build -trimpath -ldflags "-X main.version=$(VERSION)" -o xcloud-control .
+	cd control && $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o xcloud-control .
 	./control/xcloud-control version
 
 control-install: control-build ## Atomically replace Control binary and unit, never its config or environment file
@@ -146,16 +147,16 @@ control-deploy-artifact: control-install-artifact control-restart control-verify
 
 release-linux-amd64: go-check ## Build Linux amd64 artifacts to dist/linux-amd64 for hosts without Go
 	mkdir -p dist/linux-amd64
-	cd gateway && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../dist/linux-amd64/xcloud-tunnel-gateway .
-	cd control && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../dist/linux-amd64/xcloud-control .
-	cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X main.Version=$(VERSION)" -o ../dist/linux-amd64/xcloud-agent .
+	cd gateway && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../dist/linux-amd64/xcloud-tunnel-gateway .
+	cd control && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../dist/linux-amd64/xcloud-control .
+	cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.Version=$(VERSION)" -o ../dist/linux-amd64/xcloud-agent .
 	@echo "Built Linux amd64 artifacts in dist/linux-amd64/ with revision $(VERSION)"
 
 release-linux-arm64: go-check ## Build Linux arm64 artifacts to dist/linux-arm64 for hosts without Go
 	mkdir -p dist/linux-arm64
-	cd gateway && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../dist/linux-arm64/xcloud-tunnel-gateway .
-	cd control && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../dist/linux-arm64/xcloud-control .
-	cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-X main.Version=$(VERSION)" -o ../dist/linux-arm64/xcloud-agent .
+	cd gateway && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../dist/linux-arm64/xcloud-tunnel-gateway .
+	cd control && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../dist/linux-arm64/xcloud-control .
+	cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.Version=$(VERSION)" -o ../dist/linux-arm64/xcloud-agent .
 	@echo "Built Linux arm64 artifacts in dist/linux-arm64/ with revision $(VERSION)"
 
 docker-build: ## Run the container image locally
