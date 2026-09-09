@@ -22,7 +22,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const version = "0.2.3"
+// version is set with -ldflags during a release build.
+var version = "dev"
+
 const protocol = "xcloud-control.v3"
 
 //go:embed xcloud-control.service
@@ -368,16 +370,32 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	// Do not truncate the installed executable in place: systemd may still be
+	// running that inode until the caller explicitly restarts the service.
+	// Writing a sibling temporary file and renaming it gives every upgrade a
+	// clear old-or-new boundary.
+	out, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".tmp-")
 	if err != nil {
 		return err
 	}
+	temporary := out.Name()
+	defer os.Remove(temporary)
+	if err = out.Chmod(mode); err != nil {
+		_ = out.Close()
+		return err
+	}
 	_, err = io.Copy(out, in)
+	if err == nil {
+		err = out.Sync()
+	}
 	closeErr := out.Close()
 	if err != nil {
 		return err
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(temporary, dst)
 }
 func readMessage(res *http.Response) string {
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 4096))

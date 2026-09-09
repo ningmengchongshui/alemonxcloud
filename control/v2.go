@@ -197,26 +197,42 @@ func serveV2(cfg *config, path string) error {
 	defer cleanupTicker.Stop()
 	done := make(chan struct{})
 	defer close(done)
-	reportStatus := func() {
+	reportStatus := func() error {
 		localStatus := localAgentStatus()
-		// This is intentionally a small, secret-free line.  Operators need a
-		// positive confirmation that readiness was actually measured, rather
-		// than having to infer it from a silent tunnel connection.
-		log.Printf("runtime readiness reported: ready=%v inventoryOK=%v issues=%v", localStatus["runtimeReady"], localStatus["runtimeInventoryOK"], localStatus["readinessIssues"])
-		status, _ := json.Marshal(localStatus)
-		_ = send(v2Frame{kind: v2Ping, meta: status})
+		status, err := json.Marshal(localStatus)
+		if err != nil {
+			return fmt.Errorf("encode runtime readiness: %w", err)
+		}
+		if err := send(v2Frame{kind: v2Ping, meta: status}); err != nil {
+			// The old implementation logged a successful local check before it
+			// attempted the WebSocket write and then discarded the write error.
+			// That made an undelivered report indistinguishable from a Gateway
+			// persistence failure.
+			log.Printf("runtime readiness report delivery failed: %v", err)
+			return err
+		}
+		log.Printf("runtime readiness delivered: ready=%v inventoryOK=%v issues=%v", localStatus["runtimeReady"], localStatus["runtimeInventoryOK"], localStatus["readinessIssues"])
+		return nil
 	}
 	// Do not wait for the first 15-second ticker. A successful tunnel
 	// authentication is enough to perform the bounded local checks and report
 	// whether this node can accept an instance right away.
-	reportStatus()
+	if err := reportStatus(); err != nil {
+		return fmt.Errorf("initial runtime readiness report: %w", err)
+	}
 	go func() {
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				reportStatus()
+				if err := reportStatus(); err != nil {
+					// Closing forces the outer reconnect loop to establish a fresh
+					// tunnel instead of advertising a locally healthy but unreachable
+					// Agent forever.
+					_ = conn.Close()
+					return
+				}
 			}
 		}
 	}()
