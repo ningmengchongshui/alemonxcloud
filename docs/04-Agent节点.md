@@ -6,24 +6,15 @@
 
 ## 安装
 
-首次安装时，程序部署与配置分开。`make agent-*` 不会创建或覆盖 `/etc/xcloud-agent.env`、节点 Token 或实例数据。
-
-```bash
-cd /path/to/alemonxcloud
-sudo make agent-install
-
-# 仅首次执行；已有环境文件绝不覆盖。
-sudoedit /etc/xcloud-agent.env
-sudo make agent-enable agent-restart agent-verify
-```
-
-日常升级只执行：
+程序、systemd unit、环境文件和实例数据由既有发布流程管理。`make agent-deploy` 不会创建、复制或覆盖其中任意文件。
 
 ```bash
 cd /path/to/alemonxcloud
 git pull --ff-only
-sudo make agent-deploy
+make agent-deploy
 ```
+
+它先编译当前源码，再只读比较编译产物与 `/opt/xcloud-agent/xcloud-agent`、比较 systemd unit、检查环境文件是否存在；仅当全部一致时才重启。若提示缺少或不匹配文件，命令会在重启前退出，需由既有发布流程修复差异。
 
 `/etc/xcloud-agent.env`：
 
