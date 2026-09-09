@@ -111,3 +111,14 @@ func TestManagedOperationPathStaysOutsideInstanceData(t *testing.T) {
 		t.Fatalf("operation path must survive instance purge: %s", path)
 	}
 }
+
+func TestDockerObjectNotFoundIsIdempotentCleanup(t *testing.T) {
+	for _, output := range []string{"Error response from daemon: No such container: xcloud-01234567", "Error: No such object: xcloud-01234567"} {
+		if !dockerObjectNotFound(output) {
+			t.Fatalf("expected missing Docker object to be harmless: %q", output)
+		}
+	}
+	if dockerObjectNotFound("permission denied") {
+		t.Fatal("permission failure must not be treated as a successful cleanup")
+	}
+}

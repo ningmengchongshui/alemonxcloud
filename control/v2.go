@@ -636,15 +636,7 @@ func runManagedCommand(ctx context.Context, cfg config, action string, p managed
 	return nil, err
 }
 func safeManagedName(v string) bool {
-	if len(v) < 8 || len(v) > 80 {
-		return false
-	}
-	for _, r := range v {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
-			return false
-		}
-	}
-	return true
+	return agentcore.ValidName(v)
 }
 func managedDir(cfg config, name string) (string, error) {
 	if !safeManagedName(name) {
@@ -852,7 +844,7 @@ func runManagedCompose(ctx context.Context, cfg config, action string, p managed
 		return os.RemoveAll(dir)
 	}
 	if action == "destroy" {
-		return composeCommand(ctx, dir, p.Name, "down", "--remove-orphans")
+		return removeManagedRuntime(ctx, dir, p.Name)
 	}
 	switch action {
 	case "stop":
@@ -867,6 +859,35 @@ func runManagedCompose(ctx context.Context, cfg config, action string, p managed
 	}
 	return nil
 }
+
+// removeManagedRuntime is intentionally idempotent and preserves dir. A
+// deployment can fail before its Compose file is written, or leave a
+// container that no longer belongs to the current Compose project. Retrying
+// deployment must remove that stale runtime before creating a replacement,
+// while retaining the instance data directory.
+func removeManagedRuntime(ctx context.Context, dir, name string) error {
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	if _, err := os.Stat(composePath); err == nil {
+		if err := composeCommand(ctx, dir, name, "down", "--remove-orphans"); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("无法检查实例 Compose 配置: %w", err)
+	}
+	// compose down does not see a stale container after a partial/legacy
+	// deployment. Remove exactly the validated managed name as a final sweep.
+	output, err := exec.CommandContext(ctx, "docker", "rm", "-f", name).CombinedOutput()
+	if err != nil && !dockerObjectNotFound(string(output)) {
+		return fmt.Errorf("清理实例运行容器失败: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func dockerObjectNotFound(output string) bool {
+	text := strings.ToLower(output)
+	return strings.Contains(text, "no such container") || strings.Contains(text, "no such object")
+}
+
 func composeCommand(ctx context.Context, dir, name string, args ...string) error {
 	base := []string{"compose", "--project-name", name, "--file", filepath.Join(dir, "docker-compose.yml")}
 	cmd := exec.CommandContext(ctx, "docker", append(base, args...)...)

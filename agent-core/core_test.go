@@ -65,3 +65,16 @@ func TestTerminalDockerArgsAreFixed(t *testing.T) {
 		t.Fatal("expected unmanaged container rejection")
 	}
 }
+
+func TestManagedNameIsTheSingleBoundaryRule(t *testing.T) {
+	for _, name := range []string{"xcloud-01234567", "xcloud-a1b2c3d4e5f6a7b8"} {
+		if !ValidName(name) {
+			t.Fatalf("expected managed name %q to be valid", name)
+		}
+	}
+	for _, name := range []string{"xcloud-short", "xcloud-abc-def12", "xcloud-ABCDEF12", "other-01234567"} {
+		if ValidName(name) {
+			t.Fatalf("expected managed name %q to be invalid", name)
+		}
+	}
+}

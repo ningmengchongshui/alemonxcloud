@@ -26,6 +26,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
+	"xcloud/agent-core"
 )
 
 const protocol = "xcloud-control.v3"
@@ -663,15 +664,7 @@ func (c *config) terminalLocal(w http.ResponseWriter, r *http.Request, device, n
 	}
 }
 func validManagedName(v string) bool {
-	if len(v) < 15 || len(v) > 40 || !strings.HasPrefix(v, "xcloud-") {
-		return false
-	}
-	for _, r := range v[len("xcloud-"):] {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
-			return false
-		}
-	}
-	return true
+	return agentcore.ValidName(v)
 }
 func (c *config) internalCommand(w http.ResponseWriter, r *http.Request) { c.commandRequest(w, r) }
 func (c *config) commandRequest(w http.ResponseWriter, r *http.Request) {
