@@ -6,15 +6,23 @@
 
 ## 安装
 
+首次安装时，程序部署与配置分开。`make agent-*` 不会创建或覆盖 `/etc/xcloud-agent.env`、节点 Token 或实例数据。
+
 ```bash
-docker network create xcloud_network
-make agent-build VERSION=v1.0.22
-sudo install -d -m 0750 /var/lib/xcloud/instances
-sudo install -m 0755 agent/xcloud-agent /usr/local/bin/xcloud-agent
-sudo install -m 0644 deploy/xcloud-agent.service /etc/systemd/system/xcloud-agent.service
+cd /path/to/alemonxcloud
+sudo make agent-install
+
+# 仅首次执行；已有环境文件绝不覆盖。
 sudoedit /etc/xcloud-agent.env
-sudo systemctl daemon-reload
-sudo systemctl enable --now xcloud-agent
+sudo make agent-enable agent-restart agent-verify
+```
+
+日常升级只执行：
+
+```bash
+cd /path/to/alemonxcloud
+git pull --ff-only
+sudo make agent-deploy
 ```
 
 `/etc/xcloud-agent.env`：

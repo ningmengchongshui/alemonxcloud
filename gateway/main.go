@@ -33,6 +33,10 @@ const sessionTTL = 45 * time.Second
 const chunkSize = 32 * 1024
 const commandTimeout = 30 * time.Minute
 
+// version is set with -ldflags during a release build. Keeping it in the
+// binary makes a systemd restart verifiable instead of an assumption.
+var version = "dev"
+
 const (
 	fHello byte = iota + 1
 	fChallenge
@@ -114,6 +118,10 @@ var sessions = struct {
 var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }, ReadBufferSize: 64 * 1024, WriteBufferSize: 64 * 1024}
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		fmt.Printf("xcloud-tunnel-gateway %s (%s)\n", version, protocol)
+		return
+	}
 	cfg, err := newConfig()
 	if err != nil {
 		log.Fatal(err)
