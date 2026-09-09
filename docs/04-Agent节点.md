@@ -25,14 +25,6 @@ git pull --ff-only
 sudo make agent-deploy
 ```
 
-若节点是没有 Go 的精简 CentOS，不能使用 `agent-deploy` 源码构建。请在可信构建机执行 `make release-linux-amd64`（ARM 为 `make release-linux-arm64`），复制 `dist/linux-<arch>/xcloud-agent` 到此项目目录，再执行：
-
-```bash
-sudo make agent-deploy-artifact AGENT_ARTIFACT=dist/linux-amd64/xcloud-agent
-```
-
-该命令不会改写 `/etc/xcloud-agent.env`、节点 Token 或实例目录。
-
 `/etc/xcloud-agent.env`：
 
 ```dotenv
