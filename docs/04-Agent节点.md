@@ -6,7 +6,7 @@
 
 ## 安装
 
-程序、systemd unit、环境文件和实例数据由既有发布流程管理。`make agent-deploy` 不会创建、复制或覆盖其中任意文件。
+环境文件、节点 Token 和实例数据由既有发布流程管理。`make agent-deploy` 只读取并校验环境文件；检查通过后才替换 Agent 二进制与 systemd unit、然后重启。
 
 ```bash
 cd /path/to/alemonxcloud
@@ -14,7 +14,7 @@ git pull --ff-only
 make agent-deploy
 ```
 
-它先编译当前源码，再只读比较编译产物与 `/opt/xcloud-agent/xcloud-agent`、比较 systemd unit、检查环境文件是否存在；仅当全部一致时才重启。若提示缺少或不匹配文件，命令会在重启前退出，需由既有发布流程修复差异。
+它先编译当前源码，再只读检查环境文件的必需项；检查失败时在任何文件写入和重启前退出。检查通过后才替换 `/opt/xcloud-agent/xcloud-agent` 与 systemd unit，然后重启。
 
 `/etc/xcloud-agent.env`：
 
