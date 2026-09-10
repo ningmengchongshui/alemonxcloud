@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import { InstancesPage } from '@/pages/InstancesPage'
 import { SelfHostedInstanceCreateDialog } from '@/components/SelfHostedInstanceCreateDialog'
+import { SelfHostedNodeCreateDialog } from '@/components/SelfHostedNodeCreateDialog'
 import {
   Alert,
   Button,
   EmptyState,
+  FilterTabs,
   LoadingState,
   StatusBadge
 } from '@/components/ui'
 import {
-  useCreateControlEnrollmentTokenMutation,
   useGetSelfHostedNodeInstancesQuery,
   useGetSelfHostedNodeQuery,
   useGetSelfHostedNodesQuery,
@@ -137,27 +138,16 @@ export function SelfHostedControlPanel({
     useGetSelfHostedNodeInstancesQuery(nodeID ?? '', {
       skip: !detail || !nodeID
     })
-  const [createToken, { isLoading: creatingToken }] =
-    useCreateControlEnrollmentTokenMutation()
   const [revoke, { isLoading: revoking }] = useRevokeSelfHostedNodeMutation()
   const [rename, { isLoading: renaming }] = useUpdateSelfHostedNodeMutation()
-  const [enrollmentToken, setEnrollmentToken] = useState('')
-  const [nodeName, setNodeName] = useState('')
   const [editingName, setEditingName] = useState('')
+  const [nodeCreateOpen, setNodeCreateOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<'overview' | 'instances'>('overview')
   const { data: readinessEvents = [] } = useGetSelfHostedReadinessEventsQuery(
     nodeID ?? '',
     { skip: !detail || !nodeID }
   )
-
-  async function generateToken() {
-    try {
-      const result = await createToken({ name: nodeName.trim() }).unwrap()
-      setEnrollmentToken(result.token)
-    } catch {
-      /* cloudApi presents request errors through the global Toast. */
-    }
-  }
 
   if (!detail) {
     return (
@@ -166,13 +156,10 @@ export function SelfHostedControlPanel({
           <LoadingState>正在加载自建节点…</LoadingState>
         ) : nodes.length > 0 ? (
           <div className="space-y-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-200">
-                新节点名称
-                <input value={nodeName} onChange={event => setNodeName(event.target.value)} placeholder="例如：香港云主机" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
-              </label>
-              <Button className="mt-3" loading={creatingToken} disabled={!nodeName.trim()} onClick={() => void generateToken()}>生成新节点接入 Token</Button>
-              {enrollmentToken && <input readOnly value={enrollmentToken} className="mt-3 w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-amber-800 dark:bg-amber-950 dark:text-white" />}
+            <div className="flex justify-end">
+              <Button onClick={() => setNodeCreateOpen(true)}>
+                <span aria-hidden="true">＋</span> 新建节点
+              </Button>
             </div>
             <div className="grid gap-3">{nodes.map(item => (
               <button
@@ -211,36 +198,10 @@ export function SelfHostedControlPanel({
               title="还没有自建节点"
               description="生成 Token 后按部署说明启动 Agent。"
             />
-            <div className="mx-auto mt-4 max-w-xl space-y-3">
-              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-200">
-                节点名称
-                <input
-                  value={nodeName}
-                  onChange={event => setNodeName(event.target.value)}
-                  placeholder="例如：上海家用服务器"
-                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-                />
-              </label>
-              <Button
-                loading={creatingToken}
-                disabled={!nodeName.trim()}
-                onClick={() => void generateToken()}
-              >
-                生成接入 Token
-              </Button>
-              {enrollmentToken && (
-                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-200">
-                  请立即保存 Token
-                  <input
-                    readOnly
-                    value={enrollmentToken}
-                    className="mt-1.5 w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-amber-800 dark:bg-amber-950 dark:text-white"
-                  />
-                </label>
-              )}
-            </div>
+            <div className="mt-4 text-center"><Button onClick={() => setNodeCreateOpen(true)}>新建节点</Button></div>
           </section>
         )}
+        {nodeCreateOpen && <SelfHostedNodeCreateDialog onClose={() => setNodeCreateOpen(false)} />}
       </section>
     )
   }
@@ -262,21 +223,20 @@ export function SelfHostedControlPanel({
   return (
     <section className="page me-page space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <input
-            value={editingName || node.name}
-            onChange={event => setEditingName(event.target.value)}
-            className="min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm font-bold text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-          />
-          <Button
-            tone="secondary"
-            loading={renaming}
-            disabled={!editingName.trim() || editingName.trim() === node.name}
-            onClick={() => void rename({ id: node.id, name: editingName.trim() })}
-          >保存名称</Button>
+        <div className="flex min-w-0 items-center gap-3">
+          <Button tone="ghost" className="min-h-9 px-2" onClick={onBack}>← 返回</Button>
+          <span className="h-5 w-px bg-slate-200 dark:bg-slate-700" aria-hidden="true" />
+          <div className="min-w-0"><h1 className="m-0 truncate text-lg font-bold text-slate-900 dark:text-white">{node.name}</h1><p className="m-0 mt-0.5 text-[11px] text-slate-500">自建节点</p></div>
         </div>
         <NodeStatus online={node.status === 'online'} ready={node.ready} />
       </header>
+      <FilterTabs
+        label="节点详情"
+        value={activeTab}
+        onChange={setActiveTab}
+        items={[{ value: 'overview', label: '概览' }, { value: 'instances', label: `实例（${nodeInstances.length}）` }]}
+      />
+      {activeTab === 'overview' && <>
       <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
         <div className="grid gap-5 md:grid-cols-3">
           <CapacityMeter
@@ -295,6 +255,26 @@ export function SelfHostedControlPanel({
             available={node.diskAvailableBytes}
             total={node.diskTotalBytes}
           />
+        </div>
+      </section>
+      <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <label className="min-w-0 flex-1 text-xs font-semibold text-slate-600 dark:text-slate-200">节点名称
+            <input value={editingName} onChange={event => setEditingName(event.target.value)} placeholder={node.name} maxLength={64} className="mt-1.5 block w-full max-w-md rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+          </label>
+          <Button
+            tone="secondary"
+            loading={renaming}
+            disabled={!editingName.trim() || editingName.trim() === node.name}
+            onClick={() => {
+              void rename({ id: node.id, name: editingName.trim() })
+                .unwrap()
+                .then(() => setEditingName(''))
+                .catch(() => undefined)
+            }}
+          >
+            保存名称
+          </Button>
         </div>
       </section>
       {!node.ready && (
@@ -318,22 +298,6 @@ export function SelfHostedControlPanel({
           ))}
         </div>
       </section>
-      <InstancesPage
-        instances={nodeInstances}
-        orders={[]}
-        loading={instancesLoading}
-        onCreate={() => setCreateOpen(true)}
-        onOpenLogs={onOpenLogs}
-        onOpenTerminal={onOpenTerminal}
-        onOpenExecutions={onOpenExecutions}
-        workspace={{
-          title: '实例',
-          description: '',
-          createLabel: '创建实例',
-          selfHosted: true,
-          compact: true
-        }}
-      />
       <details className="border-t border-slate-200 pt-4 dark:border-slate-700">
         <summary className="cursor-pointer text-xs font-bold text-rose-700 dark:text-rose-300">
           危险操作：撤销节点
@@ -351,6 +315,25 @@ export function SelfHostedControlPanel({
           </Button>
         </div>
       </details>
+      </>}
+      {activeTab === 'instances' && (
+        <InstancesPage
+          instances={nodeInstances}
+          orders={[]}
+          loading={instancesLoading}
+          onCreate={() => setCreateOpen(true)}
+          onOpenLogs={onOpenLogs}
+          onOpenTerminal={onOpenTerminal}
+          onOpenExecutions={onOpenExecutions}
+          workspace={{
+            title: '实例',
+            description: '运行在当前自建节点。',
+            createLabel: '创建实例',
+            selfHosted: true,
+            compact: true
+          }}
+        />
+      )}
       {createOpen && (
         <SelfHostedInstanceCreateDialog
           node={node}
