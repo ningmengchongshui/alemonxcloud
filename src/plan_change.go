@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -161,6 +162,13 @@ type planChangeRecord struct {
 	CreatedAt               time.Time  `json:"createdAt"`
 	UpdatedAt               time.Time  `json:"updatedAt"`
 	CompletedAt             *time.Time `json:"completedAt,omitempty"`
+	SagaStatus              string     `json:"sagaStatus,omitempty"`
+	CompensationTaskID      string     `json:"compensationTaskId,omitempty"`
+	CancelRequestedAt       *time.Time `json:"cancelRequestedAt,omitempty"`
+	CancelReason            string     `json:"cancelReason,omitempty"`
+	ObservedCPU             *float64   `json:"observedCpu,omitempty"`
+	ObservedMemoryMB        *int       `json:"observedMemoryMB,omitempty"`
+	ObservedAt              *time.Time `json:"observedAt,omitempty"`
 }
 
 func planChangeHandler(c *gin.Context) {
@@ -373,7 +381,7 @@ func submitPlanChangeHandler(c *gin.Context) {
 
 func getPlanChangesHandler(c *gin.Context) {
 	user := c.MustGet("user").(oidcUser)
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id,instance_id,owner_id,source_plan_id,target_plan_id,source_cpu,source_memory_mb,target_cpu,target_memory_mb,remaining_seconds,delta_fen,charge_fen,refund_fen,status,fund_status,agent_verify_status,agent_verified_at,COALESCE(CAST(agent_verify_result AS CHAR),''),COALESCE(agent_verify_error,''),COALESCE(task_id,''),idempotency_key,COALESCE(pending_wallet_entry_id,''),COALESCE(settlement_wallet_entry_id,''),COALESCE(error_message,''),created_at,updated_at,completed_at FROM xcloud_instance_plan_changes WHERE instance_id=? AND owner_id=? ORDER BY created_at DESC LIMIT 20`, c.Param("id"), user.ID)
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT id,instance_id,owner_id,source_plan_id,target_plan_id,source_cpu,source_memory_mb,target_cpu,target_memory_mb,remaining_seconds,delta_fen,charge_fen,refund_fen,status,fund_status,agent_verify_status,agent_verified_at,COALESCE(CAST(agent_verify_result AS CHAR),''),COALESCE(agent_verify_error,''),COALESCE(task_id,''),idempotency_key,COALESCE(pending_wallet_entry_id,''),COALESCE(settlement_wallet_entry_id,''),COALESCE(error_message,''),created_at,updated_at,completed_at,COALESCE(saga_status,''),COALESCE(compensation_task_id,''),cancel_requested_at,COALESCE(cancel_reason,''),observed_cpu,observed_memory_mb,observed_at FROM xcloud_instance_plan_changes WHERE instance_id=? AND owner_id=? ORDER BY created_at DESC LIMIT 20`, c.Param("id"), user.ID)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -382,13 +390,110 @@ func getPlanChangesHandler(c *gin.Context) {
 	out := []planChangeRecord{}
 	for rows.Next() {
 		var v planChangeRecord
-		if err := rows.Scan(&v.ID, &v.InstanceID, &v.OwnerID, &v.SourcePlanID, &v.TargetPlanID, &v.SourceCPU, &v.SourceMemoryMB, &v.TargetCPU, &v.TargetMemoryMB, &v.RemainingSeconds, &v.DeltaFen, &v.ChargeFen, &v.RefundFen, &v.Status, &v.FundStatus, &v.AgentVerifyStatus, &v.AgentVerifiedAt, &v.AgentVerifyResult, &v.AgentVerifyError, &v.TaskID, &v.IdempotencyKey, &v.PendingWalletEntryID, &v.SettlementWalletEntryID, &v.ErrorMessage, &v.CreatedAt, &v.UpdatedAt, &v.CompletedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.InstanceID, &v.OwnerID, &v.SourcePlanID, &v.TargetPlanID, &v.SourceCPU, &v.SourceMemoryMB, &v.TargetCPU, &v.TargetMemoryMB, &v.RemainingSeconds, &v.DeltaFen, &v.ChargeFen, &v.RefundFen, &v.Status, &v.FundStatus, &v.AgentVerifyStatus, &v.AgentVerifiedAt, &v.AgentVerifyResult, &v.AgentVerifyError, &v.TaskID, &v.IdempotencyKey, &v.PendingWalletEntryID, &v.SettlementWalletEntryID, &v.ErrorMessage, &v.CreatedAt, &v.UpdatedAt, &v.CompletedAt, &v.SagaStatus, &v.CompensationTaskID, &v.CancelRequestedAt, &v.CancelReason, &v.ObservedCPU, &v.ObservedMemoryMB, &v.ObservedAt); err != nil {
 			internalError(c, err)
 			return
 		}
 		out = append(out, v)
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// cancelPlanChangeHandler makes cancellation a user-owned compensating
+// operation. It never releases money merely because the original resize is
+// uncertain: the source resources must first be observed or re-applied.
+func cancelPlanChangeHandler(c *gin.Context) {
+	user := c.MustGet("user").(oidcUser)
+	task, err := requestPlanChangeCompensation(c.Request.Context(), user.ID, c.Param("id"), c.Param("changeID"))
+	if err != nil {
+		businessError(c, err)
+		return
+	}
+	if task.ID != "" {
+		if err = enqueuePersistedTask(c.Request.Context(), task); err != nil {
+			c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "已请求回退原套餐；节点恢复后会自动继续"})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "已请求回退原套餐"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已确认实例仍为原套餐，暂扣资金已释放"})
+}
+
+func requestPlanChangeCompensation(ctx context.Context, ownerID, instanceID, changeID string) (controlTask, error) {
+	tx, err := beginSerializableTx(ctx)
+	if err != nil {
+		return controlTask{}, err
+	}
+	defer tx.Rollback()
+	var sourceCPU float64
+	var sourceMemory int
+	var status, saga string
+	var observedCPU sql.NullFloat64
+	var observedMemory sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT source_cpu,source_memory_mb,status,COALESCE(saga_status,''),observed_cpu,observed_memory_mb FROM xcloud_instance_plan_changes WHERE id=? AND instance_id=? AND owner_id=? FOR UPDATE`, changeID, instanceID, ownerID).Scan(&sourceCPU, &sourceMemory, &status, &saga, &observedCPU, &observedMemory); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return controlTask{}, errors.New("套餐变更不存在")
+		}
+		return controlTask{}, err
+	}
+	if saga == "cancelled" || status == "failed" {
+		return controlTask{}, errors.New("套餐变更已取消")
+	}
+	if saga == "settled" || status == "succeeded" {
+		return controlTask{}, errors.New("已结算的套餐变更不可取消")
+	}
+	if saga == "compensating" {
+		var existing controlTask
+		if err = scanControlTask(tx.QueryRowContext(ctx, `SELECT `+taskSelectFields+` FROM xcloud_tasks WHERE id=(SELECT compensation_task_id FROM xcloud_instance_plan_changes WHERE id=?)`, changeID), &existing); err == nil {
+			return existing, nil
+		}
+	}
+	var activeResize int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE instance_id=? AND action='resize' AND status IN (?,?)`, instanceID, taskPending, taskRunning).Scan(&activeResize); err != nil {
+		return controlTask{}, err
+	}
+	if observedCPU.Valid && observedMemory.Valid && math.Abs(observedCPU.Float64-sourceCPU) < 0.001 && int(observedMemory.Int64) == sourceMemory && activeResize == 0 {
+		// No old resize is still able to change the runtime after this observed
+		// source snapshot, so compensation can settle without another Agent call.
+		if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET desired_generation=desired_generation+1 WHERE id=? AND owner_id=?`, instanceID, ownerID); err != nil {
+			return controlTask{}, err
+		}
+		if err = cancelPlanChangeSettlementTx(ctx, tx, changeID, instanceID, ownerID, "用户取消；已观测到原套餐资源"); err != nil {
+			return controlTask{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return controlTask{}, err
+		}
+		return controlTask{}, nil
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET desired_generation=desired_generation+1 WHERE id=? AND owner_id=? AND status IN ('running','stopped')`, instanceID, ownerID); err != nil {
+		return controlTask{}, err
+	}
+	var generation int64
+	if err = tx.QueryRowContext(ctx, `SELECT desired_generation FROM xcloud_instances WHERE id=? FOR UPDATE`, instanceID).Scan(&generation); err != nil {
+		return controlTask{}, err
+	}
+	now := time.Now()
+	payload, _ := json.Marshal(map[string]any{"changeId": changeID, "cpu": sourceCPU, "memoryMB": sourceMemory, "wasRunning": true, "compensation": true})
+	task := controlTask{ID: newID("task"), InstanceID: instanceID, Action: "compensate-resize", IdempotencyKey: "plan-compensate:" + changeID, Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, DesiredGeneration: generation, Payload: payload}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error='套餐变更已由用户取消，等待补偿任务',finished_at=NOW(),updated_at=NOW() WHERE instance_id=? AND action='resize' AND status=?`, taskCanceled, instanceID, taskPending); err != nil {
+		return controlTask{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,desired_generation,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.InstanceID, task.Action, task.IdempotencyKey, task.Status, 0, task.RunAfter, now, now, task.DesiredGeneration, task.Payload); err != nil {
+		return controlTask{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='needs_review',saga_status='compensating',fund_status='reserved',compensation_task_id=?,cancel_requested_at=NOW(),cancel_reason='user_requested',updated_at=NOW() WHERE id=?`, task.ID, changeID); err != nil {
+		return controlTask{}, err
+	}
+	if err = writeAuditTx(ctx, tx, ownerID, "instance.plan_change.cancel", "plan_change", changeID, map[string]any{"instanceId": instanceID, "taskId": task.ID}); err != nil {
+		return controlTask{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return controlTask{}, err
+	}
+	appendTaskEvent(ctx, task.ID, "queued", "用户取消套餐变更：等待回退原套餐资源")
+	return task, nil
 }
 
 func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, expectedCurrentPlan string, quote planChangeQuote) (planChangeRecord, controlTask, error) {
@@ -433,7 +538,7 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 	}
 	delta := quote.DeltaFen
 	var active int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE instance_id=? AND status IN (?,?) AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize')`, instanceID, taskPending, taskRunning).Scan(&active); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE instance_id=? AND status IN (?,?) AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize','compensate-resize')`, instanceID, taskPending, taskRunning).Scan(&active); err != nil {
 		return planChangeRecord{}, controlTask{}, err
 	}
 	if active > 0 {
@@ -510,7 +615,7 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 			return planChangeRecord{}, controlTask{}, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instance_plan_changes (id,instance_id,owner_id,source_plan_id,target_plan_id,source_cpu,source_memory_mb,target_cpu,target_memory_mb,remaining_seconds,delta_fen,charge_fen,reservation_fen,refund_fen,status,fund_status,idempotency_key,pending_wallet_entry_id,before_snapshot,after_snapshot,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, changeID, instanceID, ownerID, currentPlan, targetPlanID, currentCPU, currentMem, targetCPU, targetMem, seconds, delta, charge, reservation, refund, "processing", "pending", idem, pending, before, after, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instance_plan_changes (id,instance_id,owner_id,source_plan_id,target_plan_id,source_cpu,source_memory_mb,target_cpu,target_memory_mb,remaining_seconds,delta_fen,charge_fen,reservation_fen,refund_fen,status,saga_status,fund_status,idempotency_key,pending_wallet_entry_id,before_snapshot,after_snapshot,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, changeID, instanceID, ownerID, currentPlan, targetPlanID, currentCPU, currentMem, targetCPU, targetMem, seconds, delta, charge, reservation, refund, "processing", "applying", "pending", idem, pending, before, after, now, now); err != nil {
 		return planChangeRecord{}, controlTask{}, err
 	}
 	exchangeID := newID("exchange")
@@ -540,8 +645,15 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET exchange_id=? WHERE id=?`, exchangeID, changeID); err != nil {
 		return planChangeRecord{}, controlTask{}, err
 	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET desired_generation=desired_generation+1 WHERE id=?`, instanceID); err != nil {
+		return planChangeRecord{}, controlTask{}, err
+	}
+	var generation int64
+	if err = tx.QueryRowContext(ctx, `SELECT desired_generation FROM xcloud_instances WHERE id=?`, instanceID).Scan(&generation); err != nil {
+		return planChangeRecord{}, controlTask{}, err
+	}
 	payload, _ := json.Marshal(map[string]any{"changeId": changeID, "cpu": targetCPU, "memoryMB": targetMem, "wasRunning": status == "running"})
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,payload) VALUES (?,?,?,?,?,?,?,?,?,?)`, taskID, instanceID, "resize", idem, taskPending, 0, now, now, now, payload); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,desired_generation,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, taskID, instanceID, "resize", idem, taskPending, 0, now, now, now, generation, payload); err != nil {
 		return planChangeRecord{}, controlTask{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET task_id=? WHERE id=?`, taskID, changeID); err != nil {
@@ -553,11 +665,69 @@ func createPlanChange(ctx context.Context, ownerID, instanceID, targetPlanID, ex
 	if err = tx.Commit(); err != nil {
 		return planChangeRecord{}, controlTask{}, err
 	}
-	return planChangeRecord{ID: changeID, InstanceID: instanceID, OwnerID: ownerID, SourcePlanID: currentPlan, TargetPlanID: targetPlanID, SourceCPU: currentCPU, SourceMemoryMB: currentMem, TargetCPU: targetCPU, TargetMemoryMB: targetMem, RemainingSeconds: seconds, DeltaFen: delta, ChargeFen: charge, RefundFen: refund, Status: "processing", TaskID: taskID, IdempotencyKey: idem, PendingWalletEntryID: pending, CreatedAt: now, UpdatedAt: now}, controlTask{ID: taskID, InstanceID: instanceID, Action: "resize", IdempotencyKey: idem, Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, Payload: payload}, nil
+	return planChangeRecord{ID: changeID, InstanceID: instanceID, OwnerID: ownerID, SourcePlanID: currentPlan, TargetPlanID: targetPlanID, SourceCPU: currentCPU, SourceMemoryMB: currentMem, TargetCPU: targetCPU, TargetMemoryMB: targetMem, RemainingSeconds: seconds, DeltaFen: delta, ChargeFen: charge, RefundFen: refund, Status: "processing", SagaStatus: "applying", TaskID: taskID, IdempotencyKey: idem, PendingWalletEntryID: pending, CreatedAt: now, UpdatedAt: now}, controlTask{ID: taskID, InstanceID: instanceID, Action: "resize", IdempotencyKey: idem, Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, DesiredGeneration: generation, Payload: payload}, nil
 }
 
 func markPlanChangeBlocked(ctx context.Context, changeID, message string) {
-	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='needs_review',fund_status='blocked',agent_verify_status='unavailable',agent_verified_at=NOW(),agent_verify_result=JSON_OBJECT('status','unknown'),agent_verify_error=?,updated_at=NOW() WHERE id=? AND status='processing'`, truncateError(message), changeID)
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='needs_review',saga_status='observing',fund_status='blocked',agent_verify_status='unavailable',agent_verified_at=NOW(),agent_verify_result=JSON_OBJECT('status','unknown'),agent_verify_error=?,updated_at=NOW() WHERE id=? AND status='processing'`, truncateError(message), changeID)
+}
+
+// markResizeTaskObserving translates an uncertain Agent result into the
+// independently recoverable plan-change saga. It intentionally does not
+// release the reservation: only an exact source observation may do that.
+func markResizeTaskObserving(ctx context.Context, task controlTask, message string) {
+	if task.Action != "resize" {
+		return
+	}
+	var payload struct {
+		ChangeID string `json:"changeId"`
+	}
+	if json.Unmarshal(task.Payload, &payload) == nil && payload.ChangeID != "" {
+		markPlanChangeBlocked(ctx, payload.ChangeID, message)
+	}
+}
+
+// reconcileBlockedPlanChanges keeps verification automatic after a transient
+// node or tunnel outage.  It never guesses about money: the existing
+// reconciliation only settles when the Agent reports exactly the requested
+// resources, or refunds when it reports exactly the previous resources.
+func reconcileBlockedPlanChanges(ctx context.Context) {
+	if instanceDB == nil {
+		return
+	}
+	rows, err := instanceDB.QueryContext(ctx, `SELECT `+taskSelectFields+`
+		FROM xcloud_tasks t
+		JOIN xcloud_instance_plan_changes p ON p.task_id=t.id
+		WHERE t.action='resize' AND t.status=? AND p.status='needs_review'
+		ORDER BY p.updated_at ASC LIMIT 100`, taskReview)
+	if err != nil {
+		log.Printf("load blocked plan changes: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var task controlTask
+		if err := scanControlTask(rows, &task); err != nil {
+			continue
+		}
+		reconcileRecoveredPlanChange(ctx, task)
+	}
+}
+
+// resumeBlockedPlanChange restores a blocked settlement only after an exact
+// Agent inspection has made its result deterministic. A freshly recovered
+// task may still be processing rather than blocked; that state is already
+// eligible for the same deterministic settlement. The conditional update
+// prevents an automatic check from racing an administrator's decision.
+func resumeBlockedPlanChange(ctx context.Context, changeID string) bool {
+	result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes
+		SET status='processing',agent_verify_error=NULL,updated_at=NOW()
+		WHERE id=? AND (status='processing' OR (status='needs_review' AND fund_status='blocked'))`, changeID)
+	if err != nil {
+		return false
+	}
+	affected, _ := result.RowsAffected()
+	return affected == 1
 }
 
 // reconcileRecoveredPlanChange resolves a resize task whose worker lease
@@ -603,7 +773,12 @@ func reconcileRecoveredPlanChange(ctx context.Context, task controlTask) {
 	}
 	actualCPU := float64(nano) / 1e9
 	actualMemory := int(memoryBytes / (1024 * 1024))
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET observed_cpu=?,observed_memory_mb=?,observed_runtime_status='observed',observed_at=NOW() WHERE id=?`, actualCPU, actualMemory, task.InstanceID)
+	_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET observed_cpu=?,observed_memory_mb=?,observed_at=NOW(),updated_at=NOW() WHERE id=?`, actualCPU, actualMemory, payload.ChangeID)
 	if math.Abs(actualCPU-targetCPU) < 0.001 && actualMemory == targetMemory {
+		if !resumeBlockedPlanChange(ctx, payload.ChangeID) {
+			return
+		}
 		if err = completePlanChange(ctx, task); err != nil {
 			markPlanChangeBlocked(ctx, payload.ChangeID, err.Error())
 			return
@@ -614,6 +789,9 @@ func reconcileRecoveredPlanChange(ctx context.Context, task controlTask) {
 		return
 	}
 	if math.Abs(actualCPU-sourceCPU) < 0.001 && actualMemory == sourceMemory {
+		if !resumeBlockedPlanChange(ctx, payload.ChangeID) {
+			return
+		}
 		failPlanChange(ctx, task, errors.New("Agent 配置仍为变更前资源"))
 		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET agent_verify_status='verified_old',agent_verified_at=NOW(),agent_verify_result=JSON_OBJECT('cpu',?,'memoryMB',?,'status','source') WHERE id=? AND status='failed'`, actualCPU, actualMemory, payload.ChangeID)
 		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status='failed',finished_at=NOW(),last_error='Agent 配置未发生变更',updated_at=NOW() WHERE id=? AND status='needs_review'`, task.ID)
@@ -765,7 +943,7 @@ func completePlanChange(ctx context.Context, task controlTask) error {
 	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_order_exchanges SET status='succeeded',completed_at=NOW() WHERE id=? AND status='processing'`, exchangeID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='succeeded',fund_status='settled',settlement_wallet_entry_id=?,agent_verify_status='verified',agent_verified_at=NOW(),agent_verify_result=JSON_OBJECT('cpu',?,'memoryMB',?,'status','target'),updated_at=NOW(),completed_at=NOW() WHERE id=? AND status='processing'`, nullableString(pendingEntry), p.CPU, p.MemoryMB, p.ChangeID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='succeeded',saga_status='settled',fund_status='settled',settlement_wallet_entry_id=?,agent_verify_status='verified',agent_verified_at=NOW(),agent_verify_result=JSON_OBJECT('cpu',?,'memoryMB',?,'status','target'),updated_at=NOW(),completed_at=NOW() WHERE id=? AND status='processing'`, nullableString(pendingEntry), p.CPU, p.MemoryMB, p.ChangeID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -802,9 +980,83 @@ func failPlanChange(ctx context.Context, task controlTask, cause error) {
 			return
 		}
 	}
-	_, _ = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='failed',fund_status='refunded',settlement_wallet_entry_id=?,agent_verify_status='not_checked',agent_verify_result=JSON_OBJECT('status','agent_error'),error_message=?,updated_at=NOW(),completed_at=NOW() WHERE id=? AND status='processing'`, entryID, truncateError(cause.Error()), p.ChangeID)
+	_, _ = tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='failed',saga_status='cancelled',fund_status='released',settlement_wallet_entry_id=?,agent_verify_status='not_checked',agent_verify_result=JSON_OBJECT('status','agent_error'),error_message=?,updated_at=NOW(),completed_at=NOW() WHERE id=? AND status='processing'`, entryID, truncateError(cause.Error()), p.ChangeID)
 	if exchangeID != "" {
 		_, _ = tx.ExecContext(ctx, `UPDATE xcloud_order_exchanges SET status='failed',completed_at=NOW() WHERE id=? AND status='processing'`, exchangeID)
 	}
 	_ = tx.Commit()
+}
+
+// completePlanChangeCompensation commits the user-requested rollback only
+// after the Agent has applied the source resources under the latest intent
+// generation.
+func completePlanChangeCompensation(ctx context.Context, task controlTask) error {
+	var payload struct {
+		ChangeID string  `json:"changeId"`
+		CPU      float64 `json:"cpu"`
+		MemoryMB int     `json:"memoryMB"`
+	}
+	if err := json.Unmarshal(task.Payload, &payload); err != nil || payload.ChangeID == "" {
+		return errors.New("套餐补偿任务缺少变更信息")
+	}
+	tx, err := beginSerializableTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var owner string
+	if err = tx.QueryRowContext(ctx, `SELECT owner_id FROM xcloud_instance_plan_changes WHERE id=? AND instance_id=? AND saga_status='compensating' FOR UPDATE`, payload.ChangeID, task.InstanceID).Scan(&owner); err != nil {
+		return err
+	}
+	if task.DesiredGeneration > 0 {
+		var current int64
+		if err = tx.QueryRowContext(ctx, `SELECT desired_generation FROM xcloud_instances WHERE id=? FOR UPDATE`, task.InstanceID).Scan(&current); err != nil {
+			return err
+		}
+		if current != task.DesiredGeneration {
+			return errors.New("补偿任务已被更新的实例意图取代")
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET cpu=?,memory_mb=?,spec=? WHERE id=? AND status IN ('running','stopped')`, payload.CPU, payload.MemoryMB, fmt.Sprintf("%g 核 / %d GB", payload.CPU, payload.MemoryMB/1024), task.InstanceID); err != nil {
+		return err
+	}
+	if err = cancelPlanChangeSettlementTx(ctx, tx, payload.ChangeID, task.InstanceID, owner, "用户取消后已回退原套餐资源"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func cancelPlanChangeSettlementTx(ctx context.Context, tx *sql.Tx, changeID, instanceID, ownerID, detail string) error {
+	var reservation int
+	var exchangeID string
+	var saga string
+	if err := tx.QueryRowContext(ctx, `SELECT reservation_fen,COALESCE(exchange_id,''),COALESCE(saga_status,'') FROM xcloud_instance_plan_changes WHERE id=? AND instance_id=? AND owner_id=? FOR UPDATE`, changeID, instanceID, ownerID).Scan(&reservation, &exchangeID, &saga); err != nil {
+		return err
+	}
+	if saga == "cancelled" {
+		return nil
+	}
+	var entryID any
+	if reservation > 0 {
+		var balance int
+		if err := tx.QueryRowContext(ctx, `SELECT balance_fen FROM xcloud_wallets WHERE user_id=? FOR UPDATE`, ownerID).Scan(&balance); err != nil {
+			return err
+		}
+		entryID = newID("wal")
+		if _, err := tx.ExecContext(ctx, `UPDATE xcloud_wallets SET balance_fen=balance_fen+?,updated_at=NOW() WHERE user_id=?`, reservation, ownerID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO xcloud_wallet_entries (id,user_id,amount_fen,balance_after_fen,entry_type,note,actor_id,plan_change_id,business_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())`, entryID, ownerID, reservation, balance+reservation, "plan_change_reservation_release", "用户取消套餐变更，释放暂扣", ownerID, changeID, "plan-change:cancel:"+changeID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE xcloud_instance_plan_changes SET status='failed',saga_status='cancelled',fund_status='released',settlement_wallet_entry_id=?,agent_verify_status='verified_old',agent_verify_error=NULL,error_message=?,updated_at=NOW(),completed_at=NOW() WHERE id=? AND saga_status<>'cancelled'`, entryID, detail, changeID); err != nil {
+		return err
+	}
+	if exchangeID != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE xcloud_order_exchanges SET status='cancelled',completed_at=NOW() WHERE id=? AND status='processing'`, exchangeID); err != nil {
+			return err
+		}
+	}
+	return nil
 }

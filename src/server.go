@@ -38,26 +38,29 @@ const oidcStateCookieName = "alemonx_oidc_state"
 const oidcVerifierCookieName = "alemonx_oidc_verifier"
 
 type instance struct {
-	ID               string     `json:"id"`
-	Name             string     `json:"name"`
-	Image            string     `json:"image"`
-	Version          string     `json:"version"`
-	Spec             string     `json:"spec"`
-	Status           string     `json:"status"`
-	RuntimeStatus    string     `json:"runtimeStatus,omitempty"`
-	DestroyAt        *time.Time `json:"destroyAt,omitempty"`
-	DestroyedAt      *time.Time `json:"destroyedAt,omitempty"`
-	PurgeAt          *time.Time `json:"purgeAt,omitempty"`
-	DestroyReason    string     `json:"destroyReason,omitempty"`
-	ArchivedAt       *time.Time `json:"archivedAt,omitempty"`
-	IP               string     `json:"ip"`
-	CreatedAt        string     `json:"createdAt"`
-	ServiceStartsAt  *time.Time `json:"serviceStartsAt,omitempty"`
-	ServiceExpiresAt *time.Time `json:"serviceExpiresAt,omitempty"`
-	CurrentPlanID    string     `json:"currentPlanId,omitempty"`
-	CurrentPlanName  string     `json:"currentPlanName,omitempty"`
-	PlanChangeStatus string     `json:"planChangeStatus,omitempty"`
-	PlanChangeID     string     `json:"planChangeId,omitempty"`
+	ID                   string     `json:"id"`
+	ResourceVersion      int64      `json:"resourceVersion,omitempty"`
+	Name                 string     `json:"name"`
+	Image                string     `json:"image"`
+	Version              string     `json:"version"`
+	Spec                 string     `json:"spec"`
+	Status               string     `json:"status"`
+	RuntimeStatus        string     `json:"runtimeStatus,omitempty"`
+	DestroyAt            *time.Time `json:"destroyAt,omitempty"`
+	DestroyedAt          *time.Time `json:"destroyedAt,omitempty"`
+	PurgeAt              *time.Time `json:"purgeAt,omitempty"`
+	DestroyReason        string     `json:"destroyReason,omitempty"`
+	ArchivedAt           *time.Time `json:"archivedAt,omitempty"`
+	IP                   string     `json:"ip"`
+	CreatedAt            string     `json:"createdAt"`
+	ServiceStartsAt      *time.Time `json:"serviceStartsAt,omitempty"`
+	ServiceExpiresAt     *time.Time `json:"serviceExpiresAt,omitempty"`
+	CurrentPlanID        string     `json:"currentPlanId,omitempty"`
+	CurrentPlanName      string     `json:"currentPlanName,omitempty"`
+	PlanChangeStatus     string     `json:"planChangeStatus,omitempty"`
+	PlanChangeID         string     `json:"planChangeId,omitempty"`
+	PlanChangeSagaStatus string     `json:"planChangeSagaStatus,omitempty"`
+	PlanChangeFundStatus string     `json:"planChangeFundStatus,omitempty"`
 	// ContainerName is also the basename of this instance's persisted data
 	// directory on its assigned node (for example xcloud-a1b2c3d4).
 	ContainerName string              `json:"containerName,omitempty"`
@@ -171,11 +174,14 @@ func Run() {
 	router.POST("/api/control/selfhosted/route/:action", requireSession, retiredSelfHosted)
 	router.POST("/api/control/selfhosted/revoke", requireSession, retiredSelfHosted)
 	router.GET("/api/instances", requireSession, listInstances)
+	router.GET("/api/instances/:id", requireSession, getInstanceResourceHandler)
+	router.PATCH("/api/instances/:id/desired", requireSession, patchInstanceDesiredHandler)
 	router.POST("/api/instances", requireSession, createInstance)
 	router.POST("/api/instances/:id/:action", requireSession, queueInstanceAction)
 	router.POST("/api/instances/:id/plan-change/quote", requireSession, planChangeQuoteHandler)
 	router.POST("/api/instances/:id/plan-change", requireSession, submitPlanChangeHandler)
 	router.GET("/api/instances/:id/plan-change", requireSession, getPlanChangesHandler)
+	router.POST("/api/instances/:id/plan-changes/:changeID/cancel", requireSession, cancelPlanChangeHandler)
 	router.DELETE("/api/instances/:id", requireSession, queueDeleteInstance)
 	router.GET("/api/instances/:id/logs", requireSession, instanceLogs)
 	router.GET("/api/instances/:id/files", requireSession, instanceFiles)

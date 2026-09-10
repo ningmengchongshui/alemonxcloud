@@ -18,6 +18,7 @@ import {
   useGetWalletQuery,
   useQuotePlanChangeMutation,
   useSubmitPlanChangeMutation,
+  useCancelPlanChangeMutation,
   useQuoteRenewalMutation,
   useRenewOrderMutation
 } from '@/services/cloudApi'
@@ -100,6 +101,7 @@ function taskLabel(action: string) {
       'restart': '重启中',
       'update': '更新中',
       'resize': '套餐变更中',
+      'compensate-resize': '套餐回退中',
       'reinstall': '重装中',
       'destroy': '销毁中',
       'purge': '清理中'
@@ -310,6 +312,8 @@ export function InstancesPage({
   const [quotePlanChange] = useQuotePlanChangeMutation()
   const [submitPlanChange, { isLoading: resizeLoading }] =
     useSubmitPlanChangeMutation()
+  const [cancelPlanChange, { isLoading: cancellingPlanChange }] =
+    useCancelPlanChangeMutation()
   const { data: wallet } = useGetWalletQuery()
   const dispatch = useDispatch()
   useEffect(() => {
@@ -559,6 +563,14 @@ export function InstancesPage({
             const lifecycle = item.status.toLowerCase()
             const runtime = item.runtimeStatus?.toLowerCase() || lifecycle
             const activeTask = item.activeTask ?? submittedTasks[item.id]
+            // A queued package rollback is only an intent and must not make
+            // the instance card unusable. Once its Agent command is running,
+            // normal lifecycle fencing applies again.
+            const agentCommandRunning = activeTask?.status === 'running'
+            const blocksControls = Boolean(activeTask) && !(
+              activeTask?.action === 'compensate-resize' &&
+              activeTask.status === 'pending'
+            )
             const planChangeBlocked = ['processing', 'needs_review'].includes(
               item.planChangeStatus || ''
             )
@@ -571,8 +583,7 @@ export function InstancesPage({
                 ? { label: '资源异常', tone: 'danger' as const }
                 : stateFor(item.status)
             const canOperate =
-              !activeTask &&
-              !planChangeBlocked &&
+              !blocksControls &&
               ![
                 'deploying',
                 'creating',
@@ -592,6 +603,8 @@ export function InstancesPage({
                 ? '退款后计划销毁'
                 : item.destroyReason === 'expired'
                   ? '到期后计划销毁'
+                  : item.destroyReason === 'deployment_failed'
+                    ? '失败部署清理计划'
                   : '已计划销毁'
             return (
               <article
@@ -629,8 +642,25 @@ export function InstancesPage({
                   </div>
                 </div>
                 {item.planChangeStatus === 'needs_review' && (
-                  <div className="mx-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
-                    套餐变更正在核实运行资源，暂不重复操作；资金状态将在核实后更新。
+                  <div className="mx-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                    <span>套餐变更的资金结算正在自动核实运行资源；重启、重装和销毁不受影响。核实完成前暂不能再次变更套餐。</span>
+                    {item.planChangeId &&
+                      ['observing', 'exception', 'compensating'].includes(
+                        item.planChangeSagaStatus || 'observing'
+                      ) && (
+                        <Button
+                          tone="secondary"
+                          disabled={cancellingPlanChange}
+                          onClick={() =>
+                            void cancelPlanChange({
+                              id: item.id,
+                              changeId: item.planChangeId!
+                            })
+                          }
+                        >
+                          取消并回退原套餐
+                        </Button>
+                      )}
                   </div>
                 )}
                 {item.planChangeStatus === 'failed' && (
@@ -670,7 +700,7 @@ export function InstancesPage({
                         disabled={
                           !item.ip ||
                           runtime !== 'running' ||
-                          Boolean(activeTask)
+                          agentCommandRunning
                         }
                         onClick={() =>
                           window.open(item.ip, '_blank', 'noopener,noreferrer')
@@ -681,7 +711,7 @@ export function InstancesPage({
                     )}
                     <Button
                       tone="secondary"
-                      disabled={runtime !== 'running' || Boolean(activeTask)}
+                      disabled={runtime !== 'running' || agentCommandRunning}
                       onClick={() => onOpenTerminal(item.id)}
                     >
                       {runtime === 'running' ? '终端' : '终端准备中'}
@@ -753,7 +783,8 @@ export function InstancesPage({
                       )}
                     {!selfHosted &&
                       ['running', 'stopped'].includes(lifecycle) &&
-                      canOperate && (
+                      canOperate &&
+                      !planChangeBlocked && (
                         <Button
                           tone="secondary"
                           onClick={() => openResize(item)}
@@ -798,7 +829,8 @@ export function InstancesPage({
                       )}
                     {lifecycle === 'destroy_scheduled' && !activeTask && (
                       <>
-                        {item.destroyReason === 'manual' && (
+                        {(item.destroyReason === 'manual' ||
+                          item.destroyReason === 'deployment_failed') && (
                           <Button
                             tone="secondary"
                             disabled={Boolean(activeTask)}
@@ -835,14 +867,24 @@ export function InstancesPage({
                       </Button>
                     )}
                     {lifecycle === 'deployment_failed' && !activeTask && (
-                      <Button
-                        tone="secondary"
-                        onClick={() =>
-                          setPending({ id: item.id, action: 'retry-deploy' })
-                        }
-                      >
-                        重试部署
-                      </Button>
+                      <>
+                        <Button
+                          tone="secondary"
+                          onClick={() =>
+                            setPending({ id: item.id, action: 'retry-deploy' })
+                          }
+                        >
+                          重试部署
+                        </Button>
+                        <Button
+                          tone="danger"
+                          onClick={() =>
+                            setPending({ id: item.id, action: 'destroy' })
+                          }
+                        >
+                          清理失败部署
+                        </Button>
+                      </>
                     )}
                   </div>
                 </div>

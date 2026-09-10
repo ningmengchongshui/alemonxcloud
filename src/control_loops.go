@@ -13,10 +13,23 @@ import (
 // Nodes are polled independently, so an unavailable Agent never becomes
 // schedulable simply because another node remains healthy.
 func startControlLoops() {
+	startDeclarativeReconciler()
 	go func() {
-		ticker := time.NewTicker(time.Minute)
+		// Desired writes enqueue immediately; this bounded scan is the recovery
+		// path for dropped notifications and must meet the 30 second SLO.
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
+			rows, err := instanceDB.QueryContext(context.Background(), `SELECT id FROM xcloud_instances WHERE reconcile_requested_at IS NOT NULL AND (reconciled_at IS NULL OR reconciled_at<reconcile_requested_at) LIMIT 500`)
+			if err == nil {
+				for rows.Next() {
+					var id string
+					if rows.Scan(&id) == nil {
+						requestInstanceReconcile(id)
+					}
+				}
+				rows.Close()
+			}
 			syncBenefitProgramStates(context.Background())
 			scheduleLifecycle(context.Background())
 			quarantineDangerousFailedTasks(context.Background())
@@ -26,6 +39,7 @@ func startControlLoops() {
 			syncInstanceStates(context.Background())
 			cleanupExpiredTaskDiagnostics(context.Background())
 			reconcileUncertainSelfHostedOperations(context.Background())
+			reconcileBlockedPlanChanges(context.Background())
 		}
 	}()
 	syncNodeHeartbeat(context.Background())
@@ -35,6 +49,7 @@ func startControlLoops() {
 	recoverExpiredTaskLeases(context.Background())
 	cleanupExpiredTaskDiagnostics(context.Background())
 	reconcileUncertainSelfHostedOperations(context.Background())
+	reconcileBlockedPlanChanges(context.Background())
 }
 
 // reconcileUncertainSelfHostedOperations closes the gap between a cancelled

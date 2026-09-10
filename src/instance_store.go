@@ -47,6 +47,9 @@ func initInstanceStoreWithDSN(dsn string) error {
 	return nil
 }
 
+// listStoredInstances returns only platform-managed instances for the main
+// “我的实例” surface. Self-hosted instances are deliberately listed through
+// their owning node's dedicated API instead.
 func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error) {
 	if instanceDB == nil {
 		memoryInstancesMu.RLock()
@@ -59,17 +62,19 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		}
 		return items, nil
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.cpu,i.memory_mb,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,COALESCE((SELECT MIN(o.service_starts_at) FROM xcloud_orders o WHERE o.instance_id=i.id AND o.owner_id=i.owner_id AND o.status IN ('active','expired') AND o.service_starts_at IS NOT NULL),i.created_at),i.expires_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE),COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,COALESCE(i.resource_version,1),i.name,i.image,i.version,i.spec,i.cpu,i.memory_mb,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,COALESCE((SELECT MIN(o.service_starts_at) FROM xcloud_orders o WHERE o.instance_id=i.id AND o.owner_id=i.owner_id AND o.status IN ('active','expired') AND o.service_starts_at IS NOT NULL),i.created_at),i.expires_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE),COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
 		FROM xcloud_instances i
 		LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id
 		LEFT JOIN xcloud_images img ON img.id=source_order.image_id
 		LEFT JOIN xcloud_tasks active_task ON active_task.id=(
 			SELECT t.id FROM xcloud_tasks t
 			WHERE t.instance_id=i.id AND t.status IN ('pending','running')
-			AND t.action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize')
+			AND t.action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize','compensate-resize')
 			ORDER BY t.created_at DESC LIMIT 1
 		)
-		WHERE i.owner_id=? AND i.archived_at IS NULL ORDER BY i.created_at DESC`, ownerID)
+		WHERE i.owner_id=? AND i.archived_at IS NULL
+		AND COALESCE(i.placement_type,'platform')<>'selfhosted'
+		ORDER BY i.created_at DESC`, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +88,7 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		var cpu float64
 		var memoryMB int
 		var activeTask instanceActiveTask
-		if err := rows.Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &cpu, &memoryMB, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &serviceStart, &serviceEnd, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
+		if err := rows.Scan(&item.ID, &item.ResourceVersion, &item.Name, &item.Image, &item.Version, &item.Spec, &cpu, &memoryMB, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &serviceStart, &serviceEnd, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Format("2006-01-02 15:04")
@@ -93,9 +98,9 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 			item.ServiceExpiresAt = &serviceEnd.Time
 		}
 		item.CurrentPlanID, item.CurrentPlanName = effectiveInstancePlan(ctx, ownerID, item.ID)
-		var changeStatus, changeID string
-		_ = instanceDB.QueryRowContext(ctx, `SELECT id,status FROM xcloud_instance_plan_changes WHERE instance_id=? ORDER BY created_at DESC LIMIT 1`, item.ID).Scan(&changeID, &changeStatus)
-		item.PlanChangeID, item.PlanChangeStatus = changeID, changeStatus
+		var changeStatus, changeID, changeSaga, changeFund string
+		_ = instanceDB.QueryRowContext(ctx, `SELECT id,status,COALESCE(saga_status,''),COALESCE(fund_status,'') FROM xcloud_instance_plan_changes WHERE instance_id=? ORDER BY created_at DESC LIMIT 1`, item.ID).Scan(&changeID, &changeStatus, &changeSaga, &changeFund)
+		item.PlanChangeID, item.PlanChangeStatus, item.PlanChangeSagaStatus, item.PlanChangeFundStatus = changeID, changeStatus, changeSaga, changeFund
 		if activeTask.ID != "" {
 			item.ActiveTask = &activeTask
 		}

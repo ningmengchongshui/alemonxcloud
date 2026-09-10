@@ -19,7 +19,7 @@ func TestExpiredDangerousLifecycleTasksAreQuarantined(t *testing.T) {
 			t.Fatalf("%s must require administrator review after lease expiry", action)
 		}
 	}
-	for _, action := range []string{"create", "start", "unknown"} {
+	for _, action := range []string{"create", "start", "compensate-resize", "unknown"} {
 		if dangerousRecoveredTask(action) {
 			t.Fatalf("%s is not an automatically quarantined dangerous action", action)
 		}

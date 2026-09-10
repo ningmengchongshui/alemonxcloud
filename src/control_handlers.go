@@ -169,6 +169,7 @@ func taskStatusHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "任务不存在"})
 		return
 	}
+	task.OperationStatus = operationStatus(task.Status)
 	c.JSON(http.StatusOK, task)
 }
 func instanceTasksHandler(c *gin.Context) {
@@ -188,6 +189,7 @@ func instanceTasksHandler(c *gin.Context) {
 			internalError(c, err)
 			return
 		}
+		t.OperationStatus = operationStatus(t.Status)
 		events, _ := taskEvents(c.Request.Context(), t.ID)
 		var diagnosticAvailable bool
 		_ = instanceDB.QueryRowContext(c.Request.Context(), `SELECT EXISTS(SELECT 1 FROM xcloud_task_diagnostics WHERE task_id=? AND owner_id=?)`, t.ID, c.MustGet("user").(oidcUser).ID).Scan(&diagnosticAvailable)
@@ -875,6 +877,13 @@ func discardReviewTask(c *gin.Context) {
 	}
 	if task.Action == "resize" {
 		failPlanChange(c.Request.Context(), task, errors.New("管理员作废套餐变更任务"))
+	} else if task.Action == "compensate-resize" {
+		var payload struct {
+			ChangeID string `json:"changeId"`
+		}
+		if json.Unmarshal(task.Payload, &payload) == nil && payload.ChangeID != "" {
+			markPlanChangeBlocked(c.Request.Context(), payload.ChangeID, "管理员作废套餐回退任务；等待重新发起取消")
+		}
 	}
 	user := c.MustGet("user").(oidcUser)
 	_, _ = instanceDB.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET active_task_id=NULL,active_task_token=NULL,active_task_expires_at=NULL WHERE active_task_id=?`, c.Param("id"))
@@ -923,6 +932,16 @@ func discardAllAdminTasks(c *gin.Context) {
 			if loadErr == nil {
 				failPlanChange(ctx, task, errors.New("管理员批量作废套餐变更任务"))
 			}
+		} else if item.action == "compensate-resize" {
+			task, loadErr := loadTask(ctx, item.id)
+			if loadErr == nil {
+				var payload struct {
+					ChangeID string `json:"changeId"`
+				}
+				if json.Unmarshal(task.Payload, &payload) == nil && payload.ChangeID != "" {
+					markPlanChangeBlocked(ctx, payload.ChangeID, "管理员批量作废套餐回退任务；等待重新发起取消")
+				}
+			}
 		}
 		_, _ = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances SET active_task_id=NULL,active_task_token=NULL,active_task_expires_at=NULL WHERE id=? AND active_task_id=?`, item.instanceID, item.id)
 		appendTaskEvent(ctx, item.id, "discarded_by_admin", "管理员一键作废异常任务；任务不会再次执行")
@@ -934,6 +953,10 @@ func discardAllAdminTasks(c *gin.Context) {
 }
 
 func queueInstanceAction(c *gin.Context) {
+	// Compatibility shim for one release cycle. New callers write the desired
+	// resource document through PATCH /instances/:id/desired.
+	c.Header("Deprecation", "true")
+	c.Header("Link", "</api/instances/"+c.Param("id")+"/desired>; rel=\"successor-version\"")
 	user := c.MustGet("user").(oidcUser)
 	item, ok := ownedInstance(c)
 	if !ok {
@@ -1052,8 +1075,27 @@ func queueInstanceReinstall(c *gin.Context, item instance, actorID string) {
 		return
 	}
 	now := time.Now()
-	task := controlTask{ID: newID("task"), InstanceID: item.ID, Action: "reinstall", IdempotencyKey: "reinstall:" + item.ID + ":" + now.UTC().Format(time.RFC3339Nano), Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, Payload: rawPayload}
-	if _, err = instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,payload) VALUES (?,?,?,?,?,?,?,?,?,?)`, task.ID, task.InstanceID, task.Action, task.IdempotencyKey, task.Status, 0, task.RunAfter, now, now, task.Payload); err != nil {
+	tx, err := beginSerializableTx(ctx)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE xcloud_instances SET desired_generation=desired_generation+1 WHERE id=? AND owner_id=? AND status IN ('running','stopped')`, item.ID, item.OwnerID); err != nil {
+		internalError(c, err)
+		return
+	}
+	var generation int64
+	if err = tx.QueryRowContext(ctx, `SELECT desired_generation FROM xcloud_instances WHERE id=? FOR UPDATE`, item.ID).Scan(&generation); err != nil {
+		internalError(c, err)
+		return
+	}
+	task := controlTask{ID: newID("task"), InstanceID: item.ID, Action: "reinstall", IdempotencyKey: "reinstall:" + item.ID + ":" + now.UTC().Format(time.RFC3339Nano), Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, DesiredGeneration: generation, Payload: rawPayload}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,desired_generation,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, task.ID, task.InstanceID, task.Action, task.IdempotencyKey, task.Status, 0, task.RunAfter, now, now, task.DesiredGeneration, task.Payload); err != nil {
+		internalError(c, err)
+		return
+	}
+	if err = tx.Commit(); err != nil {
 		internalError(c, err)
 		return
 	}
@@ -1073,7 +1115,9 @@ func activeLifecycleTask(ctx context.Context, instanceID string) (*controlTask, 
 	var taskID string
 	err := instanceDB.QueryRowContext(ctx, `SELECT id FROM xcloud_tasks
 		WHERE instance_id=? AND status IN ('pending','running')
-		AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize')
+		AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize','compensate-resize')
+		AND NOT (status='pending' AND action IN ('destroy','purge') AND run_after>NOW())
+		AND NOT (status='pending' AND action='compensate-resize')
 		ORDER BY created_at DESC LIMIT 1`, instanceID).Scan(&taskID)
 	if err == sql.ErrNoRows || taskID == "" {
 		return nil, nil
@@ -1168,13 +1212,25 @@ func scheduleManualDestroy(c *gin.Context, item instance, actorID string) {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例资源已销毁"})
 		return
 	}
-	runtimeStatus := item.Status
+	runtimeStatus := item.RuntimeStatus
 	if runtimeStatus != "running" && runtimeStatus != "stopped" {
+		runtimeStatus = "stopped"
+	}
+	expected := []string{"running", "stopped"}
+	reason := "manual"
+	if item.Status == "deployment_failed" {
+		// A failed create may have left a Compose file or data directory behind.
+		// Let its owner move it through the same retained destroy/purge lifecycle
+		// instead of leaving an undeletable failed instance forever.
+		expected = append(expected, "deployment_failed")
+		reason = "deployment_failed"
+	}
+	if item.Status != "running" && item.Status != "stopped" && item.Status != "deployment_failed" {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例当前不能计划销毁"})
 		return
 	}
 	destroyAt := time.Now().AddDate(0, 0, 7)
-	changed, err := transitionInstance(c.Request.Context(), instanceDB, item.ID, []string{"running", "stopped"}, "destroy_scheduled", &runtimeStatus, "destroy_reason='manual',destroy_at=?,destroyed_at=NULL,purge_at=NULL", destroyAt)
+	changed, err := transitionInstance(c.Request.Context(), instanceDB, item.ID, expected, "destroy_scheduled", &runtimeStatus, "destroy_reason=?,destroy_at=?,destroyed_at=NULL,purge_at=NULL", reason, destroyAt)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -1188,10 +1244,18 @@ func scheduleManualDestroy(c *gin.Context, item instance, actorID string) {
 		internalError(c, taskErr)
 		return
 	}
-	appendTaskEvent(c.Request.Context(), task.ID, "manual_destroy_scheduled", "用户手动计划销毁；将在计划时间执行")
-	_ = writeAudit(c.Request.Context(), actorID, "instance.destroy_scheduled", "instance", item.ID, map[string]any{"reason": "manual", "destroyAt": destroyAt, "taskId": task.ID})
-	_ = createNotification(c.Request.Context(), item.OwnerID, "instance_destroy_scheduled", "实例已计划销毁", fmt.Sprintf("服务将继续保持当前状态，实例资源预计于 %s 销毁。", destroyAt.Format("2006-01-02 15:04")), map[string]any{"instanceId": item.ID, "destroyAt": destroyAt, "reason": "manual"})
-	c.JSON(http.StatusAccepted, gin.H{"task": task, "message": "已计划 7 天后销毁实例资源", "destroyAt": destroyAt})
+	detail := "用户手动计划销毁；将在计划时间执行"
+	message := "已计划 7 天后销毁实例资源"
+	notification := fmt.Sprintf("服务将继续保持当前状态，实例资源预计于 %s 销毁。", destroyAt.Format("2006-01-02 15:04"))
+	if reason == "deployment_failed" {
+		detail = "用户计划清理失败部署；将在计划时间执行"
+		message = "已计划 7 天后清理失败部署资源"
+		notification = fmt.Sprintf("失败部署的残留容器资源预计于 %s 销毁，数据随后保留 30 天。", destroyAt.Format("2006-01-02 15:04"))
+	}
+	appendTaskEvent(c.Request.Context(), task.ID, "manual_destroy_scheduled", detail)
+	_ = writeAudit(c.Request.Context(), actorID, "instance.destroy_scheduled", "instance", item.ID, map[string]any{"reason": reason, "destroyAt": destroyAt, "taskId": task.ID})
+	_ = createNotification(c.Request.Context(), item.OwnerID, "instance_destroy_scheduled", "实例已计划销毁", notification, map[string]any{"instanceId": item.ID, "destroyAt": destroyAt, "reason": reason})
+	c.JSON(http.StatusAccepted, gin.H{"task": task, "message": message, "destroyAt": destroyAt})
 }
 
 func cancelManualDestroy(c *gin.Context, item instance, actorID string) {
@@ -1214,7 +1278,7 @@ func cancelManualDestroy(c *gin.Context, item instance, actorID string) {
 		c.JSON(http.StatusConflict, gin.H{"message": "正常到期的销毁计划请先续费后撤销"})
 		return
 	}
-	if item.DestroyReason != "manual" {
+	if item.DestroyReason != "manual" && item.DestroyReason != "deployment_failed" {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例销毁计划不可撤销"})
 		return
 	}
@@ -1222,7 +1286,16 @@ func cancelManualDestroy(c *gin.Context, item instance, actorID string) {
 	if runtimeStatus != "running" && runtimeStatus != "stopped" {
 		runtimeStatus = "stopped"
 	}
-	changed, err := transitionInstance(c.Request.Context(), instanceDB, item.ID, []string{"destroy_scheduled"}, runtimeStatus, &runtimeStatus, "destroy_at=NULL,destroy_reason=NULL")
+	// A manual destroy creates its durable task immediately, with run_after set
+	// to the end of the grace period. Cancel the state change and that deferred
+	// task in one transaction so neither can outlive the other.
+	tx, err := beginSerializableTx(c.Request.Context())
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	defer tx.Rollback()
+	changed, err := transitionInstance(c.Request.Context(), tx, item.ID, []string{"destroy_scheduled"}, runtimeStatus, &runtimeStatus, "destroy_at=NULL,destroy_reason=NULL")
 	if err != nil {
 		internalError(c, err)
 		return
@@ -1231,8 +1304,27 @@ func cancelManualDestroy(c *gin.Context, item instance, actorID string) {
 		c.JSON(http.StatusConflict, gin.H{"message": "实例状态已变化，请刷新后重试"})
 		return
 	}
+	result, err := tx.ExecContext(c.Request.Context(), `UPDATE xcloud_tasks
+		SET status=?,last_error='用户已取消计划销毁',finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW()
+		WHERE instance_id=? AND action='destroy' AND status=? AND run_after>NOW()`, taskCanceled, item.ID, taskPending)
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		c.JSON(http.StatusConflict, gin.H{"message": "销毁任务已开始或已到执行时间，不能取消"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		internalError(c, err)
+		return
+	}
 	_ = writeAudit(c.Request.Context(), actorID, "instance.destroy_cancelled", "instance", item.ID, nil)
-	_ = createNotification(c.Request.Context(), item.OwnerID, "instance_destroy_cancelled", "实例销毁计划已取消", "实例会继续保持当前运行状态。", map[string]any{"instanceId": item.ID})
+	message := "实例会继续保持当前运行状态。"
+	if item.DestroyReason == "deployment_failed" {
+		message = "失败部署清理计划已取消；你可以重试部署或稍后再次安排清理。"
+	}
+	_ = createNotification(c.Request.Context(), item.OwnerID, "instance_destroy_cancelled", "实例销毁计划已取消", message, map[string]any{"instanceId": item.ID})
 	c.JSON(http.StatusOK, gin.H{"message": "销毁计划已取消"})
 }
 

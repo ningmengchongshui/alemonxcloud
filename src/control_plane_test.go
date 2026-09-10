@@ -80,7 +80,7 @@ func TestLifecycleTaskIdempotencyKeyUsesScheduledTime(t *testing.T) {
 }
 
 func TestInstanceStateTransitionsAreExplicit(t *testing.T) {
-	for _, transition := range [][2]string{{"deploying", "running"}, {"deploying", "deployment_failed"}, {"deployment_failed", "deploying"}, {"destroy_scheduled", "destroyed"}, {"destroyed", "purged"}} {
+	for _, transition := range [][2]string{{"deploying", "running"}, {"deploying", "deployment_failed"}, {"deployment_failed", "deploying"}, {"deployment_failed", "destroy_scheduled"}, {"destroy_scheduled", "destroyed"}, {"destroyed", "purged"}} {
 		if !canTransitionInstance(transition[0], transition[1]) {
 			t.Fatalf("expected transition %s -> %s", transition[0], transition[1])
 		}
@@ -99,7 +99,7 @@ func TestTaskLeaseDuration(t *testing.T) {
 }
 
 func TestLifecycleTaskActionsRequireInstanceLock(t *testing.T) {
-	for _, action := range []string{"create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize"} {
+	for _, action := range []string{"create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize", "compensate-resize"} {
 		if !lifecycleTask(action) {
 			t.Fatalf("%s must acquire the instance lifecycle lock", action)
 		}

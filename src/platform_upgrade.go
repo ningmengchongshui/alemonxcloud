@@ -613,7 +613,7 @@ func renewWithWallet(ctx context.Context, ownerID, sourceOrderID string, months 
 	// lifecycle task remains a hard conflict.
 	allowExpiredDestroy := instanceStatus == "destroy_scheduled" && destroyReason == "expired"
 	var pendingLifecycleTasks int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE instance_id=? AND status IN (?,?) AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize') AND (? OR action<>'destroy')`, source.InstanceID, taskPending, taskRunning, allowExpiredDestroy).Scan(&pendingLifecycleTasks); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM xcloud_tasks WHERE instance_id=? AND status IN (?,?) AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize','compensate-resize') AND (? OR action<>'destroy')`, source.InstanceID, taskPending, taskRunning, allowExpiredDestroy).Scan(&pendingLifecycleTasks); err != nil {
 		return order{}, nil, err
 	}
 	if pendingLifecycleTasks > 0 {

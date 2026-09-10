@@ -38,6 +38,7 @@ export interface RechargeContact {
 
 export interface Instance {
   id: string
+	resourceVersion?: number
   name: string
   image: string
   version: string
@@ -50,7 +51,7 @@ export interface Instance {
   destroyAt?: string
   destroyedAt?: string
   purgeAt?: string
-  destroyReason?: 'refund' | 'expired' | 'manual' | 'legacy'
+  destroyReason?: 'refund' | 'expired' | 'manual' | 'deployment_failed' | 'legacy'
   archivedAt?: string
   ip: string
   createdAt: string
@@ -60,6 +61,16 @@ export interface Instance {
   currentPlanName?: string
   planChangeStatus?: 'processing' | 'succeeded' | 'failed' | 'needs_review'
   planChangeId?: string
+  planChangeSagaStatus?: 'applying' | 'observing' | 'compensating' | 'settled' | 'cancelled' | 'exception'
+  planChangeFundStatus?: 'pending' | 'reserved' | 'blocked' | 'settled' | 'released'
+}
+
+export interface InstanceResource {
+	metadata: { id: string; resourceVersion: number }
+	spec: { powerState?: 'running' | 'stopped'; recreateNonce?: string; deletionIntent?: 'absent' }
+	status: { lifecycle: string; runtimeState?: string; observedCpu?: number; observedMemoryMB?: number; observedAt?: string; observedGeneration: number }
+	conditions: Array<{ type: string; status: string; reason?: string; message?: string; operationId?: string; observedGeneration: number; updatedAt: string }>
+	operations: Task[]
 }
 
 export interface SelfHostedNode {

@@ -284,7 +284,12 @@ func recoverExpiredTaskLeases(ctx context.Context) {
 			continue
 		}
 		next, detail := taskPending, "消费者租约已过期，任务重新排队"
-		if dangerousRecoveredTask(task.Action) || !safeRecoveryState(ctx, task) {
+		// A compensation resize is declarative and carries the source package as
+		// its desired state. Retrying it is safer than stranding a user's cancel
+		// request in review after a worker crash.
+		if task.Action == "compensate-resize" {
+			detail = "套餐回退任务租约已过期，按原套餐期望状态重试"
+		} else if dangerousRecoveredTask(task.Action) || !safeRecoveryState(ctx, task) {
 			next, detail = taskReview, "历史生命周期任务已隔离，等待管理员复核"
 		}
 		result, err := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,run_after=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,recovery_count=recovery_count+1,last_error=?,updated_at=NOW() WHERE id=? AND status=? AND claim_expires_at<=NOW()`, next, detail, task.ID, taskRunning)

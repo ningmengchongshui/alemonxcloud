@@ -48,8 +48,12 @@ func canTransitionInstance(from, to string) bool {
 		return true
 	}
 	allowed := map[string]map[string]bool{
-		"deploying":         {"running": true, "deployment_failed": true},
-		"deployment_failed": {"deploying": true},
+		"deploying": {"running": true, "deployment_failed": true},
+		// A failed deployment normally remains available for retry.  It can also
+		// enter the ordinary destruction path when its owner explicitly chooses
+		// to clean up a partial deployment, so no instance record is a terminal
+		// orphan.
+		"deployment_failed": {"deploying": true, "destroy_scheduled": true},
 		"running":           {"stopped": true, "destroy_scheduled": true},
 		"stopped":           {"running": true, "destroy_scheduled": true},
 		"destroy_scheduled": {"running": true, "stopped": true, "destroyed": true},
@@ -221,6 +225,7 @@ type controlTask struct {
 	Action              string          `json:"action"`
 	IdempotencyKey      string          `json:"-"`
 	Status              string          `json:"status"`
+	OperationStatus     string          `json:"operationStatus,omitempty"`
 	LastError           string          `json:"lastError"`
 	Attempts            int             `json:"attempts"`
 	RunAfter            time.Time       `json:"runAfter"`
@@ -234,6 +239,9 @@ type controlTask struct {
 	RecoveryCount       int             `json:"recoveryCount"`
 	AgentOperationID    string          `json:"agentOperationId,omitempty"`
 	AgentOperationState string          `json:"agentOperationState,omitempty"`
+	DesiredGeneration   int64           `json:"desiredGeneration,omitempty"`
+	CancelRequestedAt   *time.Time      `json:"cancelRequestedAt,omitempty"`
+	CancelReason        string          `json:"cancelReason,omitempty"`
 	Payload             json.RawMessage `json:"-"`
 }
 type auditLog struct {
@@ -777,10 +785,10 @@ func nodeHeartbeatTTL() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-const taskSelectFields = `id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at,claimed_at,claim_expires_at,COALESCE(worker_id,''),COALESCE(execution_token,''),heartbeat_at,COALESCE(recovery_count,0),COALESCE(agent_operation_id,''),COALESCE(agent_operation_state,''),COALESCE(payload,JSON_OBJECT())`
+const taskSelectFields = `id,instance_id,action,idempotency_key,status,attempts,COALESCE(last_error,''),run_after,created_at,updated_at,claimed_at,claim_expires_at,COALESCE(worker_id,''),COALESCE(execution_token,''),heartbeat_at,COALESCE(recovery_count,0),COALESCE(agent_operation_id,''),COALESCE(agent_operation_state,''),COALESCE(desired_generation,0),cancel_requested_at,COALESCE(cancel_reason,''),COALESCE(payload,JSON_OBJECT())`
 
 func scanControlTask(scanner interface{ Scan(...any) error }, task *controlTask) error {
-	return scanner.Scan(&task.ID, &task.InstanceID, &task.Action, &task.IdempotencyKey, &task.Status, &task.Attempts, &task.LastError, &task.RunAfter, &task.CreatedAt, &task.UpdatedAt, &task.ClaimedAt, &task.ClaimExpiresAt, &task.WorkerID, &task.ExecutionToken, &task.HeartbeatAt, &task.RecoveryCount, &task.AgentOperationID, &task.AgentOperationState, &task.Payload)
+	return scanner.Scan(&task.ID, &task.InstanceID, &task.Action, &task.IdempotencyKey, &task.Status, &task.Attempts, &task.LastError, &task.RunAfter, &task.CreatedAt, &task.UpdatedAt, &task.ClaimedAt, &task.ClaimExpiresAt, &task.WorkerID, &task.ExecutionToken, &task.HeartbeatAt, &task.RecoveryCount, &task.AgentOperationID, &task.AgentOperationState, &task.DesiredGeneration, &task.CancelRequestedAt, &task.CancelReason, &task.Payload)
 }
 
 func loadTask(ctx context.Context, id string) (controlTask, error) {
@@ -849,7 +857,7 @@ func taskWorkerID() string {
 
 func lifecycleTask(action string) bool {
 	switch action {
-	case "create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize":
+	case "create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize", "compensate-resize":
 		return true
 	}
 	return false
@@ -909,6 +917,7 @@ func taskMayCallAgent(ctx context.Context, task controlTask, expected ...string)
 		WHERE t.id=? AND t.status=? AND t.worker_id=? AND t.execution_token=?
 		AND t.claim_expires_at>NOW() AND i.active_task_id=t.id
 		AND i.active_task_token=t.execution_token AND i.active_task_expires_at>NOW()
+		AND (t.desired_generation=0 OR t.desired_generation=i.desired_generation)
 		AND n.enabled=TRUE AND (n.node_kind<>? OR d.status='enabled')`
 	args := []any{task.ID, taskRunning, task.WorkerID, task.ExecutionToken, selfHostedNodeKind}
 	if len(expected) > 0 {
@@ -944,6 +953,9 @@ func finishTask(ctx context.Context, task controlTask, err error) (bool, error) 
 		if affected, _ := result.RowsAffected(); affected == 1 {
 			finishTaskAgentOperation(ctx, task, "succeeded", "")
 			releaseInstanceTaskLock(ctx, task)
+			setDeclarativeCondition(ctx, task, "Ready", "True", "Reconciled", "期望声明已被控制器调谐")
+			setDeclarativeCondition(ctx, task, "Reconciling", "False", "Reconciled", "当前没有等待中的声明调谐")
+			requestInstanceReconcile(task.InstanceID)
 			appendTaskEvent(ctx, task.ID, "succeeded", "任务执行成功")
 			return true, nil
 		}
@@ -962,12 +974,27 @@ func finishTask(ctx context.Context, task controlTask, err error) (bool, error) 
 		if affected, _ := result.RowsAffected(); affected == 1 {
 			finishTaskAgentOperation(ctx, task, "unknown", "控制面取消后需要回查最终容器状态")
 			releaseInstanceTaskLock(ctx, task)
+			markResizeTaskObserving(ctx, task, message+"；Agent 操作结果待确认")
 			appendTaskEvent(ctx, task.ID, "agent_operation_needs_review", "Agent 操作被取消，未执行反向 Docker 操作")
 			return true, nil
 		}
 		return false, nil
 	}
-	if task.Attempts >= 3 {
+	if task.Attempts >= 3 && task.Action == "resize" {
+		result, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND execution_token=? AND claim_expires_at>NOW()`, taskReview, message+"；正在核实实际资源", task.ID, taskRunning, workerID, task.ExecutionToken)
+		if e != nil {
+			return false, e
+		}
+		if affected, _ := result.RowsAffected(); affected == 1 {
+			finishTaskAgentOperation(ctx, task, "unknown", "套餐变更重试耗尽，等待资源观测")
+			releaseInstanceTaskLock(ctx, task)
+			markResizeTaskObserving(ctx, task, message)
+			appendTaskEvent(ctx, task.ID, "plan_change_observing", "套餐变更命令未确认；继续自动核实实际资源")
+			return true, nil
+		}
+		return false, nil
+	}
+	if task.Attempts >= 3 && task.Action != "compensate-resize" {
 		result, e := instanceDB.ExecContext(ctx, `UPDATE xcloud_tasks SET status=?,last_error=?,finished_at=NOW(),claimed_at=NULL,claim_expires_at=NULL,worker_id=NULL,execution_token=NULL,updated_at=NOW() WHERE id=? AND status=? AND worker_id=? AND execution_token=? AND claim_expires_at>NOW()`, taskFailed, message, task.ID, taskRunning, workerID, task.ExecutionToken)
 		if e != nil {
 			return false, e
@@ -1059,16 +1086,17 @@ func executeTask(ctx context.Context, task controlTask) error {
 		return err
 	}
 	expectedStates := map[string][]string{
-		"create":       {"deploying"},
-		"retry-deploy": {"deploying"},
-		"start":        {"stopped", "destroy_scheduled"},
-		"stop":         {"running", "destroy_scheduled"},
-		"update":       {"running"},
-		"resize":       {"running", "stopped"},
-		"restart":      {"running", "destroy_scheduled"},
-		"reinstall":    {"running", "stopped"},
-		"destroy":      {"destroy_scheduled"},
-		"purge":        {"destroyed"},
+		"create":            {"deploying"},
+		"retry-deploy":      {"deploying"},
+		"start":             {"stopped", "destroy_scheduled"},
+		"stop":              {"running", "destroy_scheduled"},
+		"update":            {"running"},
+		"resize":            {"running", "stopped"},
+		"compensate-resize": {"running", "stopped"},
+		"restart":           {"running", "destroy_scheduled"},
+		"reinstall":         {"running", "stopped"},
+		"destroy":           {"destroy_scheduled"},
+		"purge":             {"destroyed"},
 	}
 	if states := expectedStates[task.Action]; len(states) > 0 {
 		if err := taskMayCallAgent(ctx, task, states...); err != nil {
@@ -1256,7 +1284,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 			runtime := "running"
 			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{"running"}, "running", &runtime, "image_digest=?", digest)
 		}
-	case "resize":
+	case "resize", "compensate-resize":
 		if err = taskMayCallAgent(ctx, task, "running", "stopped"); err != nil {
 			return err
 		}
@@ -1281,7 +1309,11 @@ func executeTask(ctx context.Context, task controlTask) error {
 		}
 		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/resize", payload, nil)
 		if err == nil {
-			err = completePlanChange(ctx, task)
+			if task.Action == "compensate-resize" {
+				err = completePlanChangeCompensation(ctx, task)
+			} else {
+				err = completePlanChange(ctx, task)
+			}
 			if err != nil {
 				// The Agent has already applied the target resources. A settlement
 				// failure is ambiguous and must keep funds blocked for verification;
@@ -1427,9 +1459,25 @@ func scheduleInstanceTask(ctx context.Context, instanceID, action, actorID strin
 		return controlTask{}, errors.New("开发模式未配置 MySQL")
 	}
 	now := time.Now()
-	t := controlTask{ID: newID("task"), InstanceID: instanceID, Action: action, IdempotencyKey: action + ":" + instanceID + ":" + now.Format("20060102150405"), Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now}
-	_, err := instanceDB.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, t.ID, t.InstanceID, t.Action, t.IdempotencyKey, t.Status, 0, t.RunAfter, now, now)
+	tx, err := beginSerializableTx(ctx)
 	if err != nil {
+		return controlTask{}, err
+	}
+	defer tx.Rollback()
+	var specHash string
+	var generation int64
+	if err = tx.QueryRowContext(ctx, `SELECT desired_generation,COALESCE(spec_hash,'') FROM xcloud_instances WHERE id=? FOR UPDATE`, instanceID).Scan(&generation, &specHash); err != nil {
+		return controlTask{}, err
+	}
+	t := controlTask{ID: newID("task"), InstanceID: instanceID, Action: action, IdempotencyKey: action + ":" + instanceID + ":" + now.Format("20060102150405"), Status: taskPending, RunAfter: now, CreatedAt: now, UpdatedAt: now, DesiredGeneration: generation}
+	_, err = tx.ExecContext(ctx, `INSERT INTO xcloud_tasks (id,instance_id,action,idempotency_key,status,attempts,run_after,created_at,updated_at,desired_generation) VALUES (?,?,?,?,?,?,?,?,?,?)`, t.ID, t.InstanceID, t.Action, t.IdempotencyKey, t.Status, 0, t.RunAfter, now, now, t.DesiredGeneration)
+	if err != nil {
+		return controlTask{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xcloud_instance_operations (id,instance_id,generation,operation_kind,status,idempotency_key,spec_hash,task_id,requested_at,next_retry_at) VALUES (?,?,?,?,?,?,?,?,NOW(),NOW())`, "op-"+t.ID, instanceID, t.DesiredGeneration, action, "pending", t.IdempotencyKey, nullableString(specHash), t.ID); err != nil {
+		return controlTask{}, err
+	}
+	if err = tx.Commit(); err != nil {
 		return controlTask{}, err
 	}
 	_ = writeAudit(ctx, actorID, "instance."+action, "instance", instanceID, map[string]any{"taskId": t.ID})

@@ -89,6 +89,17 @@ export const cloudApi = createApi({
       query: () => '/instances',
       providesTags: ['Instances']
     }),
+	getInstanceResource: builder.query<import('@/types/cloud').InstanceResource, string>({
+	  query: id => `/instances/${id}`,
+	  providesTags: ['Instances']
+	}),
+	patchInstanceDesired: builder.mutation<
+	  { resource: import('@/types/cloud').InstanceResource; operation?: Task },
+	  { id: string; resourceVersion: number; idempotencyKey: string; powerState?: 'running' | 'stopped'; recreateNonce?: string }
+	>({
+	  query: ({ id, ...body }) => ({ url: `/instances/${id}/desired`, method: 'PATCH', body }),
+	  invalidatesTags: ['Instances']
+	}),
     getSelfHostedNodes: builder.query<SelfHostedNode[], void>({
       query: () => '/selfhosted/nodes',
       providesTags: ['Instances']
@@ -177,6 +188,16 @@ export const cloudApi = createApi({
         url: `/instances/${id}/plan-change`,
         method: 'POST',
         body
+      }),
+      invalidatesTags: ['Instances', 'Orders', 'Wallet']
+    }),
+    cancelPlanChange: builder.mutation<
+      { task?: Task; message?: string },
+      { id: string; changeId: string }
+    >({
+      query: ({ id, changeId }) => ({
+        url: `/instances/${id}/plan-changes/${changeId}/cancel`,
+        method: 'POST'
       }),
       invalidatesTags: ['Instances', 'Orders', 'Wallet']
     }),
@@ -669,6 +690,8 @@ export const cloudApi = createApi({
 export const {
   useGetSessionQuery,
   useGetInstancesQuery,
+	useGetInstanceResourceQuery,
+	usePatchInstanceDesiredMutation,
   useGetSelfHostedNodesQuery,
   useGetSelfHostedNodeQuery,
   useGetSelfHostedNodeInstancesQuery,
@@ -681,6 +704,7 @@ export const {
   useInstanceActionMutation,
   useQuotePlanChangeMutation,
   useSubmitPlanChangeMutation,
+  useCancelPlanChangeMutation,
   useGetInstanceLogsQuery,
   useLazyGetInstanceLogsQuery,
   useGetWorkspaceFilesQuery,
