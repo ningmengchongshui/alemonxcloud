@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { InstancesPage } from '@/pages/InstancesPage'
 import { SelfHostedInstanceCreateDialog } from '@/components/SelfHostedInstanceCreateDialog'
 import { SelfHostedNodeCreateDialog } from '@/components/SelfHostedNodeCreateDialog'
+import { SelfHostedNodeRenameDialog } from '@/components/SelfHostedNodeRenameDialog'
 import {
   Alert,
   Button,
@@ -15,8 +16,7 @@ import {
   useGetSelfHostedNodeQuery,
   useGetSelfHostedNodesQuery,
   useGetSelfHostedReadinessEventsQuery,
-  useRevokeSelfHostedNodeMutation,
-  useUpdateSelfHostedNodeMutation
+  useRevokeSelfHostedNodeMutation
 } from '@/services/cloudApi'
 
 type Props = {
@@ -139,9 +139,8 @@ export function SelfHostedControlPanel({
       skip: !detail || !nodeID
     })
   const [revoke, { isLoading: revoking }] = useRevokeSelfHostedNodeMutation()
-  const [rename, { isLoading: renaming }] = useUpdateSelfHostedNodeMutation()
-  const [editingName, setEditingName] = useState('')
   const [nodeCreateOpen, setNodeCreateOpen] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'instances'>('overview')
   const { data: readinessEvents = [] } = useGetSelfHostedReadinessEventsQuery(
@@ -222,22 +221,36 @@ export function SelfHostedControlPanel({
 
   return (
     <section className="page me-page space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <Button tone="ghost" className="min-h-9 px-2" onClick={onBack}>← 返回</Button>
-          <span className="h-5 w-px bg-slate-200 dark:bg-slate-700" aria-hidden="true" />
-          <div className="min-w-0"><h1 className="m-0 truncate text-lg font-bold text-slate-900 dark:text-white">{node.name}</h1><p className="m-0 mt-0.5 text-[11px] text-slate-500">自建节点</p></div>
-        </div>
-        <NodeStatus online={node.status === 'online'} ready={node.ready} />
-      </header>
-      <FilterTabs
-        label="节点详情"
-        value={activeTab}
-        onChange={setActiveTab}
-        items={[{ value: 'overview', label: '概览' }, { value: 'instances', label: `实例（${nodeInstances.length}）` }]}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button tone="ghost" className="min-h-9 px-2" onClick={onBack}>
+          ← 自建节点
+        </Button>
+        <FilterTabs
+          label="节点详情"
+          value={activeTab}
+          onChange={setActiveTab}
+          items={[
+            { value: 'overview', label: '概览' },
+            { value: 'instances', label: `实例（${nodeInstances.length}）` }
+          ]}
+        />
+      </div>
       {activeTab === 'overview' && <>
       <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4 dark:border-slate-700">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="m-0 truncate text-lg font-bold text-slate-900 dark:text-white">{node.name}</h1>
+              <NodeStatus online={node.status === 'online'} ready={node.ready} />
+            </div>
+            <p className="m-0 mt-1 text-xs text-slate-500 dark:text-slate-300">
+              Agent {node.agentVersion || '等待连接上报'} · 自建节点
+            </p>
+          </div>
+          <Button tone="secondary" onClick={() => setRenameOpen(true)}>
+            修改名称
+          </Button>
+        </div>
         <div className="grid gap-5 md:grid-cols-3">
           <CapacityMeter
             label="实例 CPU 已分配"
@@ -255,26 +268,6 @@ export function SelfHostedControlPanel({
             available={node.diskAvailableBytes}
             total={node.diskTotalBytes}
           />
-        </div>
-      </section>
-      <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-800">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <label className="min-w-0 flex-1 text-xs font-semibold text-slate-600 dark:text-slate-200">节点名称
-            <input value={editingName} onChange={event => setEditingName(event.target.value)} placeholder={node.name} maxLength={64} className="mt-1.5 block w-full max-w-md rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
-          </label>
-          <Button
-            tone="secondary"
-            loading={renaming}
-            disabled={!editingName.trim() || editingName.trim() === node.name}
-            onClick={() => {
-              void rename({ id: node.id, name: editingName.trim() })
-                .unwrap()
-                .then(() => setEditingName(''))
-                .catch(() => undefined)
-            }}
-          >
-            保存名称
-          </Button>
         </div>
       </section>
       {!node.ready && (
@@ -338,6 +331,13 @@ export function SelfHostedControlPanel({
         <SelfHostedInstanceCreateDialog
           node={node}
           onClose={() => setCreateOpen(false)}
+        />
+      )}
+      {renameOpen && (
+        <SelfHostedNodeRenameDialog
+          id={node.id}
+          name={node.name}
+          onClose={() => setRenameOpen(false)}
         />
       )}
     </section>
