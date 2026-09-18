@@ -1,3 +1,4 @@
+import { XCoinAmount } from '@/components/XCoinMark'
 import { useEffect, useState } from 'react'
 import {
   Alert,
@@ -13,7 +14,7 @@ import {
 import type { PlanPriceTier } from '@/types/cloud'
 
 const periods = [3, 6, 12]
-const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`
+const money = (fen: number) => <XCoinAmount value={(fen / 100).toFixed(2)} />
 const keyFor = (planID: string, months: number) => `${planID}:${months}`
 
 export function AdminPlanPriceTiersPage() {
@@ -65,9 +66,7 @@ export function AdminPlanPriceTiersPage() {
         setSuccess(`${plan.name} ${months} 个月阶梯折扣已保存。`)
         void tiers.refetch()
       })
-      .catch(value =>
-        setError(value?.data?.message ?? '保存失败，请稍后重试。')
-      )
+      .catch(() => undefined)
   }
 
   return (

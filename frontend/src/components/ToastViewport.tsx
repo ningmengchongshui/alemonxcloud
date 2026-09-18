@@ -11,10 +11,21 @@ const iconStyles = { error: 'bg-red-600', success: 'bg-emerald-600', info: 'bg-b
 
 export function ToastViewport() {
   const [items, setItems] = useState<ToastMessage[]>([])
-  useEffect(() => toast.subscribe(item => {
-    setItems(current => [...current.filter(value => value.title !== item.title), item].slice(-4))
-    window.setTimeout(() => setItems(current => current.filter(value => value.id !== item.id)), 5000)
-  }), [])
+  useEffect(() => {
+    const timers = new Set<number>()
+    const unsubscribe = toast.subscribe(item => {
+      setItems(current => [...current.filter(value => !(value.title === item.title && value.detail === item.detail && value.tone === item.tone)), item].slice(-4))
+      const timer = window.setTimeout(() => {
+        setItems(current => current.filter(value => value.id !== item.id))
+        timers.delete(timer)
+      }, item.tone === 'error' ? 10000 : 5000)
+      timers.add(timer)
+    })
+    return () => {
+      unsubscribe()
+      timers.forEach(timer => window.clearTimeout(timer))
+    }
+  }, [])
   if (items.length === 0) return null
   return (
     <div className="pointer-events-none fixed right-4 top-4 z-[120] grid w-[min(24rem,calc(100vw-2rem))] gap-2" aria-live="assertive" aria-atomic="true">

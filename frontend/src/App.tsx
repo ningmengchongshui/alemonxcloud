@@ -89,6 +89,7 @@ const superPaths: Record<SuperPage, string> = {
   'catalog': '/super/catalog',
   'images': '/super/images',
   'nodes': '/super/nodes',
+  'selfhosted-nodes': '/super/selfhosted-nodes',
   'orders': '/super/orders',
   'tasks': '/super/tasks',
   'users': '/super/users',

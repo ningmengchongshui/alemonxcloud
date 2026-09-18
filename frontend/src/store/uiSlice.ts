@@ -8,9 +8,9 @@ export interface WatchedTask {
 
 interface UiState {
   page: Page
-  watchedTask: WatchedTask | null
+  watchedTasks: WatchedTask[]
 }
-const initialState: UiState = { page: 'instances', watchedTask: null }
+const initialState: UiState = { page: 'instances', watchedTasks: [] }
 
 const uiSlice = createSlice({
   name: 'ui',
@@ -20,10 +20,12 @@ const uiSlice = createSlice({
       state.page = action.payload
     },
     watchTask: (state, action: PayloadAction<WatchedTask>) => {
-      state.watchedTask = action.payload
+      if (!state.watchedTasks.some(task => task.id === action.payload.id)) {
+        state.watchedTasks.push(action.payload)
+      }
     },
-    clearWatchedTask: state => {
-      state.watchedTask = null
+    clearWatchedTask: (state, action: PayloadAction<string>) => {
+      state.watchedTasks = state.watchedTasks.filter(task => task.id !== action.payload)
     }
   }
 })

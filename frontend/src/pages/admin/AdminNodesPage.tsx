@@ -1,10 +1,10 @@
 import { NodeConfigButton, NodeEditor } from '@/components/NodeEditor'
-import { useState } from 'react'
-import { useGetAdminNodesQuery, useLazyGetAdminRevokedSelfHostedReadinessEventsQuery } from '@/services/cloudApi'
+import { useGetAdminNodesQuery } from '@/services/cloudApi'
 import {
   Button,
   EmptyState,
   LoadingState,
+  PageHeader,
   StatusBadge
 } from '@/components/ui'
 import type { Node } from '@/types/cloud'
@@ -61,10 +61,13 @@ function Capacity({
   )
 }
 
-export function AdminNodesPage() {
-  const nodes = useGetAdminNodesQuery()
-  const [loadRevokedEvents, revokedEvents] = useLazyGetAdminRevokedSelfHostedReadinessEventsQuery()
-  const [diagnosticNodeID, setDiagnosticNodeID] = useState<string | null>(null)
+export function AdminNodesPage({
+  kind = 'platform'
+}: {
+  kind?: 'platform' | 'selfhosted'
+}) {
+  const selfHosted = kind === 'selfhosted'
+  const nodes = useGetAdminNodesQuery(kind)
   const values = nodes.data ?? []
   const online = values.filter(node => node.enabled && node.lastHeartbeatAt)
   const cpu = values.reduce((total, node) => total + node.cpuTotal, 0)
@@ -89,6 +92,16 @@ export function AdminNodesPage() {
 
   return (
     <section className="page super-page">
+      <PageHeader
+        eyebrow={selfHosted ? '用户自建 Agent' : '平台资源供给'}
+        title={selfHosted ? '自建节点' : '节点管理'}
+        description={
+          selfHosted
+            ? '仅展示仍启用的用户自建节点。已解绑的节点已废弃，不参与健康告警、容量统计或此列表。'
+            : '管理平台裸机节点、Agent 心跳和可调度资源容量。用户自建节点在“自建节点”中单独查看。'
+        }
+        actions={selfHosted ? undefined : <NodeEditor />}
+      />
       <div className="mb-5 flex flex-wrap items-center justify-between gap-x-5 gap-y-3 border-y border-slate-200 py-3 text-xs dark:border-slate-700">
         <p className="m-0 text-slate-500 dark:text-slate-300">
           <b className="text-slate-900 dark:text-white">
@@ -112,7 +125,6 @@ export function AdminNodesPage() {
             </b>
           </>}
         </p>
-        <NodeEditor />
       </div>
       {nodes.isLoading ? (
         <LoadingState>正在同步节点健康与资源容量…</LoadingState>
@@ -126,9 +138,13 @@ export function AdminNodesPage() {
         />
       ) : values.length === 0 ? (
         <EmptyState
-          title="尚未注册节点"
-          description="注册并完成 Agent 心跳后，节点才可承载新实例。"
-          action={<NodeEditor />}
+          title={selfHosted ? '没有启用中的自建节点' : '尚未注册节点'}
+          description={
+            selfHosted
+              ? '用户重新接入 xcloud-control 后，会在这里显示新的自建节点。'
+              : '注册并完成 Agent 心跳后，节点才可承载新实例。'
+          }
+          action={selfHosted ? undefined : <NodeEditor />}
         />
       ) : (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
@@ -167,7 +183,7 @@ export function AdminNodesPage() {
                       className="mb-0 mt-1 truncate text-[11px] text-slate-500 dark:text-slate-300"
                       title={node.agentURL}
                     >
-                      {node.agentURL}
+                      {selfHosted ? 'xcloud-control 隧道接入' : node.agentURL}
                     </p>
                     <p className="mb-0 mt-1.5 text-[10px] text-slate-400">
                       最近心跳：
@@ -220,14 +236,7 @@ export function AdminNodesPage() {
                     </StatusBadge>
                   </div>
                   <div className="flex justify-end lg:justify-self-end">
-                    {!node.enabled && node.nodeKind === 'selfhosted' ? (
-                      <Button
-                        tone="secondary"
-                        onClick={() => { setDiagnosticNodeID(node.id); void loadRevokedEvents(node.id) }}
-                      >
-                        查看撤销诊断
-                      </Button>
-                    ) : <NodeConfigButton node={node} />}
+                    {!selfHosted && <NodeConfigButton node={node} />}
                   </div>
                   {hasRisk && (
                     <div className="lg:col-span-4 flex flex-wrap gap-x-3 gap-y-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
@@ -247,16 +256,6 @@ export function AdminNodesPage() {
                         >
                           Agent：{node.lastAgentError}
                         </span>
-                      )}
-                    </div>
-                  )}
-                  {!node.enabled && node.nodeKind === 'selfhosted' && diagnosticNodeID === node.id && revokedEvents.data && (
-                    <div className="lg:col-span-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                      <b>撤销节点诊断（30 天）</b>
-                      {revokedEvents.data.length === 0 ? <span className="ml-2">没有保留的安全诊断。</span> : (
-                        <ul className="mb-0 mt-1 space-y-1 pl-4">
-                          {revokedEvents.data.slice(0, 5).map(event => <li key={`${event.createdAt}-${event.code}`}>{event.message}</li>)}
-                        </ul>
                       )}
                     </div>
                   )}

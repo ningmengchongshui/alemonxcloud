@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { ActionDialog } from '@/components/ActionDialog'
+import { XCoinAmount } from '@/components/XCoinMark'
 import {
   useAdjustAdminWalletMutation,
   useGetAdminAuditLogsQuery,
@@ -62,7 +64,7 @@ export function AdminOrdersPage() {
                     {order.imageName} · {order.imageVersion}
                   </small>
                 </td>
-                <td>¥{(order.amountFen / 100).toFixed(2)}</td>
+                <td><XCoinAmount value={(order.amountFen / 100).toFixed(2)} /></td>
                 <td>{order.status}</td>
               </tr>
             ))}
@@ -76,24 +78,24 @@ export function AdminOrdersPage() {
 export function AdminTasksPage() {
   const tasks = useGetAdminTasksQuery()
   const [retry] = useRetryTaskMutation()
-  const [resume] = useResumeReviewTaskMutation()
+  const [resume, resumeState] = useResumeReviewTaskMutation()
   const [discard] = useDiscardReviewTaskMutation()
   const [discardAll, discardAllState] = useDiscardAllAdminTasksMutation()
   const [loadDiagnostic] = useLazyGetAdminTaskDiagnosticQuery()
   const [diagnostic, setDiagnostic] = useState<{ taskID: string; detail: string } | null>(null)
+  const [confirmation, setConfirmation] = useState<{ kind: 'discard-all' } | { kind: 'resume'; id: string; action: string; instanceId: string } | null>(null)
   const abnormalCount = (tasks.data ?? []).filter(task =>
     ['failed', 'needs_review'].includes(task.status)
   ).length
 
   async function discardAbnormalTasks() {
-    if (
-      !window.confirm(
-        `确认一键作废全部 ${abnormalCount} 个失败或待复核任务吗？任务记录会保留，但不会再执行。`
-      )
-    )
-      return
-    await discardAll()
-    await tasks.refetch()
+    if (!confirmation || discardAllState.isLoading || resumeState.isLoading) return
+    try {
+      if (confirmation.kind === 'discard-all') await discardAll().unwrap()
+      else await resume(confirmation.id).unwrap()
+      setConfirmation(null)
+      void tasks.refetch()
+    } catch { /* cloudApi reports errors while the confirmation stays open. */ }
   }
   async function showDiagnostic(taskID: string) {
     try {
@@ -109,7 +111,7 @@ export function AdminTasksPage() {
             <Button
               tone="danger"
               loading={discardAllState.isLoading}
-              onClick={() => void discardAbnormalTasks()}
+              onClick={() => setConfirmation({ kind: 'discard-all' })}
             >
               一键作废异常任务（{abnormalCount}）
             </Button>
@@ -131,7 +133,7 @@ export function AdminTasksPage() {
               <th>实例</th>
               <th>状态</th>
               <th>尝试</th>
-              <th>ERROR</th>
+              <th>异常原因</th>
               <th />
             </tr>
           </thead>
@@ -165,15 +167,7 @@ export function AdminTasksPage() {
                     <>
                       <button
                         className="text-button"
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `确认恢复 ${task.action} 任务吗？这会再次对实例 ${task.instanceId.slice(0, 14)} 执行生命周期操作。`
-                            )
-                          ) {
-                            void resume(task.id)
-                          }
-                        }}
+                        onClick={() => setConfirmation({ kind: 'resume', id: task.id, action: task.action, instanceId: task.instanceId })}
                       >
                         确认恢复
                       </button>
@@ -197,6 +191,19 @@ export function AdminTasksPage() {
           </tbody>
         </table>
       </div>
+      {confirmation && (
+        <ActionDialog
+          title={confirmation.kind === 'discard-all' ? '作废异常任务' : '恢复任务'}
+          description={confirmation.kind === 'discard-all'
+            ? `将作废全部 ${abnormalCount} 个失败或待复核任务。任务记录会保留，但不会再次执行。`
+            : `将对实例 ${confirmation.instanceId} 重新执行 ${confirmation.action} 操作，可能影响实例运行。`}
+          confirmLabel={confirmation.kind === 'discard-all' ? '确认作废' : '确认恢复'}
+          danger
+          busy={discardAllState.isLoading || resumeState.isLoading}
+          onCancel={() => { if (!discardAllState.isLoading && !resumeState.isLoading) setConfirmation(null) }}
+          onConfirm={() => void discardAbnormalTasks()}
+        />
+      )}
       {diagnostic && (
         <Dialog title="节点诊断" description={`任务 ${diagnostic.taskID}`} onClose={() => setDiagnostic(null)}>
           <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{diagnostic.detail}</pre>
@@ -242,7 +249,7 @@ export function AdminUsersPage({
       }).unwrap()
       setAdjusting(null)
     } catch {
-      setAdjustError('余额变更未完成，请稍后重试。')
+      // Request errors are presented by the shared API notification handler.
     }
   }
   return (
@@ -358,7 +365,7 @@ export function AdminUsersPage({
                 当前余额
               </span>
               <b className="ml-2 text-slate-800 dark:text-white">
-                {(adjusting.balanceFen / 100).toFixed(2)} XCoin
+                <XCoinAmount value={(adjusting.balanceFen / 100).toFixed(2)} />
               </b>
             </div>
             <label
@@ -379,7 +386,7 @@ export function AdminUsersPage({
               </select>
             </label>
             <label className={dialogLabelClass} htmlFor="wallet-adjust-amount">
-              金额（XCoin）
+              调整金额
               <input
                 id="wallet-adjust-amount"
                 className={dialogFieldClass}

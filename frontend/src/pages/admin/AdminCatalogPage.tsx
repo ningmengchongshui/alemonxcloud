@@ -1,3 +1,4 @@
+import { XCoinAmount } from '@/components/XCoinMark'
 import { useState } from 'react'
 import { ActionDialog } from '@/components/ActionDialog'
 import { PlanEditor } from '@/components/PlanEditor'
@@ -41,7 +42,7 @@ export function AdminCatalogPage() {
                 <td>
                   {plan.cpu} 核 / {plan.memoryMB / 1024} GB
                 </td>
-                <td>¥{(plan.monthlyPriceFen / 100).toFixed(2)}</td>
+                <td><XCoinAmount value={(plan.monthlyPriceFen / 100).toFixed(2)} /></td>
                 <td>{plan.enabled ? '可售' : '已下架'}</td>
                 <td className="flex gap-2">
                   <button

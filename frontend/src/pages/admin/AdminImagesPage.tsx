@@ -9,7 +9,6 @@ import {
   useSaveAdminImageVersionMutation
 } from '@/services/cloudApi'
 import {
-  Alert,
   Button,
   Dialog,
   DialogFooter,
@@ -28,7 +27,6 @@ export function AdminImagesPage() {
   const [versionsFor, setVersionsFor] = useState<CatalogImage | null>(null)
   const [tag, setTag] = useState('')
   const [addingVersion, setAddingVersion] = useState(false)
-  const [versionError, setVersionError] = useState('')
   const [saveVersion, { isLoading: savingVersion }] =
     useSaveAdminImageVersionMutation()
   const [pullVersion, { isLoading: pulling }] =
@@ -103,7 +101,6 @@ export function AdminImagesPage() {
                       setVersionsFor(image)
                       setTag('')
                       setAddingVersion(false)
-                      setVersionError('')
                     }}
                   >
                     版本配置
@@ -138,7 +135,7 @@ export function AdminImagesPage() {
               void saveImage({ ...renaming, name: softwareName.trim(), terminalOnly: !webSupported })
                 .unwrap()
                 .then(() => setRenaming(null))
-                .catch(() => setVersionError('软件名称保存失败'))
+                .catch(() => undefined)
             }}
           >
             <label className={dialogLabelClass} htmlFor="software-display-name">
@@ -156,7 +153,6 @@ export function AdminImagesPage() {
               <input className="mt-0.5" type="checkbox" checked={webSupported} onChange={event => setWebSupported(event.target.checked)} />
               <span><b className="block">支持 Web 服务</b><small className="mt-1 block leading-5 text-slate-500 dark:text-slate-300">默认关闭。开启后，用户实例页会额外显示“Web 服务”入口；终端入口始终可用。</small></span>
             </label>
-            {versionError && <Alert tone="error">{versionError}</Alert>}
             <DialogFooter>
               <Button
                 type="button"
@@ -269,7 +265,7 @@ export function AdminImagesPage() {
                         setTag('')
                         setAddingVersion(false)
                       })
-                      .catch(() => setVersionError('版本保存失败'))
+                      .catch(() => undefined)
                   }
                 >
                   保存
@@ -280,7 +276,6 @@ export function AdminImagesPage() {
                 ＋ 新增版本
               </Button>
             )}
-            {versionError ? <Alert tone="error">{versionError}</Alert> : null}
             <div className="flex justify-end gap-2">
               <Button tone="secondary" onClick={() => setVersionsFor(null)}>
                 关闭

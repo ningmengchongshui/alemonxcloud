@@ -1624,8 +1624,14 @@ func notifyRetentionReminders(ctx context.Context) {
 	}
 }
 
-func listNodesWithUsage(ctx context.Context) ([]node, error) {
-	rows, err := instanceDB.QueryContext(ctx, `SELECT n.id,COALESCE(n.node_kind,'platform'),n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.disk_total_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(n.last_agent_error,''),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('destroy_scheduled','destroyed') THEN 1 ELSE 0 END),0),COALESCE((SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances ti ON ti.id=t.instance_id WHERE ti.node_id=n.id AND t.action IN ('destroy','purge') AND t.status IN ('pending','running')),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id GROUP BY n.id ORDER BY n.created_at`)
+func listNodesWithUsage(ctx context.Context, kind string) ([]node, error) {
+	query := `SELECT n.id,COALESCE(n.node_kind,'platform'),n.name,n.agent_url,n.cpu_total,n.memory_total_mb,n.cpu_detected,n.memory_detected_mb,n.enabled,n.last_heartbeat_at,COALESCE(n.docker_version,''),COALESCE(n.disk_available_bytes,0),COALESCE(n.disk_total_bytes,0),COALESCE(n.managed_container_count,0),COALESCE(n.agent_version,''),COALESCE(n.agent_api_version,0),COALESCE(n.agent_capabilities,JSON_ARRAY()),COALESCE(n.last_agent_error,''),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.cpu ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('deploying','running','stopped','destroy_scheduled') THEN i.memory_mb ELSE 0 END),0),COALESCE(SUM(CASE WHEN i.status IN ('destroy_scheduled','destroyed') THEN 1 ELSE 0 END),0),COALESCE((SELECT COUNT(*) FROM xcloud_tasks t JOIN xcloud_instances ti ON ti.id=t.instance_id WHERE ti.node_id=n.id AND t.action IN ('destroy','purge') AND t.status IN ('pending','running')),0) FROM xcloud_nodes n LEFT JOIN xcloud_instances i ON i.node_id=n.id WHERE COALESCE(n.node_kind,'platform')=?`
+	args := []any{kind}
+	if kind == selfHostedNodeKind {
+		query += ` AND n.enabled=TRUE`
+	}
+	query += ` GROUP BY n.id ORDER BY n.created_at`
+	rows, err := instanceDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1688,7 +1694,7 @@ func saveNode(ctx context.Context, value node) error {
 }
 
 func adminMetrics(ctx context.Context) (map[string]any, error) {
-	nodes, err := listNodesWithUsage(ctx)
+	nodes, err := listNodesWithUsage(ctx, "platform")
 	if err != nil {
 		return nil, err
 	}

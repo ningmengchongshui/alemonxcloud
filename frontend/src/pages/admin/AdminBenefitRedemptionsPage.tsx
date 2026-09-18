@@ -1,3 +1,4 @@
+import { XCoinAmount } from '@/components/XCoinMark'
 import {
   DataTable,
   EmptyState,
@@ -9,7 +10,7 @@ import {
   useGetAdminBenefitRedemptionsQuery
 } from '@/services/cloudApi'
 
-const money = (value: number) => `¥${(value / 100).toFixed(2)}`
+const money = (value: number) => <XCoinAmount value={(value / 100).toFixed(2)} />
 
 export function AdminBenefitRedemptionsPage() {
   const { data: items = [], isLoading } = useGetAdminBenefitRedemptionsQuery()
@@ -57,7 +58,7 @@ export function AdminBenefitRedemptionsPage() {
                 <td className="px-5 py-4">
                   <StatusBadge tone="success">
                     {item.discountAmountFen
-                      ? `立减 ${money(item.discountAmountFen)}`
+                      ? <>立减 {money(item.discountAmountFen)}</>
                       : `赠送 ${item.bonusDays} 天`}
                   </StatusBadge>
                 </td>

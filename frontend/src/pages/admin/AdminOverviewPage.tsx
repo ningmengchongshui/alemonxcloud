@@ -8,7 +8,7 @@ import { Alert, Button } from '@/components/ui'
 
 export function AdminOverviewPage() {
   const orders = useGetAdminOrdersQuery()
-  const nodes = useGetAdminNodesQuery()
+  const nodes = useGetAdminNodesQuery('platform')
   const tasks = useGetAdminTasksQuery()
   const metrics = useGetAdminMetricsQuery()
   const deploying = (orders.data ?? []).filter(

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useDispatch } from 'react-redux'
 import { ActionDialog } from '@/components/ActionDialog'
 import { BalanceSettlement } from '@/components/BalanceSettlement'
+import { XCoinAmount } from '@/components/XCoinMark'
 import {
   Alert,
   Button,
@@ -446,12 +447,17 @@ export function InstancesPage({
   }
   useEffect(() => {
     if (!renewing) return
+    setRenewQuote(null)
+    renewQuoteRequest.current += 1
     const timeout = window.setTimeout(
       () =>
         refreshRenewQuote(renewing, renewPromoCode.trim(), Number(months) || 1),
       renewPromoCode.trim() ? 350 : 0
     )
-    return () => window.clearTimeout(timeout)
+    return () => {
+      window.clearTimeout(timeout)
+      renewQuoteRequest.current += 1
+    }
   }, [months, renewPromoCode, renewing, refreshRenewQuote])
 
   function openResize(item: Instance) {
@@ -1053,7 +1059,7 @@ export function InstancesPage({
                 </span>
                 <b>
                   {renewQuote
-                    ? `¥${(renewQuote.listAmountFen / 100).toFixed(2)}`
+                    ? <XCoinAmount value={(renewQuote.listAmountFen / 100).toFixed(2)} />
                     : '—'}
                 </b>
               </div>
@@ -1067,7 +1073,7 @@ export function InstancesPage({
                   </span>
                   <b>
                     {renewQuote.discountAmountFen
-                      ? `-¥${(renewQuote.discountAmountFen / 100).toFixed(2)}`
+                      ? <XCoinAmount value={`-${(renewQuote.discountAmountFen / 100).toFixed(2)}`} />
                       : '权益已生效'}
                   </b>
                 </div>
@@ -1187,19 +1193,19 @@ export function InstancesPage({
                 <b
                   className={resizeQuote.deltaFen < 0 ? 'text-emerald-600' : ''}
                 >
-                  ¥{(Math.abs(resizeQuote.deltaFen) / 100).toFixed(2)}
+                  <XCoinAmount value={(Math.abs(resizeQuote.deltaFen) / 100).toFixed(2)} />
                 </b>
               </div>
               <div className="mt-2 border-t border-slate-200 pt-2 dark:border-slate-700">
                 <div className="flex justify-between">
                   <span>旧套餐剩余价值</span>
                   <b className="text-emerald-600">
-                    ¥{(resizeQuote.refundFen / 100).toFixed(2)}
+                    <XCoinAmount value={(resizeQuote.refundFen / 100).toFixed(2)} />
                   </b>
                 </div>
                 <div className="mt-1 flex justify-between">
                   <span>新套餐剩余价格</span>
-                  <b>¥{(resizeQuote.chargeFen / 100).toFixed(2)}</b>
+                  <b><XCoinAmount value={(resizeQuote.chargeFen / 100).toFixed(2)} /></b>
                 </div>
               </div>
               <div className="mt-2 border-t border-slate-200 pt-2 text-slate-500 dark:border-slate-700 dark:text-slate-300">

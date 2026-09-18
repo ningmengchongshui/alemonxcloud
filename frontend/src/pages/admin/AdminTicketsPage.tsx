@@ -7,7 +7,6 @@ import {
   useGetAdminTicketsQuery
 } from '@/services/cloudApi'
 import {
-  Alert,
   Button,
   EmptyState,
   FilterTabs,
@@ -145,7 +144,6 @@ export function AdminTicketsPage() {
 function AdminTicketDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const detail = useGetAdminTicketQuery(id)
   const [reply, setReply] = useState('')
-  const [error, setError] = useState('')
   const [send, { isLoading: sending }] = useAdminReplyTicketMutation()
   const [setStatus, { isLoading: settingStatus }] =
     useAdminUpdateTicketStatusMutation()
@@ -180,7 +178,6 @@ function AdminTicketDetail({ id, onBack }: { id: string; onBack: () => void }) {
           </Button>
         }
       />
-      {error && <Alert tone="error">{error}</Alert>}
       <div className="mb-4 flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300">
         {ticket.instanceId && (
           <span className="rounded-full bg-slate-100 px-3 py-1.5 dark:bg-slate-800">
@@ -203,9 +200,7 @@ function AdminTicketDetail({ id, onBack }: { id: string; onBack: () => void }) {
               priority: event.target.value as TicketPriority
             })
               .unwrap()
-              .catch(value =>
-                setError(value?.data?.message ?? '优先级更新失败')
-              )
+              .catch(() => undefined)
           }
         >
           <option value="normal">普通</option>
@@ -220,9 +215,7 @@ function AdminTicketDetail({ id, onBack }: { id: string; onBack: () => void }) {
               onClick={() =>
                 void setStatus({ id, status: 'in_progress' })
                   .unwrap()
-                  .catch(value =>
-                    setError(value?.data?.message ?? '状态更新失败')
-                  )
+                  .catch(() => undefined)
               }
             >
               标记处理中
@@ -233,7 +226,7 @@ function AdminTicketDetail({ id, onBack }: { id: string; onBack: () => void }) {
               onClick={() =>
                 void setStatus({ id, status: 'closed' })
                   .unwrap()
-                  .catch(value => setError(value?.data?.message ?? '关闭失败'))
+                  .catch(() => undefined)
               }
             >
               关闭工单
@@ -267,17 +260,15 @@ function AdminTicketDetail({ id, onBack }: { id: string; onBack: () => void }) {
           helper="说明处理结果、下一步安排，或请用户补充必要的信息。"
           placeholder="请输入处理结果或需要用户补充的信息"
           value={reply}
-          error={error}
           sending={sending}
           onChange={value => {
             setReply(value)
-            setError('')
           }}
           onSubmit={() =>
             void send({ id, body: reply })
               .unwrap()
               .then(() => setReply(''))
-              .catch(value => setError(value?.data?.message ?? '回复失败'))
+              .catch(() => undefined)
           }
         />
       )}

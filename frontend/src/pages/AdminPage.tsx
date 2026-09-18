@@ -25,7 +25,8 @@ export function AdminPage({
 }) {
   if (page === 'catalog') return <AdminCatalogPage />
   if (page === 'images') return <AdminImagesPage />
-  if (page === 'nodes') return <AdminNodesPage />
+  if (page === 'nodes') return <AdminNodesPage kind="platform" />
+  if (page === 'selfhosted-nodes') return <AdminNodesPage kind="selfhosted" />
   if (page === 'orders') return <AdminOrdersPage />
   if (page === 'tasks') return <AdminTasksPage />
   if (page === 'tickets') return <AdminTicketsPage />

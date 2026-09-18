@@ -1,3 +1,4 @@
+import { XCoinAmount } from '@/components/XCoinMark'
 import { useState } from 'react'
 import {
   Alert,
@@ -44,7 +45,7 @@ const fresh = (): BenefitProgram => ({
   codePerUserLimit: 0
 })
 
-const money = (value: number) => `¥${(value / 100).toFixed(2)}`
+const money = (value: number) => <XCoinAmount value={(value / 100).toFixed(2)} />
 const split = (value: string) =>
   value
     .split(/[\s,]+/)

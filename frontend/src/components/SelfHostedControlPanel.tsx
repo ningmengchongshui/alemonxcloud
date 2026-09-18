@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { InstancesPage } from '@/pages/InstancesPage'
+import { ActionDialog } from '@/components/ActionDialog'
 import { SelfHostedInstanceCreateDialog } from '@/components/SelfHostedInstanceCreateDialog'
 import { SelfHostedNodeCreateDialog } from '@/components/SelfHostedNodeCreateDialog'
 import { SelfHostedNodeRenameDialog } from '@/components/SelfHostedNodeRenameDialog'
@@ -141,6 +142,7 @@ export function SelfHostedControlPanel({
   const [revoke, { isLoading: revoking }] = useRevokeSelfHostedNodeMutation()
   const [nodeCreateOpen, setNodeCreateOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
+  const [revokeOpen, setRevokeOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'instances'>('overview')
   const { data: readinessEvents = [] } = useGetSelfHostedReadinessEventsQuery(
@@ -300,9 +302,7 @@ export function SelfHostedControlPanel({
           <Button
             tone="danger"
             loading={revoking}
-            onClick={() => {
-              if (window.confirm('确认撤销该自建节点吗？')) void revoke(node.id)
-            }}
+            onClick={() => setRevokeOpen(true)}
           >
             撤销节点
           </Button>
@@ -331,6 +331,23 @@ export function SelfHostedControlPanel({
         <SelfHostedInstanceCreateDialog
           node={node}
           onClose={() => setCreateOpen(false)}
+        />
+      )}
+      {revokeOpen && (
+        <ActionDialog
+          title="撤销节点"
+          description={`撤销“${node.name}”会立即断开 Agent，已部署实例将无法继续通过平台管理。请确认已保存所需信息。`}
+          confirmLabel="确认撤销"
+          danger
+          busy={revoking}
+          onCancel={() => { if (!revoking) setRevokeOpen(false) }}
+          onConfirm={() => {
+            if (revoking) return
+            void revoke(node.id).unwrap().then(() => {
+              setRevokeOpen(false)
+              onBack?.()
+            }).catch(() => undefined)
+          }}
         />
       )}
       {renameOpen && (

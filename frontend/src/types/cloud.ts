@@ -12,6 +12,7 @@ export type SuperPage =
   | 'catalog'
   | 'images'
   | 'nodes'
+  | 'selfhosted-nodes'
   | 'orders'
   | 'tasks'
   | 'users'

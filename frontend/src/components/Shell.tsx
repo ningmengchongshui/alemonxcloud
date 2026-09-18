@@ -104,7 +104,8 @@ export function Shell({
       items: [
         { key: 'catalog', icon: '▤', label: '商品目录' },
         { key: 'images', icon: '◇', label: '镜像来源' },
-        { key: 'nodes', icon: '◌', label: '节点管理' }
+        { key: 'nodes', icon: '◌', label: '节点管理' },
+        { key: 'selfhosted-nodes', icon: '◌', label: '自建节点' }
       ]
     },
     {

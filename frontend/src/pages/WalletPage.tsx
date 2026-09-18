@@ -68,7 +68,7 @@ export function WalletPage() {
                   </p>
                   <small className="mt-2 block text-[11px] text-slate-400">
                     {new Date(entry.createdAt).toLocaleString('zh-CN')} ·
-                    变动后余额 {(entry.balanceAfterFen / 100).toFixed(2)} XCoin
+                    变动后余额 <XCoinAmount value={(entry.balanceAfterFen / 100).toFixed(2)} />
                     {entry.orderId
                       ? ` · 订单 ${entry.orderId.slice(0, 14)}`
                       : ''}
@@ -81,8 +81,7 @@ export function WalletPage() {
                       : 'text-red-700 dark:text-red-300'
                   }
                 >
-                  {entry.amountFen >= 0 ? '+' : ''}
-                  {(entry.amountFen / 100).toFixed(2)} XCoin
+                  <XCoinAmount value={`${entry.amountFen >= 0 ? '+' : ''}${(entry.amountFen / 100).toFixed(2)}`} />
                 </strong>
               </article>
             ))}

@@ -1,4 +1,5 @@
 import { Button, EmptyState, LoadingState, PageHeader } from '@/components/ui'
+import { XCoinAmount } from '@/components/XCoinMark'
 import {
   useGetAdminWalletEntriesQuery,
   useSearchAdminUsersQuery
@@ -34,7 +35,7 @@ export function WalletHistoryPage({
         title="钱包流水"
         description={
           user
-            ? `${user.username} · 当前余额 ${(user.balanceFen / 100).toFixed(2)} XCoin`
+            ? user.username
             : `用户 ${userID}`
         }
         actions={
@@ -45,6 +46,7 @@ export function WalletHistoryPage({
       />
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
         <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+          {user && <p className="mb-2 text-sm font-semibold text-slate-800 dark:text-white">当前余额 <XCoinAmount value={(user.balanceFen / 100).toFixed(2)} /></p>}
           <p className="m-0 text-xs text-slate-500 dark:text-slate-300">
             每笔变动均记录金额、操作原因、变动后余额及操作人。
           </p>
@@ -72,7 +74,7 @@ export function WalletHistoryPage({
                   </p>
                   <small className="mt-2 block text-[11px] text-slate-400">
                     {new Date(entry.createdAt).toLocaleString('zh-CN')} ·
-                    变动后余额 {(entry.balanceAfterFen / 100).toFixed(2)} XCoin
+                    变动后余额 <XCoinAmount value={(entry.balanceAfterFen / 100).toFixed(2)} />
                     {entry.actorId ? ` · 操作人 ${entry.actorId}` : ''}
                   </small>
                 </div>
@@ -83,8 +85,7 @@ export function WalletHistoryPage({
                       : 'text-red-700 dark:text-red-300'
                   }
                 >
-                  {entry.amountFen >= 0 ? '+' : ''}
-                  {(entry.amountFen / 100).toFixed(2)} XCoin
+                  <XCoinAmount value={`${entry.amountFen >= 0 ? '+' : ''}${(entry.amountFen / 100).toFixed(2)}`} />
                 </strong>
               </article>
             ))}

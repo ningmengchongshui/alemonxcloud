@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, LoadingState } from '@/components/ui'
+import { Button, LoadingState } from '@/components/ui'
+import { toast } from '@/services/toast'
 import {
   useGetAdminRechargeContactQuery,
   useSaveAdminRechargeContactMutation
@@ -13,7 +14,6 @@ export function AdminSettingsPage() {
   const [save, { isLoading: saving }] = useSaveAdminRechargeContactMutation()
   const [name, setName] = useState('')
   const [url, setURL] = useState('')
-  const [error, setError] = useState('')
   useEffect(() => {
     if (contact.data) {
       setName(contact.data.name)
@@ -39,16 +39,10 @@ export function AdminSettingsPage() {
           className="mt-5 space-y-4"
           onSubmit={event => {
             event.preventDefault()
-            setError('')
             void save({ name: name.trim(), url: url.trim() })
               .unwrap()
-              .catch(value =>
-                setError(
-                  typeof value?.data?.message === 'string'
-                    ? value.data.message
-                    : '保存失败，请稍后重试'
-                )
-              )
+              .then(() => toast.success('配置已保存'))
+              .catch(() => undefined)
           }}
         >
           <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-100">
@@ -71,7 +65,6 @@ export function AdminSettingsPage() {
               placeholder="https://example.com/group"
             />
           </label>
-          {error && <Alert tone="error">{error}</Alert>}
           <div className="flex justify-end">
             <Button
               type="submit"

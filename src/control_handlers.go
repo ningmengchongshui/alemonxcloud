@@ -635,7 +635,12 @@ func adminRejectOrder(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 func adminNodes(c *gin.Context) {
-	items, err := listNodesWithUsage(c.Request.Context())
+	kind := strings.TrimSpace(c.DefaultQuery("kind", "platform"))
+	if kind != "platform" && kind != selfHostedNodeKind {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "节点类型无效"})
+		return
+	}
+	items, err := listNodesWithUsage(c.Request.Context(), kind)
 	if err != nil {
 		internalError(c, err)
 		return

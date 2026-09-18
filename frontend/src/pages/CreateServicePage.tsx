@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch } from 'react-redux'
 import { BalanceSettlement } from '@/components/BalanceSettlement'
+import { XCoinAmount } from '@/components/XCoinMark'
 import {
   useGetWalletQuery,
   usePurchaseMutation,
@@ -17,7 +18,7 @@ import { trackConsoleEvent } from '@/services/telemetry'
 import { watchTask } from '@/store/uiSlice'
 import type { Catalog, Plan, PriceQuote } from '@/types/cloud'
 
-const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`
+const money = (fen: number) => <XCoinAmount value={(fen / 100).toFixed(2)} />
 const subscriptionMonths = [1, 3, 6, 12]
 const discountLabel = (plan: Plan | undefined, months: number) => {
   const bps = plan?.tierDiscounts?.[months]
@@ -138,6 +139,7 @@ export function CreateServicePage({
     [months, quotePurchase, selectedImage, selectedPlan]
   )
   useEffect(() => {
+    quoteRequest.current += 1
     setQuote(null)
     setPromoError('')
     if (!selectedImage || !selectedPlan) return
@@ -145,11 +147,14 @@ export function CreateServicePage({
       () => preview(promoCode.trim()),
       promoCode.trim() ? 350 : 0
     )
-    return () => window.clearTimeout(timeout)
+    return () => {
+      window.clearTimeout(timeout)
+      quoteRequest.current += 1
+    }
   }, [selectedImage, selectedPlan, months, promoCode, preview])
 
   function submit() {
-    if (!selectedImage || !selectedPlan) return
+    if (!selectedImage || !selectedPlan || !canPurchase || quoting || saving) return
     const started = performance.now()
     trackConsoleEvent('create_service', 'me', 'create', { result: 'started' })
     void purchase({
@@ -408,7 +413,7 @@ export function CreateServicePage({
                   </span>
                   <b>
                     {quote.discountAmountFen
-                      ? `-${money(quote.discountAmountFen)}`
+                      ? <XCoinAmount value={`-${(quote.discountAmountFen / 100).toFixed(2)}`} />
                       : '权益已生效'}
                   </b>
                 </div>

@@ -265,7 +265,7 @@ export function OrdersPage({
         <Dialog
           eyebrow="订单退款"
           title="确认退款"
-          description="退款将退回 XCoin 钱包，不会立即停止当前实例。"
+          description="退款将退回钱包，不会立即停止当前实例。"
           onClose={() => setRefunding(null)}
         >
           {quoteLoading ? (
@@ -307,8 +307,7 @@ export function OrdersPage({
                     退回钱包
                   </dt>
                   <dd className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">
-                    {((refundQuote.refundAmountFen ?? 0) / 100).toFixed(2)}{' '}
-                    XCoin
+                    <XCoinAmount value={((refundQuote.refundAmountFen ?? 0) / 100).toFixed(2)} />
                   </dd>
                 </div>
                 <div>

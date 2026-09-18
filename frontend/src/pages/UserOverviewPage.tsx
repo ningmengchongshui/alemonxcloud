@@ -28,8 +28,9 @@ export function UserOverviewPage({
   const progressing = instances.filter(item =>
     isProgressing(item.status)
   ).length
+  const failed = instances.filter(item => ['failed', 'error', 'deployment_failed'].includes(item.status.toLowerCase())).length
   return (
-    <section className="page me-page dashboard-page flex justify-between">
+    <section className="page me-page dashboard-page flex flex-wrap items-start justify-between gap-4">
       <section
         className="flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-slate-200 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-300"
         aria-label="服务概览"
@@ -57,8 +58,9 @@ export function UserOverviewPage({
             progressing ? 'text-amber-700 dark:text-amber-200' : undefined
           }
         >
-          {progressing ? `${progressing} 个服务部署中` : '没有待处理服务'}
+          {progressing ? `${progressing} 个服务部署中` : '暂无部署中的服务'}
         </span>
+        {failed > 0 && <InlineAction onClick={onInstances}>{failed} 个实例需要处理 →</InlineAction>}
       </section>
       <Button onClick={onCreate}>
         <span aria-hidden="true">＋</span>创建服务

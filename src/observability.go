@@ -81,7 +81,7 @@ func metrics(c *gin.Context) {
 		ready = 0
 	}
 	lines := []string{"# HELP xcloud_ready Control-plane readiness", "# TYPE xcloud_ready gauge", "xcloud_ready " + strconv.Itoa(ready), "# TYPE xcloud_tasks_backlog gauge", "xcloud_tasks_backlog " + strconv.Itoa(pending), "# TYPE xcloud_tasks_failed gauge", "xcloud_tasks_failed " + strconv.Itoa(failed), "# TYPE xcloud_instances_running gauge", "xcloud_instances_running " + strconv.Itoa(running), "xcloud_instances_deployment_failed " + strconv.Itoa(deploymentFailed), "xcloud_instances_runtime_missing " + strconv.Itoa(missing), "xcloud_tasks_lease_expired " + strconv.Itoa(leaseExpired), "xcloud_tasks_lease_recovered_24h " + strconv.Itoa(leaseRecoveries), "xcloud_tasks_needs_review " + strconv.Itoa(needsReview), "xcloud_tasks_instance_lock_conflicts " + strconv.Itoa(lockConflicts), "xcloud_tasks_lease_renew_failures " + strconv.Itoa(renewFailures), "xcloud_tasks_recovery_quarantined " + strconv.Itoa(recoveryQuarantined), "xcloud_instances_destroy_blocked " + strconv.Itoa(destroyBlocked), "xcloud_nodes_offline_instances " + strconv.Itoa(offlineInstances), "xcloud_plan_changes_processing " + strconv.Itoa(planProcessing), "xcloud_plan_changes_needs_review " + strconv.Itoa(planReview), "xcloud_plan_changes_fund_pending " + strconv.Itoa(planPendingFunds), "xcloud_plan_changes_agent_verify_failures " + strconv.Itoa(planVerifyFailures), "xcloud_plan_changes_refund_count " + strconv.Itoa(planRefunds), "xcloud_plan_changes_charge_count " + strconv.Itoa(planCharges)}
-	nodes, err := listNodesWithUsage(c.Request.Context())
+	nodes, err := listNodesWithUsage(c.Request.Context(), "platform")
 	if err == nil {
 		for _, node := range nodes {
 			label := promLabel(node.ID)

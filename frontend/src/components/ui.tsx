@@ -1,4 +1,7 @@
 import {
+  Children,
+  cloneElement,
+  isValidElement,
   useEffect,
   useId,
   useRef,
@@ -204,9 +207,21 @@ export function FilterTabs<T extends string>({
           type="button"
           role="tab"
           aria-selected={value === item.value}
+          tabIndex={value === item.value ? 0 : -1}
+          onKeyDown={event => {
+            const index = items.findIndex(option => option.value === value)
+            const next = event.key === 'ArrowRight' ? (index + 1) % items.length
+              : event.key === 'ArrowLeft' ? (index - 1 + items.length) % items.length
+                : event.key === 'Home' ? 0
+                  : event.key === 'End' ? items.length - 1 : -1
+            if (next < 0) return
+            event.preventDefault()
+            onChange(items[next].value)
+            event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
+          }}
           onClick={() => onChange(item.value)}
           className={classNames(
-            'rounded-md px-3 py-1.5 text-[10px] font-bold transition-colors focus-visible:outline-2 focus-visible:outline-blue-500',
+            'min-h-10 rounded-md px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-blue-500',
             value === item.value
               ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-blue-200'
               : 'text-slate-500 hover:text-blue-700 dark:text-slate-300 dark:hover:text-blue-200'
@@ -271,6 +286,19 @@ export function DataTable({
   )
 }
 
+// Keep form ownership intact while placing actions outside the scrolling body.
+function dialogContent(children: ReactNode): ReactNode {
+  const items = Children.toArray(children)
+  const form = items.length === 1 && isValidElement<{ children?: ReactNode; className?: string }>(items[0]) && items[0].type === 'form' ? items[0] : null
+  if (form) return cloneElement(form, {
+    className: classNames(form.props.className, 'flex min-h-0 flex-1 flex-col overflow-hidden'),
+    children: dialogContent(form.props.children)
+  })
+  const footer = items.filter(item => isValidElement(item) && item.type === DialogFooter)
+  const body = items.filter(item => !isValidElement(item) || item.type !== DialogFooter)
+  return <><div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">{body}</div>{footer}</>
+}
+
 export function Dialog({
   title,
   eyebrow = '',
@@ -299,12 +327,11 @@ export function Dialog({
         ? document.activeElement
         : null
     const timer = window.setTimeout(
-      () =>
-        dialogRef.current
-          ?.querySelector<HTMLElement>(
-            '[data-autofocus], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          )
-          ?.focus(),
+      () => {
+        const target = dialogRef.current?.querySelector<HTMLElement>('[data-autofocus]:not([disabled])')
+          ?? dialogRef.current?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])')
+        target?.focus()
+      },
       0
     )
     const onKeyDown = (event: KeyboardEvent) => {
@@ -356,7 +383,7 @@ export function Dialog({
         aria-modal="true"
         aria-labelledby={titleID}
       >
-        <div className="mb-5 flex items-start justify-between gap-4">
+        <div className="mb-5 flex shrink-0 items-start justify-between gap-4">
           <div>
             {eyebrow && (
               <p className="mb-2 text-[10px] font-extrabold tracking-widest text-blue-600">
@@ -384,23 +411,21 @@ export function Dialog({
             ×
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-          {children}
-        </div>
+        {dialogContent(children)}
       </section>
     </div>
   )
 }
 
 export const dialogLabelClass =
-  'block text-[11px] font-bold text-slate-700 dark:text-slate-100'
+  'block text-xs font-semibold text-slate-700 dark:text-slate-100'
 
 export const dialogFieldClass =
   'mt-1.5 block w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-3 focus:ring-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:focus:border-blue-400 dark:focus:ring-blue-950'
 
 export function DialogFooter({ children }: PropsWithChildren) {
   return (
-    <div className="sticky bottom-0 z-10 mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-100 bg-white pt-4 dark:border-slate-700 dark:bg-slate-800">
+    <div className="mt-4 flex shrink-0 flex-wrap justify-end gap-2 border-t border-slate-100 bg-white pt-4 dark:border-slate-700 dark:bg-slate-800">
       {children}
     </div>
   )

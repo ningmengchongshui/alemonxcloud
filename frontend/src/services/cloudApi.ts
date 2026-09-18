@@ -531,8 +531,8 @@ export const cloudApi = createApi({
       }),
       invalidatesTags: ['Tickets', 'Admin']
     }),
-    getAdminNodes: builder.query<import('@/types/cloud').Node[], void>({
-      query: () => '/admin/nodes',
+    getAdminNodes: builder.query<import('@/types/cloud').Node[], 'platform' | 'selfhosted'>({
+      query: kind => ({ url: '/admin/nodes', params: { kind } }),
       providesTags: ['Admin']
     }),
     getAdminRevokedSelfHostedReadinessEvents: builder.query<import('@/types/cloud').SelfHostedReadinessEvent[], string>({
