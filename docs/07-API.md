@@ -27,7 +27,7 @@
 
 ## 管理接口
 
-宿主机访问采用用户白名单和实例开关两层配置：
+宿主机访问采用用户白名单和实例开关两层配置。管理员通过 `/super` 概览的“用户加白”入口进入 `/super/users`，在用户表中加白或取消加白。未加白用户的实例列表完全隐藏此功能；加白用户只展示开关及配置任务状态，不展示功能介绍或申请提示。
 
 - `GET /api/admin/users` 返回用户的 `hostAccessAllowed`；管理员通过 `PUT /api/admin/users/:id/host-access` 和 `{"allowed":true}` 加白，传 `false` 移出白名单。移出同时关闭该用户已开启的实例配置并创建应用任务。存在冲突任务时返回 `409`，此次白名单修改整体回滚。
 - 实例列表返回 `hostAccessAllowed`、`hostAccessEnabled`（已保存的开关）和 `hostAccessApplied`（Agent 已成功应用的配置）。用户通过 `PATCH /api/instances/:id/host-access` 发送 `{"enabled":true,"resourceVersion":1}` 修改本人实例；版本取自实例最新响应。非白名单用户开启返回 `403`，版本过期、节点未升级或实例正在执行冲突操作返回 `409`。

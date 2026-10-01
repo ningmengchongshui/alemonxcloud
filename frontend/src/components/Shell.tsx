@@ -119,7 +119,7 @@ export function Shell({
     {
       label: '账户与合规',
       items: [
-        { key: 'users', icon: '♙', label: '用户与钱包' },
+        { key: 'users', icon: '♙', label: '用户管理' },
         { key: 'audit', icon: '◷', label: '安全审计' },
         { key: 'settings', icon: '⚙', label: '平台设置' }
       ]

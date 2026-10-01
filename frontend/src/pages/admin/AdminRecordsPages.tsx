@@ -263,6 +263,7 @@ export function AdminUsersPage({
             value={query}
             onChange={event => setQuery(event.target.value)}
             placeholder="用户名、邮箱或ID"
+            aria-label="搜索用户"
           />
         </Field>
       </div>
@@ -276,10 +277,10 @@ export function AdminUsersPage({
           <thead>
             <tr>
               <th>用户</th>
+              <th>宿主机访问白名单</th>
               <th>邮箱</th>
               <th>余额</th>
               <th>最后登录</th>
-              <th>宿主机访问白名单</th>
               <th />
             </tr>
           </thead>
@@ -290,9 +291,6 @@ export function AdminUsersPage({
                   <b>{user.username}</b>
                   <small>{user.id}</small>
                 </td>
-                <td>{user.email || '—'}</td>
-                <td>{(user.balanceFen / 100).toFixed(2)} 代币</td>
-                <td>{new Date(user.lastLoginAt).toLocaleString('zh-CN')}</td>
                 <td>
                   <Button
                     tone="secondary"
@@ -302,9 +300,12 @@ export function AdminUsersPage({
                     disabled={savingHostAccess}
                     onClick={() => { void setHostAccess({ id: user.id, allowed: !user.hostAccessAllowed }).unwrap().catch(() => {}) }}
                   >
-                    {user.hostAccessAllowed ? '已加白 · 移出' : '加入白名单'}
+                    {user.hostAccessAllowed ? '已加白 · 取消加白' : '加白'}
                   </Button>
                 </td>
+                <td>{user.email || '—'}</td>
+                <td>{(user.balanceFen / 100).toFixed(2)} 代币</td>
+                <td>{new Date(user.lastLoginAt).toLocaleString('zh-CN')}</td>
                 <td className="flex gap-2">
                   <button
                     className="text-button"

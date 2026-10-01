@@ -61,6 +61,14 @@ export function AdminOverviewPage() {
 
   return (
     <section className="page super-page">
+      <div className="mb-4 flex flex-wrap justify-end gap-2">
+        <Button
+          tone="secondary"
+          onClick={() => window.location.assign('/super/users')}
+        >
+          用户加白
+        </Button>
+      </div>
       <section
         className="flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-slate-200 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-300"
         aria-label="平台概览"

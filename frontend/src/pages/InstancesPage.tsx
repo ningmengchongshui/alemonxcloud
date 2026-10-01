@@ -649,14 +649,14 @@ export function InstancesPage({
                     </b>
                   </div>
                 </div>
-                <InstanceHostAccess
+                {item.hostAccessAllowed && <InstanceHostAccess
                   instance={item}
                   busy={Boolean(activeTask)}
                   onSubmitted={task => {
                     setSubmittedTasks(current => ({ ...current, [item.id]: { id: task.id, action: task.action, status: task.status } }))
                     dispatch(watchTask({ id: task.id, action: task.action }))
                   }}
-                />
+                />}
                 {item.planChangeStatus === 'needs_review' && (
                   <div className="mx-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
                     <span>套餐变更的资金结算正在自动核实运行资源；重启、重装和销毁不受影响。核实完成前暂不能再次变更套餐。</span>
