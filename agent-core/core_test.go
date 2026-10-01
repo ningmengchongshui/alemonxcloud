@@ -22,6 +22,21 @@ func TestComposeKeepsManagedBoundaryAndWorkspace(t *testing.T) {
 		t.Fatal("managed Compose must not contain traffic-control metadata")
 	}
 }
+
+func TestComposeHostGatewayIsOptIn(t *testing.T) {
+	input := ComposeInput{Name: "xcloud-01234567", Image: "example/app:latest", Route: "r0123456789abcdef", DataDir: "/data", WorkspaceDir: "/workspace", CPU: 1, MemoryMB: 1024}
+	for _, enabled := range []bool{false, true, false} {
+		input.HostAccess = enabled
+		compose, err := Compose(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapping := "    extra_hosts:\n      - \"host.docker.internal:host-gateway\"\n"
+		if strings.Contains(compose, mapping) != enabled {
+			t.Fatalf("host gateway opt-in=%t: %s", enabled, compose)
+		}
+	}
+}
 func TestWorkspacePathRejectsTraversal(t *testing.T) {
 	if _, _, err := WorkspacePath("/safe", "../../etc/passwd"); err == nil {
 		t.Fatal("expected traversal rejection")

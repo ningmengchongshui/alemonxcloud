@@ -99,7 +99,7 @@ func TestTaskLeaseDuration(t *testing.T) {
 }
 
 func TestLifecycleTaskActionsRequireInstanceLock(t *testing.T) {
-	for _, action := range []string{"create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize", "compensate-resize"} {
+	for _, action := range []string{"create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize", "compensate-resize", "host-access"} {
 		if !lifecycleTask(action) {
 			t.Fatalf("%s must acquire the instance lifecycle lock", action)
 		}

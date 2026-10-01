@@ -12,6 +12,7 @@ import {
   useDiscardAllAdminTasksMutation,
   useRetryTaskMutation,
   useResumeReviewTaskMutation,
+  useSetAdminUserHostAccessMutation,
   useSearchAdminUsersQuery
 } from '@/services/cloudApi'
 import {
@@ -33,7 +34,8 @@ const dangerousTaskAction = (action: string) =>
     'reinstall',
     'destroy',
     'purge',
-    'retry-deploy'
+    'retry-deploy',
+    'host-access'
   ].includes(action)
 
 export function AdminOrdersPage() {
@@ -221,6 +223,7 @@ export function AdminUsersPage({
 }) {
   const [query, setQuery] = useState('')
   const users = useSearchAdminUsersQuery(query)
+  const [setHostAccess, { isLoading: savingHostAccess }] = useSetAdminUserHostAccessMutation()
   const [selected, setSelected] = useState<CloudUser | null>(null)
   const [adjusting, setAdjusting] = useState<CloudUser | null>(null)
   const [amount, setAmount] = useState('')
@@ -263,6 +266,11 @@ export function AdminUsersPage({
           />
         </Field>
       </div>
+      <p className="mb-3 text-xs text-slate-500 dark:text-slate-300">
+        加白后用户可在实例列表开启 host.docker.internal。移出会关闭该用户已开启的映射，并提交配置应用任务；运行中的服务可能短暂中断。
+      </p>
+      {users.isLoading && <p role="status">正在加载用户…</p>}
+      {users.isError && <Alert tone="error">用户加载失败，请刷新后重试。</Alert>}
       <div className="admin-table-wrap">
         <table>
           <thead>
@@ -271,6 +279,7 @@ export function AdminUsersPage({
               <th>邮箱</th>
               <th>余额</th>
               <th>最后登录</th>
+              <th>宿主机访问白名单</th>
               <th />
             </tr>
           </thead>
@@ -284,6 +293,18 @@ export function AdminUsersPage({
                 <td>{user.email || '—'}</td>
                 <td>{(user.balanceFen / 100).toFixed(2)} 代币</td>
                 <td>{new Date(user.lastLoginAt).toLocaleString('zh-CN')}</td>
+                <td>
+                  <Button
+                    tone="secondary"
+                    role="switch"
+                    aria-checked={user.hostAccessAllowed}
+                    aria-label={`${user.username} 的宿主机访问白名单`}
+                    disabled={savingHostAccess}
+                    onClick={() => { void setHostAccess({ id: user.id, allowed: !user.hostAccessAllowed }).unwrap().catch(() => {}) }}
+                  >
+                    {user.hostAccessAllowed ? '已加白 · 移出' : '加入白名单'}
+                  </Button>
+                </td>
                 <td className="flex gap-2">
                   <button
                     className="text-button"

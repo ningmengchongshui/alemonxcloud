@@ -27,6 +27,20 @@
 
 ## 管理接口
 
+宿主机访问采用用户白名单和实例开关两层配置：
+
+- `GET /api/admin/users` 返回用户的 `hostAccessAllowed`；管理员通过 `PUT /api/admin/users/:id/host-access` 和 `{"allowed":true}` 加白，传 `false` 移出白名单。移出同时关闭该用户已开启的实例配置并创建应用任务。存在冲突任务时返回 `409`，此次白名单修改整体回滚。
+- 实例列表返回 `hostAccessAllowed`、`hostAccessEnabled`（已保存的开关）和 `hostAccessApplied`（Agent 已成功应用的配置）。用户通过 `PATCH /api/instances/:id/host-access` 发送 `{"enabled":true,"resourceVersion":1}` 修改本人实例；版本取自实例最新响应。非白名单用户开启返回 `403`，版本过期、节点未升级或实例正在执行冲突操作返回 `409`。
+- 开关默认关闭。开启仅适用于运行中或已关机实例，配置应用使用持久化 `host-access` 任务，已关机实例保持关机。失败不更新 `hostAccessApplied`，用户可通过执行记录跟踪，管理员可通过既有任务重试与复核入口处理。
+- 平台 Agent 与自建 Control 均须声明 `container.host-access.v1`。开启时受管实例的 `services.alemonx` 生成以下配置，关闭后删除该配置：
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+映射只提供宿主机地址解析，目标端口仍须由宿主机服务监听并允许容器网段访问。
+
 `/api/admin/catalog`、`orders`、`nodes`、`users`、`tasks`、`audit-logs`、`metrics` 提供管理查询；镜像、套餐、节点使用 `POST`/`PUT` 保存，任务使用 `retry`。镜像来源的版本由 `POST /api/admin/images/:id/versions` 创建为草稿；`PUT /api/admin/images/:id/versions/:versionID` 只能上下架已发布版本。`POST /api/admin/images/:id/versions/:versionID/pull` 会在全部启用节点拉取、比对 Agent 返回的 digest，成功后才发布。镜像地址在数据库中唯一，部署必定使用已验证的 `image@sha256:...`。
 
 管理员通过 `/api/admin/tickets` 查询并按 `status`、`priority` 筛选工单；可读取详情、回复、标记处理中、关闭及调整优先级。所有工单操作都会写入审计日志。

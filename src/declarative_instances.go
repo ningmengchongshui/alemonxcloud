@@ -49,11 +49,13 @@ type instanceResource struct {
 		ResourceVersion int64  `json:"resourceVersion"`
 	} `json:"metadata"`
 	Spec struct {
-		PowerState     string `json:"powerState,omitempty"`
-		RecreateNonce  string `json:"recreateNonce,omitempty"`
-		DeletionIntent string `json:"deletionIntent,omitempty"`
+		HostAccessEnabled bool   `json:"hostAccessEnabled"`
+		PowerState        string `json:"powerState,omitempty"`
+		RecreateNonce     string `json:"recreateNonce,omitempty"`
+		DeletionIntent    string `json:"deletionIntent,omitempty"`
 	} `json:"spec"`
 	Status struct {
+		HostAccessApplied  bool       `json:"hostAccessApplied"`
 		Lifecycle          string     `json:"lifecycle"`
 		RuntimeState       string     `json:"runtimeState,omitempty"`
 		ObservedCPU        *float64   `json:"observedCpu,omitempty"`
@@ -90,8 +92,8 @@ func operationStatus(status string) string {
 	}
 }
 
-func desiredSpecHash(power, recreate, deletion string) string {
-	s := sha256.Sum256([]byte(power + "\x00" + recreate + "\x00" + deletion))
+func desiredSpecHash(power, recreate, deletion string, hostAccess bool) string {
+	s := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%t", power, recreate, deletion, hostAccess)))
 	return fmt.Sprintf("%x", s[:])
 }
 
@@ -107,8 +109,8 @@ func loadInstanceResource(ctx context.Context, ownerID, id string) (instanceReso
 	var cpu sql.NullFloat64
 	var mem sql.NullInt64
 	var observedAt sql.NullTime
-	err := instanceDB.QueryRowContext(ctx, `SELECT id,resource_version,COALESCE(desired_power_state,''),COALESCE(desired_recreate_nonce,''),COALESCE(deletion_intent,''),status,COALESCE(runtime_status,''),observed_cpu,observed_memory_mb,observed_at,desired_generation FROM xcloud_instances WHERE id=? AND owner_id=? AND archived_at IS NULL`, id, ownerID).
-		Scan(&r.Metadata.ID, &r.Metadata.ResourceVersion, &r.Spec.PowerState, &r.Spec.RecreateNonce, &r.Spec.DeletionIntent, &r.Status.Lifecycle, &r.Status.RuntimeState, &cpu, &mem, &observedAt, &r.Status.ObservedGeneration)
+	err := instanceDB.QueryRowContext(ctx, `SELECT id,resource_version,COALESCE(desired_power_state,''),COALESCE(desired_recreate_nonce,''),COALESCE(deletion_intent,''),status,COALESCE(runtime_status,''),observed_cpu,observed_memory_mb,observed_at,desired_generation,host_access_enabled,host_access_applied FROM xcloud_instances WHERE id=? AND owner_id=? AND archived_at IS NULL`, id, ownerID).
+		Scan(&r.Metadata.ID, &r.Metadata.ResourceVersion, &r.Spec.PowerState, &r.Spec.RecreateNonce, &r.Spec.DeletionIntent, &r.Status.Lifecycle, &r.Status.RuntimeState, &cpu, &mem, &observedAt, &r.Status.ObservedGeneration, &r.Spec.HostAccessEnabled, &r.Status.HostAccessApplied)
 	if err != nil {
 		return r, err
 	}
@@ -226,7 +228,8 @@ func patchInstanceDesiredHandler(c *gin.Context) {
 		action = "restart"
 	}
 	var oldPower, oldRecreate, oldDeletion string
-	_ = tx.QueryRowContext(c.Request.Context(), `SELECT COALESCE(desired_power_state,''),COALESCE(desired_recreate_nonce,''),COALESCE(deletion_intent,'') FROM xcloud_instances WHERE id=?`, id).Scan(&oldPower, &oldRecreate, &oldDeletion)
+	var hostAccess bool
+	_ = tx.QueryRowContext(c.Request.Context(), `SELECT COALESCE(desired_power_state,''),COALESCE(desired_recreate_nonce,''),COALESCE(deletion_intent,''),host_access_enabled FROM xcloud_instances WHERE id=?`, id).Scan(&oldPower, &oldRecreate, &oldDeletion, &hostAccess)
 	power, recreate, deletion := oldPower, oldRecreate, oldDeletion
 	if body.PowerState != nil {
 		power = *body.PowerState
@@ -237,7 +240,7 @@ func patchInstanceDesiredHandler(c *gin.Context) {
 	if body.DeletionIntent != nil {
 		deletion = *body.DeletionIntent
 	}
-	specHash := desiredSpecHash(power, recreate, deletion)
+	specHash := desiredSpecHash(power, recreate, deletion, hostAccess)
 	result, err := tx.ExecContext(c.Request.Context(), `UPDATE xcloud_instances SET desired_power_state=?,desired_recreate_nonce=?,deletion_intent=?,spec_hash=?,resource_version=resource_version+1,desired_generation=desired_generation+1,spec_updated_at=NOW(),reconcile_requested_at=NOW() WHERE id=? AND owner_id=? AND resource_version=?`, power, recreate, nullableString(deletion), specHash, id, u.ID, body.ResourceVersion)
 	if err != nil {
 		internalError(c, err)

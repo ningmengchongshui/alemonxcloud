@@ -326,7 +326,7 @@ func quarantineDangerousFailedTasks(ctx context.Context) {
 		return
 	}
 	rows, err := instanceDB.QueryContext(ctx, `SELECT id,instance_id,action FROM xcloud_tasks
-		WHERE status=? AND action IN ('stop','update','restart','reinstall','destroy','purge','retry-deploy')
+		WHERE status=? AND action IN ('stop','update','restart','reinstall','destroy','purge','retry-deploy','host-access')
 		ORDER BY updated_at ASC LIMIT 100`, taskFailed)
 	if err != nil {
 		log.Printf("load failed lifecycle tasks for quarantine: %v", err)
@@ -354,7 +354,7 @@ func quarantineDangerousFailedTasks(ctx context.Context) {
 }
 
 func dangerousRecoveredTask(action string) bool {
-	return action == "stop" || action == "update" || action == "restart" || action == "reinstall" || action == "destroy" || action == "purge" || action == "retry-deploy" || action == "resize"
+	return action == "stop" || action == "update" || action == "restart" || action == "reinstall" || action == "destroy" || action == "purge" || action == "retry-deploy" || action == "resize" || action == "host-access"
 }
 func safeRecoveryState(ctx context.Context, task controlTask) bool {
 	if task.Action != "create" && task.Action != "start" {

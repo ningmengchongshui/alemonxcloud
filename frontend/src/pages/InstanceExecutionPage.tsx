@@ -168,7 +168,7 @@ export function InstanceExecutionPage({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="m-0 text-base font-bold">{task.action}</h2>
+                    <h2 className="m-0 text-base font-bold">{task.action === 'host-access' ? '宿主机访问配置' : task.action}</h2>
                     <StatusBadge tone={taskTone(task.status)}>
                       {taskLabel(task.status)}
                     </StatusBadge>

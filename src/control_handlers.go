@@ -649,7 +649,7 @@ func adminNodes(c *gin.Context) {
 }
 func adminUsers(c *gin.Context) {
 	q := "%" + strings.TrimSpace(c.Query("q")) + "%"
-	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT u.id,u.username,u.email,u.last_login_at,w.balance_fen FROM xcloud_users u JOIN xcloud_wallets w ON w.user_id=u.id WHERE u.id LIKE ? OR u.username LIKE ? OR u.email LIKE ? ORDER BY u.last_login_at DESC LIMIT 100`, q, q, q)
+	rows, err := instanceDB.QueryContext(c.Request.Context(), `SELECT u.id,u.username,u.email,u.last_login_at,w.balance_fen,u.host_access_allowed FROM xcloud_users u JOIN xcloud_wallets w ON w.user_id=u.id WHERE u.id LIKE ? OR u.username LIKE ? OR u.email LIKE ? ORDER BY u.last_login_at DESC LIMIT 100`, q, q, q)
 	if err != nil {
 		internalError(c, err)
 		return
@@ -658,7 +658,7 @@ func adminUsers(c *gin.Context) {
 	items := []cloudUser{}
 	for rows.Next() {
 		var x cloudUser
-		if err := rows.Scan(&x.ID, &x.Username, &x.Email, &x.LastLoginAt, &x.BalanceFen); err != nil {
+		if err := rows.Scan(&x.ID, &x.Username, &x.Email, &x.LastLoginAt, &x.BalanceFen, &x.HostAccessAllowed); err != nil {
 			internalError(c, err)
 			return
 		}
@@ -1120,7 +1120,7 @@ func activeLifecycleTask(ctx context.Context, instanceID string) (*controlTask, 
 	var taskID string
 	err := instanceDB.QueryRowContext(ctx, `SELECT id FROM xcloud_tasks
 		WHERE instance_id=? AND status IN ('pending','running')
-		AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize','compensate-resize')
+		AND action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize','compensate-resize','host-access')
 		AND NOT (status='pending' AND action IN ('destroy','purge') AND run_after>NOW())
 		AND NOT (status='pending' AND action='compensate-resize')
 		ORDER BY created_at DESC LIMIT 1`, instanceID).Scan(&taskID)

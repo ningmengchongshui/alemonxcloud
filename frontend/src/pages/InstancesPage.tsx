@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useDispatch } from 'react-redux'
+import { InstanceHostAccess } from '@/components/InstanceHostAccess'
 import { ActionDialog } from '@/components/ActionDialog'
 import { BalanceSettlement } from '@/components/BalanceSettlement'
 import { XCoinAmount } from '@/components/XCoinMark'
@@ -102,6 +103,7 @@ function taskLabel(action: string) {
       'restart': '重启中',
       'update': '更新中',
       'resize': '套餐变更中',
+      'host-access': '宿主机访问配置中',
       'compensate-resize': '套餐回退中',
       'reinstall': '重装中',
       'destroy': '销毁中',
@@ -647,6 +649,14 @@ export function InstancesPage({
                     </b>
                   </div>
                 </div>
+                <InstanceHostAccess
+                  instance={item}
+                  busy={Boolean(activeTask)}
+                  onSubmitted={task => {
+                    setSubmittedTasks(current => ({ ...current, [item.id]: { id: task.id, action: task.action, status: task.status } }))
+                    dispatch(watchTask({ id: task.id, action: task.action }))
+                  }}
+                />
                 {item.planChangeStatus === 'needs_review' && (
                   <div className="mx-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
                     <span>套餐变更的资金结算正在自动核实运行资源；重启、重装和销毁不受影响。核实完成前暂不能再次变更套餐。</span>

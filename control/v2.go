@@ -75,6 +75,7 @@ type managedPayload struct {
 	MemoryMB    int     `json:"memoryMB"`
 	Route       string  `json:"route"`
 	KeepStopped bool    `json:"keepStopped"`
+	HostAccess  bool    `json:"hostAccess,omitempty"`
 	Path        string  `json:"path,omitempty"`
 	Content     string  `json:"content,omitempty"`
 	Tail        string  `json:"tail,omitempty"`
@@ -475,7 +476,7 @@ func localAgentStatus() map[string]any {
 			}
 		}
 	}
-	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "runtimeInventoryOK": inventoryOK, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1"}}
+	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "runtimeInventoryOK": inventoryOK, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.host-access.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1"}}
 }
 
 func safeDockerNetwork(value string) bool {
@@ -694,6 +695,9 @@ func beginManagedOperation(cfg config, p managedPayload, action string) *managed
 		return nil // Compatibility with pre-operation-audit control planes.
 	}
 	operation := &managedOperation{ID: p.OperationID, Action: action, DesiredState: desiredManagedState(action), Status: "running", StartedAt: time.Now().UTC()}
+	if p.KeepStopped {
+		operation.DesiredState = "stopped"
+	}
 	writeManagedOperation(cfg, p.Name, *operation)
 	return operation
 }
@@ -812,7 +816,7 @@ func runManagedCompose(ctx context.Context, cfg config, action string, p managed
 		}
 		return nil
 	}
-	if action == "create" || action == "resize" || action == "reinstall" || action == "start" {
+	if action == "create" || action == "resize" || action == "reinstall" || action == "start" || action == "restart" {
 		if p.Image == "" || p.CPU <= 0 || p.MemoryMB <= 0 || !safeManagedName(p.Name) {
 			return errors.New("实例配置无效")
 		}
@@ -829,7 +833,7 @@ func runManagedCompose(ctx context.Context, cfg config, action string, p managed
 		if networkErr != nil {
 			return networkErr
 		}
-		compose, composeErr := agentcore.Compose(agentcore.ComposeInput{Name: p.Name, Image: p.Image, Route: p.Route, DataDir: filepath.Join(dir, "data"), WorkspaceDir: filepath.Join(dir, "workspace"), Network: network, CPU: p.CPU, MemoryMB: p.MemoryMB, TerminalMode: false})
+		compose, composeErr := agentcore.Compose(agentcore.ComposeInput{Name: p.Name, Image: p.Image, Route: p.Route, DataDir: filepath.Join(dir, "data"), WorkspaceDir: filepath.Join(dir, "workspace"), Network: network, CPU: p.CPU, MemoryMB: p.MemoryMB, TerminalMode: false, HostAccess: p.HostAccess})
 		if composeErr != nil {
 			return composeErr
 		}
@@ -849,9 +853,7 @@ func runManagedCompose(ctx context.Context, cfg config, action string, p managed
 	switch action {
 	case "stop":
 		return composeCommand(ctx, dir, p.Name, "stop")
-	case "restart":
-		return composeCommand(ctx, dir, p.Name, "restart")
-	case "create", "start", "resize", "reinstall":
+	case "create", "start", "restart", "resize", "reinstall":
 		if p.KeepStopped {
 			return composeCommand(ctx, dir, p.Name, "up", "-d", "--no-start")
 		}

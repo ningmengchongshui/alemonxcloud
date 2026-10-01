@@ -857,7 +857,7 @@ func taskWorkerID() string {
 
 func lifecycleTask(action string) bool {
 	switch action {
-	case "create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize", "compensate-resize":
+	case "create", "retry-deploy", "start", "stop", "update", "restart", "reinstall", "destroy", "purge", "resize", "compensate-resize", "host-access":
 		return true
 	}
 	return false
@@ -1092,6 +1092,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 		"stop":              {"running", "destroy_scheduled"},
 		"update":            {"running"},
 		"resize":            {"running", "stopped"},
+		"host-access":       {"running", "stopped", "destroy_scheduled"},
 		"compensate-resize": {"running", "stopped"},
 		"restart":           {"running", "destroy_scheduled"},
 		"reinstall":         {"running", "stopped"},
@@ -1107,10 +1108,17 @@ func executeTask(ctx context.Context, task controlTask) error {
 	if err != nil {
 		return fmt.Errorf("实例节点不可用: %w", err)
 	}
+	hostAccess, err := effectiveHostAccess(ctx, item.ID)
+	if err != nil {
+		return err
+	}
+	if hostAccess && composeTaskAction(task.Action) && !n.supportsAgentCapability(hostAccessCapability) {
+		return errors.New("节点尚未支持宿主机访问，请先升级节点 Agent")
+	}
 	if n.NodeKind == selfHostedNodeKind {
 		operationID := newID("aop")
 		desired := "running"
-		if task.Action == "stop" {
+		if task.Action == "stop" || (task.Action == "host-access" && item.Status == "stopped") {
 			desired = "stopped"
 		}
 		if task.Action == "destroy" || task.Action == "purge" {
@@ -1237,7 +1245,7 @@ func executeTask(ctx context.Context, task controlTask) error {
 		if err = instanceDB.QueryRowContext(ctx, `SELECT cpu,memory_mb FROM xcloud_instances WHERE id=?`, item.ID).Scan(&cpu, &memoryMB); err != nil {
 			return err
 		}
-		payload := map[string]any{"name": item.ContainerName, "image": deploymentImage(selected.ImageRef, selected.ImageVersion, selected.ImageDigest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": selected.TerminalMode}
+		payload := map[string]any{"name": item.ContainerName, "image": deploymentImage(selected.ImageRef, selected.ImageVersion, selected.ImageDigest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": selected.TerminalMode, "hostAccess": hostAccess}
 		if err = taskMayCallAgent(ctx, task, item.Status); err != nil {
 			return err
 		}
@@ -1278,12 +1286,29 @@ func executeTask(ctx context.Context, task controlTask) error {
 			if err = taskMayCallAgent(ctx, task, "running"); err != nil {
 				return err
 			}
-			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": item.TerminalOnly}, nil)
+			err = nodeRequest(ctx, n, httpMethodPost, "/container/create", map[string]any{"name": item.ContainerName, "image": deploymentImage(item.Image, item.Version, digest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": item.TerminalOnly, "hostAccess": hostAccess}, nil)
 		}
 		if err == nil {
 			runtime := "running"
 			_, err = transitionInstance(ctx, instanceDB, item.ID, []string{"running"}, "running", &runtime, "image_digest=?", digest)
 		}
+	case "host-access":
+		if !n.supportsAgentCapability(hostAccessCapability) {
+			return errors.New("节点尚未支持宿主机访问开关，请先升级节点 Agent")
+		}
+		payload, payloadErr := instanceRuntimePayload(ctx, item.ID, item.ContainerName, route)
+		if payloadErr != nil {
+			return payloadErr
+		}
+		var runtimeState string
+		if err = instanceDB.QueryRowContext(ctx, `SELECT COALESCE(runtime_status,status) FROM xcloud_instances WHERE id=?`, item.ID).Scan(&runtimeState); err != nil {
+			return err
+		}
+		payload["keepStopped"] = item.Status == "stopped" || runtimeState == "stopped"
+		if err = taskMayCallAgent(ctx, task, "running", "stopped", "destroy_scheduled"); err != nil {
+			return err
+		}
+		err = nodeRequest(ctx, n, httpMethodPost, "/container/"+item.ContainerName+"/resize", payload, nil)
 	case "resize", "compensate-resize":
 		if err = taskMayCallAgent(ctx, task, "running", "stopped"); err != nil {
 			return err
@@ -1328,7 +1353,16 @@ func executeTask(ctx context.Context, task controlTask) error {
 	default:
 		return errors.New("未知任务动作")
 	}
+	if err == nil && composeTaskAction(task.Action) {
+		_, err = instanceDB.ExecContext(ctx, `UPDATE xcloud_instances i JOIN xcloud_tasks t ON t.instance_id=i.id SET i.host_access_applied=? WHERE i.id=? AND t.id=? AND t.status=? AND t.worker_id=? AND t.execution_token=? AND t.claim_expires_at>NOW() AND i.active_task_id=t.id AND i.active_task_token=t.execution_token AND i.active_task_expires_at>NOW() AND (t.desired_generation=0 OR t.desired_generation=i.desired_generation)`, hostAccess, item.ID, task.ID, taskRunning, task.WorkerID, task.ExecutionToken)
+	}
 	return err
+}
+
+func effectiveHostAccess(ctx context.Context, id string) (bool, error) {
+	var enabled bool
+	err := instanceDB.QueryRowContext(ctx, `SELECT i.host_access_enabled AND COALESCE(u.host_access_allowed,FALSE) FROM xcloud_instances i LEFT JOIN xcloud_users u ON u.id=i.owner_id WHERE i.id=?`, id).Scan(&enabled)
+	return enabled, err
 }
 
 // instanceRuntimePayload is the single source of desired Compose state for
@@ -1346,7 +1380,11 @@ func instanceRuntimePayload(ctx context.Context, instanceID, containerName, rout
 	if err := instanceDB.QueryRowContext(ctx, `SELECT ins.image,COALESCE(ins.image_digest,''),ins.version,COALESCE(i.terminal_only,TRUE) FROM xcloud_instances ins LEFT JOIN xcloud_images i ON i.image_ref=ins.image WHERE ins.id=?`, instanceID).Scan(&imageRef, &digest, &selectedVersion, &terminalMode); err != nil {
 		return nil, err
 	}
-	return map[string]any{"name": containerName, "image": deploymentImage(imageRef, selectedVersion, digest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": terminalMode}, nil
+	hostAccess, err := effectiveHostAccess(ctx, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"name": containerName, "image": deploymentImage(imageRef, selectedVersion, digest), "cpu": cpu, "memoryMB": memoryMB, "route": route, "terminalMode": terminalMode, "hostAccess": hostAccess}, nil
 }
 
 func executePurgeTask(ctx context.Context, task controlTask, instanceID, containerName string, n node) error {

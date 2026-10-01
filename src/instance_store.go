@@ -62,14 +62,15 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		}
 		return items, nil
 	}
-	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,COALESCE(i.resource_version,1),i.name,i.image,i.version,i.spec,i.cpu,i.memory_mb,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,COALESCE((SELECT MIN(o.service_starts_at) FROM xcloud_orders o WHERE o.instance_id=i.id AND o.owner_id=i.owner_id AND o.status IN ('active','expired') AND o.service_starts_at IS NOT NULL),i.created_at),i.expires_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE),COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
+	rows, err := instanceDB.QueryContext(ctx, `SELECT i.id,COALESCE(i.resource_version,1),i.name,i.image,i.version,i.spec,i.cpu,i.memory_mb,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,COALESCE((SELECT MIN(o.service_starts_at) FROM xcloud_orders o WHERE o.instance_id=i.id AND o.owner_id=i.owner_id AND o.status IN ('active','expired') AND o.service_starts_at IS NOT NULL),i.created_at),i.expires_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE),i.host_access_enabled,i.host_access_applied,COALESCE(u.host_access_allowed,FALSE),COALESCE(active_task.id,''),COALESCE(active_task.action,''),COALESCE(active_task.status,'')
 		FROM xcloud_instances i
+		LEFT JOIN xcloud_users u ON u.id=i.owner_id
 		LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id
 		LEFT JOIN xcloud_images img ON img.id=source_order.image_id
 		LEFT JOIN xcloud_tasks active_task ON active_task.id=(
 			SELECT t.id FROM xcloud_tasks t
 			WHERE t.instance_id=i.id AND t.status IN ('pending','running')
-			AND t.action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize','compensate-resize')
+			AND t.action IN ('create','retry-deploy','start','stop','update','restart','reinstall','destroy','purge','resize','compensate-resize','host-access')
 			ORDER BY t.created_at DESC LIMIT 1
 		)
 		WHERE i.owner_id=? AND i.archived_at IS NULL
@@ -88,7 +89,7 @@ func listStoredInstances(ctx context.Context, ownerID string) ([]instance, error
 		var cpu float64
 		var memoryMB int
 		var activeTask instanceActiveTask
-		if err := rows.Scan(&item.ID, &item.ResourceVersion, &item.Name, &item.Image, &item.Version, &item.Spec, &cpu, &memoryMB, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &serviceStart, &serviceEnd, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
+		if err := rows.Scan(&item.ID, &item.ResourceVersion, &item.Name, &item.Image, &item.Version, &item.Spec, &cpu, &memoryMB, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &serviceStart, &serviceEnd, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly, &item.HostAccessEnabled, &item.HostAccessApplied, &item.HostAccessAllowed, &activeTask.ID, &activeTask.Action, &activeTask.Status); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Format("2006-01-02 15:04")
@@ -135,12 +136,19 @@ func getStoredInstance(ctx context.Context, id, ownerID string) (instance, bool,
 	var created time.Time
 	var cpu float64
 	var memoryMB int
-	err := instanceDB.QueryRowContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.cpu,i.memory_mb,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE) FROM xcloud_instances i LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id LEFT JOIN xcloud_images img ON img.id=source_order.image_id WHERE i.id=? AND i.owner_id=? AND i.archived_at IS NULL`, id, ownerID).Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &cpu, &memoryMB, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly)
+	err := instanceDB.QueryRowContext(ctx, `SELECT i.id,i.name,i.image,i.version,i.spec,i.cpu,i.memory_mb,i.status,COALESCE(i.runtime_status,''),i.access_address,i.container_name,i.created_at,i.destroy_at,i.destroyed_at,i.purge_at,COALESCE(i.destroy_reason,''),i.archived_at,COALESCE(img.terminal_only,FALSE),i.host_access_enabled,i.host_access_applied,COALESCE(u.host_access_allowed,FALSE),COALESCE(i.resource_version,1) FROM xcloud_instances i LEFT JOIN xcloud_users u ON u.id=i.owner_id LEFT JOIN xcloud_orders source_order ON source_order.id=i.order_id LEFT JOIN xcloud_images img ON img.id=source_order.image_id WHERE i.id=? AND i.owner_id=? AND i.archived_at IS NULL`, id, ownerID).Scan(&item.ID, &item.Name, &item.Image, &item.Version, &item.Spec, &cpu, &memoryMB, &item.Status, &item.RuntimeStatus, &item.IP, &item.ContainerName, &created, &item.DestroyAt, &item.DestroyedAt, &item.PurgeAt, &item.DestroyReason, &item.ArchivedAt, &item.TerminalOnly, &item.HostAccessEnabled, &item.HostAccessApplied, &item.HostAccessAllowed, &item.ResourceVersion)
 	if err == sql.ErrNoRows {
 		return instance{}, false, nil
 	}
 	if err != nil {
 		return instance{}, false, err
+	}
+	active, err := activeLifecycleTask(ctx, id)
+	if err != nil {
+		return instance{}, false, err
+	}
+	if active != nil {
+		item.ActiveTask = &instanceActiveTask{ID: active.ID, Action: active.Action, Status: active.Status}
 	}
 	item.OwnerID = ownerID
 	item.Spec = displayInstanceSpec(cpu, memoryMB, item.Spec)

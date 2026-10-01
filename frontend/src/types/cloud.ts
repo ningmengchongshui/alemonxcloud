@@ -45,6 +45,9 @@ export interface Instance {
   version: string
   containerName?: string
   activeTask?: Pick<Task, 'id' | 'action' | 'status'>
+  hostAccessEnabled: boolean
+  hostAccessApplied: boolean
+  hostAccessAllowed: boolean
   terminalOnly?: boolean
   spec: string
   status: string
@@ -68,8 +71,8 @@ export interface Instance {
 
 export interface InstanceResource {
 	metadata: { id: string; resourceVersion: number }
-	spec: { powerState?: 'running' | 'stopped'; recreateNonce?: string; deletionIntent?: 'absent' }
-	status: { lifecycle: string; runtimeState?: string; observedCpu?: number; observedMemoryMB?: number; observedAt?: string; observedGeneration: number }
+	spec: { hostAccessEnabled: boolean; powerState?: 'running' | 'stopped'; recreateNonce?: string; deletionIntent?: 'absent' }
+	status: { hostAccessApplied: boolean; lifecycle: string; runtimeState?: string; observedCpu?: number; observedMemoryMB?: number; observedAt?: string; observedGeneration: number }
 	conditions: Array<{ type: string; status: string; reason?: string; message?: string; operationId?: string; observedGeneration: number; updatedAt: string }>
 	operations: Task[]
 }
@@ -389,6 +392,7 @@ export interface Notification {
   createdAt: string
 }
 export interface CloudUser {
+  hostAccessAllowed: boolean
   id: string
   username: string
   email: string

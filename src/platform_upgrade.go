@@ -19,11 +19,12 @@ import (
 )
 
 type cloudUser struct {
-	ID          string    `json:"id"`
-	Username    string    `json:"username"`
-	Email       string    `json:"email"`
-	LastLoginAt time.Time `json:"lastLoginAt"`
-	BalanceFen  int       `json:"balanceFen"`
+	HostAccessAllowed bool      `json:"hostAccessAllowed"`
+	ID                string    `json:"id"`
+	Username          string    `json:"username"`
+	Email             string    `json:"email"`
+	LastLoginAt       time.Time `json:"lastLoginAt"`
+	BalanceFen        int       `json:"balanceFen"`
 }
 type walletEntry struct {
 	ID              string    `json:"id"`

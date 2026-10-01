@@ -40,6 +40,13 @@ func TestInstanceComposeEnablesInteractiveTerminalModeOnlyWhenRequested(t *testi
 	}
 }
 
+func TestInstanceComposeForwardsHostAccess(t *testing.T) {
+	input := createRequest{Name: "xcloud-12345678", Image: "example/app:latest", CPU: 1, MemoryMB: 1024, Route: "r0123456789abcdef", HostAccess: true}
+	if compose := instanceCompose(input, "/data/home", "/data/workspace"); !strings.Contains(compose, "host.docker.internal:host-gateway") {
+		t.Fatalf("Agent omitted host gateway: %s", compose)
+	}
+}
+
 func TestPrepareInstanceDirsMigratesLegacyRootData(t *testing.T) {
 	root := t.TempDir()
 	instanceDir := filepath.Join(root, "xcloud-12345678")

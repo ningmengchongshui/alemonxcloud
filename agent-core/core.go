@@ -24,6 +24,7 @@ type ComposeInput struct {
 	CPU                                                float64
 	MemoryMB                                           int
 	TerminalMode                                       bool
+	HostAccess                                         bool
 }
 
 type WorkspaceEntry struct {
@@ -191,5 +192,9 @@ func Compose(input ComposeInput) (string, error) {
 	if input.TerminalMode {
 		stdin = "    stdin_open: true\n    tty: true\n"
 	}
-	return fmt.Sprintf("# Managed by xCloud. Manual edits are overwritten on the next lifecycle action.\nname: xcloud-%s\nservices:\n  alemonx:\n    container_name: %q\n    image: %q\n    restart: unless-stopped\n    init: true\n    cpus: %q\n    mem_limit: %q\n    memswap_limit: %q\n    shm_size: 1g\n%s    healthcheck:\n      test: [\"CMD-SHELL\", \"curl -fsS http://127.0.0.1:17390/healthz >/dev/null\"]\n      interval: 30s\n      timeout: 5s\n      retries: 3\n      start_period: 20s\n    environment:\n      TZ: \"Asia/Shanghai\"\n      HOME: \"/root\"\n      XDG_CONFIG_HOME: \"/root/config\"\n      XDG_CACHE_HOME: \"/root/cache\"\n      ALX_DEPLOYMENT: \"production\"\n      ALX_OPS_STORAGE: \"sqlite\"\n      ALX_CONTAINER: \"1\"\n      ALX_WORKSPACE: \"/app/workspace\"\n      ALEMONJS_SETUP_ROOTS: \"/app/workspace\"\n      ALX_PRIVILEGED_MODE: \"enabled\"\n      GOMAXPROCS: %q\n      NODE_OPTIONS: %q\n      UV_THREADPOOL_SIZE: %q\n      OMP_NUM_THREADS: %q\n      MKL_NUM_THREADS: %q\n      OPENBLAS_NUM_THREADS: %q\n      NUMEXPR_MAX_THREADS: %q\n      PYTHONUNBUFFERED: \"1\"\n    volumes:\n      - %q\n      - %q\n    labels:\n      xcloud.managed: \"true\"\n      xcloud.route: %q\n    networks:\n      - xcloud_network\nnetworks:\n  xcloud_network:\n    external: true\n    name: %q\n", input.Route, input.Name, input.Image, cpu, fmt.Sprintf("%dm", input.MemoryMB), fmt.Sprintf("%dm", input.MemoryMB), stdin, cpu, fmt.Sprintf("--max-old-space-size=%d", heap), cpu, cpu, cpu, cpu, cpu, input.DataDir+":/root", input.WorkspaceDir+":/app/workspace", input.Route, input.Network), nil
+	hosts := ""
+	if input.HostAccess {
+		hosts = "    extra_hosts:\n      - \"host.docker.internal:host-gateway\"\n"
+	}
+	return fmt.Sprintf("# Managed by xCloud. Manual edits are overwritten on the next lifecycle action.\nname: xcloud-%s\nservices:\n  alemonx:\n    container_name: %q\n    image: %q\n    restart: unless-stopped\n    init: true\n    cpus: %q\n    mem_limit: %q\n    memswap_limit: %q\n    shm_size: 1g\n%s%s    healthcheck:\n      test: [\"CMD-SHELL\", \"curl -fsS http://127.0.0.1:17390/healthz >/dev/null\"]\n      interval: 30s\n      timeout: 5s\n      retries: 3\n      start_period: 20s\n    environment:\n      TZ: \"Asia/Shanghai\"\n      HOME: \"/root\"\n      XDG_CONFIG_HOME: \"/root/config\"\n      XDG_CACHE_HOME: \"/root/cache\"\n      ALX_DEPLOYMENT: \"production\"\n      ALX_OPS_STORAGE: \"sqlite\"\n      ALX_CONTAINER: \"1\"\n      ALX_WORKSPACE: \"/app/workspace\"\n      ALEMONJS_SETUP_ROOTS: \"/app/workspace\"\n      ALX_PRIVILEGED_MODE: \"enabled\"\n      GOMAXPROCS: %q\n      NODE_OPTIONS: %q\n      UV_THREADPOOL_SIZE: %q\n      OMP_NUM_THREADS: %q\n      MKL_NUM_THREADS: %q\n      OPENBLAS_NUM_THREADS: %q\n      NUMEXPR_MAX_THREADS: %q\n      PYTHONUNBUFFERED: \"1\"\n    volumes:\n      - %q\n      - %q\n    labels:\n      xcloud.managed: \"true\"\n      xcloud.route: %q\n    networks:\n      - xcloud_network\nnetworks:\n  xcloud_network:\n    external: true\n    name: %q\n", input.Route, input.Name, input.Image, cpu, fmt.Sprintf("%dm", input.MemoryMB), fmt.Sprintf("%dm", input.MemoryMB), stdin, hosts, cpu, fmt.Sprintf("--max-old-space-size=%d", heap), cpu, cpu, cpu, cpu, cpu, input.DataDir+":/root", input.WorkspaceDir+":/app/workspace", input.Route, input.Network), nil
 }

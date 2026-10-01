@@ -63,10 +63,13 @@ type instance struct {
 	PlanChangeFundStatus string     `json:"planChangeFundStatus,omitempty"`
 	// ContainerName is also the basename of this instance's persisted data
 	// directory on its assigned node (for example xcloud-a1b2c3d4).
-	ContainerName string              `json:"containerName,omitempty"`
-	TerminalOnly  bool                `json:"terminalOnly,omitempty"`
-	ActiveTask    *instanceActiveTask `json:"activeTask,omitempty"`
-	OwnerID       string              `json:"-"`
+	ContainerName     string              `json:"containerName,omitempty"`
+	HostAccessEnabled bool                `json:"hostAccessEnabled"`
+	HostAccessApplied bool                `json:"hostAccessApplied"`
+	HostAccessAllowed bool                `json:"hostAccessAllowed"`
+	TerminalOnly      bool                `json:"terminalOnly,omitempty"`
+	ActiveTask        *instanceActiveTask `json:"activeTask,omitempty"`
+	OwnerID           string              `json:"-"`
 }
 
 // instanceActiveTask is deliberately the small, user-safe portion of a task
@@ -176,6 +179,7 @@ func Run() {
 	router.GET("/api/instances", requireSession, listInstances)
 	router.GET("/api/instances/:id", requireSession, getInstanceResourceHandler)
 	router.PATCH("/api/instances/:id/desired", requireSession, patchInstanceDesiredHandler)
+	router.PATCH("/api/instances/:id/host-access", requireSession, patchInstanceHostAccess)
 	router.POST("/api/instances", requireSession, createInstance)
 	router.POST("/api/instances/:id/:action", requireSession, queueInstanceAction)
 	router.POST("/api/instances/:id/plan-change/quote", requireSession, planChangeQuoteHandler)
@@ -254,6 +258,7 @@ func Run() {
 	router.POST("/api/admin/nodes", requireAdmin, adminSaveNode)
 	router.PUT("/api/admin/nodes/:id", requireAdmin, adminSaveNode)
 	router.GET("/api/admin/users", requireAdmin, adminUsers)
+	router.PUT("/api/admin/users/:id/host-access", requireAdmin, adminUserHostAccess)
 	router.GET("/api/admin/users/:id/wallet/entries", requireAdmin, adminWalletEntries)
 	router.POST("/api/admin/users/:id/wallet/adjust", requireAdmin, adminAdjustWallet)
 	router.GET("/api/admin/tasks", requireAdmin, adminTasks)

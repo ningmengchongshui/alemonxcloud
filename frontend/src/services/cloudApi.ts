@@ -100,6 +100,10 @@ export const cloudApi = createApi({
 	  query: ({ id, ...body }) => ({ url: `/instances/${id}/desired`, method: 'PATCH', body }),
 	  invalidatesTags: ['Instances']
 	}),
+    setInstanceHostAccess: builder.mutation<{ task?: Task; message: string }, { id: string; enabled: boolean; resourceVersion: number }>({
+      query: ({ id, ...body }) => ({ url: `/instances/${id}/host-access`, method: 'PATCH', body }),
+      invalidatesTags: ['Instances']
+    }),
     getSelfHostedNodes: builder.query<SelfHostedNode[], void>({
       query: () => '/selfhosted/nodes',
       providesTags: ['Instances']
@@ -558,6 +562,10 @@ export const cloudApi = createApi({
       query: q => `/admin/users?q=${encodeURIComponent(q)}`,
       providesTags: ['Admin']
     }),
+    setAdminUserHostAccess: builder.mutation<{ allowed: boolean; tasks?: Task[] }, { id: string; allowed: boolean }>({
+      query: ({ id, ...body }) => ({ url: `/admin/users/${id}/host-access`, method: 'PUT', body }),
+      invalidatesTags: ['Admin', 'Instances']
+    }),
     getAdminWalletEntries: builder.query<WalletEntry[], string>({
       query: id => `/admin/users/${id}/wallet/entries`,
       providesTags: ['Admin']
@@ -760,6 +768,8 @@ export const {
   useGetAdminAuditLogsQuery,
   useGetAdminMetricsQuery,
   useSearchAdminUsersQuery,
+  useSetAdminUserHostAccessMutation,
+  useSetInstanceHostAccessMutation,
   useGetAdminWalletEntriesQuery,
   useAdjustAdminWalletMutation,
   useSaveAdminImageMutation,

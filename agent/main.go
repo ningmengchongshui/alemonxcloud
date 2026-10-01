@@ -65,6 +65,7 @@ var agentCapabilities = []string{
 	"container.compose.v1",
 	"container.compose.restart.v1",
 	"container.compose.resize.v1",
+	"container.host-access.v1",
 	"container.reinstall.v1",
 	"container.destroy.v1",
 	"image.pull.v1",
@@ -91,6 +92,7 @@ type createRequest struct {
 	BandwidthMbps int    `json:"bandwidthMbps,omitempty"`
 	Route         string `json:"route" binding:"required"`
 	TerminalMode  bool   `json:"terminalMode,omitempty"`
+	HostAccess    bool   `json:"hostAccess,omitempty"`
 	KeepStopped   bool   `json:"keepStopped,omitempty"`
 }
 
@@ -669,7 +671,7 @@ func reconcileBandwidth(ctx context.Context) {
 func instanceCompose(input createRequest, homeDir, workspaceDir string) string {
 	// Compose policy is shared with self-hosted control. Keeping the platform
 	// adapter here preserves its HTTP API while preventing two policy forks.
-	compose, err := agentcore.Compose(agentcore.ComposeInput{Name: input.Name, Image: input.Image, Route: input.Route, DataDir: homeDir, WorkspaceDir: workspaceDir, Network: envString("XCLOUD_DOCKER_NETWORK", "xcloud_network"), CPU: input.CPU, MemoryMB: input.MemoryMB, TerminalMode: input.TerminalMode})
+	compose, err := agentcore.Compose(agentcore.ComposeInput{Name: input.Name, Image: input.Image, Route: input.Route, DataDir: homeDir, WorkspaceDir: workspaceDir, Network: envString("XCLOUD_DOCKER_NETWORK", "xcloud_network"), CPU: input.CPU, MemoryMB: input.MemoryMB, TerminalMode: input.TerminalMode, HostAccess: input.HostAccess})
 	if err != nil {
 		return ""
 	}

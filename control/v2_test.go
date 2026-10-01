@@ -1,10 +1,54 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestManagedComposeHostAccessSurvivesRestartAndCanBeRemoved(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XCLOUD_CONTROL_DATA_ROOT", root)
+	t.Setenv("XCLOUD_DOCKER_NETWORK", "xcloud_network")
+	bin := t.TempDir()
+	logPath := filepath.Join(bin, "calls")
+	t.Setenv("XCLOUD_TEST_DOCKER_LOG", logPath)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XCLOUD_TEST_DOCKER_LOG\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	previous := controlDockerCommand
+	t.Cleanup(func() { controlDockerCommand = previous })
+	controlDockerCommand = func(args ...string) (string, error) { return "ok", nil }
+	p := managedPayload{Name: "xcloud-12345678", Image: "example/app:latest", CPU: 1, MemoryMB: 1024, Route: "r0123456789abcdef", HostAccess: true}
+	for _, step := range []struct {
+		action           string
+		enabled, stopped bool
+	}{{"create", true, false}, {"restart", true, false}, {"resize", false, true}} {
+		p.HostAccess, p.KeepStopped = step.enabled, step.stopped
+		if err := runManagedCompose(context.Background(), config{}, step.action, p); err != nil {
+			t.Fatal(err)
+		}
+		path, err := managedDir(config{}, p.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compose, err := os.ReadFile(filepath.Join(path, "docker-compose.yml"))
+		if err != nil || strings.Contains(string(compose), "host.docker.internal:host-gateway") != step.enabled {
+			t.Fatalf("%s Compose mapping: %s %v", step.action, compose, err)
+		}
+	}
+	commands, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(commands), " restart") || !strings.Contains(string(commands), "up -d --no-start") {
+		t.Fatalf("must reconcile Compose and preserve stopped state: %s", commands)
+	}
+}
 
 func TestMemoryMBFromMeminfo(t *testing.T) {
 	if got := memoryMBFromMeminfo("MemFree: 1 kB\nMemTotal: 16777216 kB\n"); got != 16384 {
