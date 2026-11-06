@@ -11,9 +11,8 @@ import {
 } from '@/services/cloudApi'
 import { Shell } from './components/Shell'
 import { CreateServicePage } from './pages/CreateServicePage'
+import { InstanceDetailPage } from './pages/InstanceDetailPage'
 import { InstancesPage } from './pages/InstancesPage'
-import { InstanceLogsPage } from './pages/InstanceLogsPage'
-import { InstanceExecutionPage } from './pages/InstanceExecutionPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { TicketsPage } from './pages/TicketsPage'
 import { WalletPage } from './pages/WalletPage'
@@ -188,6 +187,10 @@ export default function App() {
     () => session ?? (isLoading && sessionHint ? { user: sessionHint } : null),
     [isLoading, session, sessionHint]
   )
+  const detailMatch = path.match(/^\/me\/instances\/([^/]+)(?:\/(overview|resources|manage))?$/)
+  let detailInstanceID: string | null = null
+  try { detailInstanceID = detailMatch ? decodeURIComponent(detailMatch[1]) : null } catch { /* Invalid URL is handled by the route fallback. */ }
+  const detailTab = detailMatch?.[2] ?? 'overview'
   const logInstanceID = instanceLogID(path)
   const executionInstanceID = instanceExecutionID(path)
   const terminalInstanceID = instanceTerminalID(path)
@@ -195,6 +198,7 @@ export default function App() {
   const selectedTicketID = ticketID(path)
   const isUserArea =
     userPaths.has(path) ||
+    Boolean(detailInstanceID) ||
     Boolean(logInstanceID) ||
     Boolean(executionInstanceID) ||
     Boolean(terminalInstanceID) ||
@@ -358,7 +362,7 @@ export default function App() {
       </Shell>
     )
   }
-  if (logInstanceID) {
+  if (detailInstanceID || logInstanceID || executionInstanceID) {
     return (
       <Shell
         user={activeSession.user}
@@ -385,45 +389,13 @@ export default function App() {
         }
         onLogout={signOut}
       >
-        <InstanceLogsPage
-          instanceID={logInstanceID}
-          instance={instances.find(item => item.id === logInstanceID)}
-          onBack={() => navigate('/me/instances')}
-        />
-      </Shell>
-    )
-  }
-  if (executionInstanceID) {
-    return (
-      <Shell
-        user={activeSession.user}
-        restoringSession={isLoading}
-        area="me"
-        page="instances"
-        onPageChange={next =>
-          navigate(
-            {
-              overview: '/me',
-              instances: '/me/instances',
-              selfhosted: '/me/nodes',
-              create: '/me/create',
-              orders: '/me/orders',
-              wallet: '/me/wallet',
-              notifications: '/me/notifications',
-              tickets: '/me/tickets'
-            }[next]
-          )
-        }
-        onGoToMe={() => navigate('/me')}
-        onGoToSuper={
-          activeSession.user.isAdmin ? () => navigate('/super') : undefined
-        }
-        onLogout={signOut}
-      >
-        <InstanceExecutionPage
-          instanceID={executionInstanceID}
-          instance={instances.find(item => item.id === executionInstanceID)}
-          onBack={() => navigate('/me/instances')}
+        <InstanceDetailPage
+          instanceID={(detailInstanceID || logInstanceID || executionInstanceID)!}
+          instance={instances.find(item => item.id === (detailInstanceID || logInstanceID || executionInstanceID))}
+          orders={orders}
+          loading={instancesLoading}
+          tab={logInstanceID ? 'logs' : executionInstanceID ? 'executions' : detailTab}
+          navigate={navigate}
         />
       </Shell>
     )
@@ -531,6 +503,7 @@ export default function App() {
         instances={instances}
         orders={orders}
         loading={instancesLoading}
+        onOpenDetail={id => navigate(`/me/instances/${encodeURIComponent(id)}`)}
         onCreate={() => navigate('/me/create')}
         onOpenLogs={instanceID =>
           navigate(`/me/instances/${encodeURIComponent(instanceID)}/logs`)

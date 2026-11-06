@@ -265,6 +265,7 @@ export function InstancesPage({
   orders,
   loading,
   onCreate,
+  onOpenDetail,
   onOpenLogs,
   onOpenTerminal,
   onOpenExecutions,
@@ -274,6 +275,7 @@ export function InstancesPage({
   orders: Order[]
   loading: boolean
   onCreate: () => void
+  onOpenDetail?: (instanceID: string) => void
   onOpenLogs: (instanceID: string) => void
   onOpenTerminal: (instanceID: string) => void
   onOpenExecutions: (instanceID: string) => void
@@ -626,7 +628,7 @@ export function InstancesPage({
                         className="m-0 truncate text-base font-bold text-slate-900 dark:text-white"
                         title={`${imageName(item.image)} ｜ ${item.id}`}
                       >
-                        {imageName(item.image)} ｜ {item.id.slice(0, 12)}
+                        {onOpenDetail ? <button type="button" className="text-blue-600 hover:underline dark:text-blue-300" onClick={() => onOpenDetail(item.id)}>{item.name || imageName(item.image)} ｜ {item.id.slice(0, 12)}</button> : <>{imageName(item.image)} ｜ {item.id.slice(0, 12)}</>}
                       </h2>
                       <StatusBadge tone={state.tone}>{state.label}</StatusBadge>
                     </div>
@@ -710,6 +712,7 @@ export function InstancesPage({
                     ) : null}
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full">
+                    {onOpenDetail && <Button onClick={() => onOpenDetail(item.id)}>实例详情</Button>}
                     {!item.terminalOnly && (
                       <Button
                         tone="secondary"
