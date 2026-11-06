@@ -35,6 +35,8 @@ func selfHostedCommandAction(method, path string) (string, error) {
 		return "create", nil
 	case path == "/container/pull":
 		return "pull-image", nil
+	case strings.HasSuffix(path, "/stats") && method == http.MethodGet:
+		return "stats", nil
 	case strings.Contains(path, "/logs") && method == http.MethodGet:
 		return "logs", nil
 	case strings.Contains(path, "/files/content") && method == http.MethodGet:

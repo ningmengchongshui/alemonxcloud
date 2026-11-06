@@ -59,7 +59,7 @@ const AgentAPIVersion = 1
 var agentCapabilities = []string{
 	"container.lifecycle.v1",
 	"container.inspect.v1",
-	"container.logs.v1",
+	"container.logs.v1", "container.stats.v1",
 	"container.terminal.v1",
 	"container.list.v1",
 	"container.compose.v1",
@@ -154,6 +154,7 @@ func runServer() {
 	control.GET("/:name/status", containerStatus)
 	control.GET("/:name/inspect", inspectContainer)
 	control.GET("/:name/logs", containerLogs)
+	control.GET("/:name/stats", containerStats)
 	control.GET("/:name/terminal", containerTerminal)
 	control.GET("/:name/files", listWorkspaceFiles)
 	control.GET("/:name/files/content", readWorkspaceFile)
@@ -1594,4 +1595,17 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func containerStats(c *gin.Context) {
+	name, ok := checkedName(c)
+	if !ok {
+		return
+	}
+	stats, err := agentcore.ReadContainerStats(c.Request.Context(), name)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": "读取实例监控失败"})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
 }

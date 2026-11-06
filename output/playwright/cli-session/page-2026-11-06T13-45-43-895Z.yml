@@ -1,0 +1,15 @@
+- generic [ref=e2]:
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - img "AlemonX Cloud" [ref=e6]:
+        - generic [ref=e7]: X
+        - generic [ref=e8]:
+          - generic [ref=e9]: AL
+          - generic [ref=e10]: CLOUD
+      - paragraph [ref=e11]: ALEMONX CLOUD
+      - heading "让服务稳定地 运行在云端。" [level=1] [ref=e12]: 让服务稳定地运行在云端。
+      - paragraph [ref=e13]: 为 AlemonX 服务提供清晰、可控的运行环境。
+      - button "进入 X Cloud" [ref=e14] [cursor=pointer]: 进入 X Cloud →
+      - button "开发模式进入" [ref=e15] [cursor=pointer]
+    - generic [ref=e16]: 为稳定的持续交付而设计
+  - status "加载中" [ref=e17]

@@ -450,3 +450,13 @@ export interface AuditLog {
   targetId: string
   createdAt: string
 }
+
+export interface InstanceStats {
+ cpuPercent: string
+ memoryUsage: string
+ memoryPercent: string
+ networkIO: string
+ blockIO: string
+ pids: string
+ sampledAt: string
+}

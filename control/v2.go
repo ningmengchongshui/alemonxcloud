@@ -476,7 +476,7 @@ func localAgentStatus() map[string]any {
 			}
 		}
 	}
-	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "runtimeInventoryOK": inventoryOK, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.host-access.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1"}}
+	return map[string]any{"cpuDetected": float64(runtime.NumCPU()), "memoryDetectedMB": mem, "diskAvailableBytes": available, "diskTotalBytes": total, "dockerVersion": dockerVersion, "managedContainerCount": len(instances), "instances": instances, "runtimeInventoryOK": inventoryOK, "agentVersion": version, "agentApiVersion": 1, "runtimeReady": readiness.Ready, "readinessIssues": readiness.Issues, "capabilities": []string{"container.lifecycle.v1", "container.inspect.v1", "container.logs.v1", "container.stats.v1", "container.terminal.v1", "container.compose.v1", "container.compose.restart.v1", "container.compose.resize.v1", "container.host-access.v1", "container.reinstall.v1", "container.destroy.v1", "image.pull.v1", "route.proxy.v1", "node.resources.v1", "workspace.files.v1"}}
 }
 
 func safeDockerNetwork(value string) bool {
@@ -579,6 +579,9 @@ func runManagedCommand(ctx context.Context, cfg config, action string, p managed
 			return nil, errors.New("操作标识无效")
 		}
 		return readManagedOperation(cfg, p.Name, p.OperationID)
+	}
+	if action == "stats" {
+		return agentcore.ReadContainerStats(ctx, p.Name)
 	}
 	if action == "logs" {
 		if !safeManagedName(p.Name) {

@@ -1,7 +1,11 @@
 import type { ReactNode } from 'react'
 import { Alert, Button, LoadingState, PageHeader } from '@/components/ui'
-import { useGetInstanceResourceQuery } from '@/services/cloudApi'
+import {
+  useGetInstanceResourceQuery,
+  useGetInstanceSummaryQuery
+} from '@/services/cloudApi'
 import type { Instance, Order } from '@/types/cloud'
+import { InstanceUsage } from '@/components/InstanceUsage'
 import { InstancesPage } from './InstancesPage'
 import { InstanceLogsPage } from './InstanceLogsPage'
 import { InstanceExecutionPage } from './InstanceExecutionPage'
@@ -53,7 +57,7 @@ function Facts({
 }
 export function InstanceDetailPage({
   instanceID,
-  instance,
+  instance: listedInstance,
   orders,
   loading,
   tab,
@@ -71,13 +75,25 @@ export function InstanceDetailPage({
       pollingInterval: 15000,
       skipPollingIfUnfocused: true
     })
+  const summary = useGetInstanceSummaryQuery(instanceID, {
+    pollingInterval: 15000,
+    skipPollingIfUnfocused: true
+  })
+  const instance = summary.currentData?.selfHosted
+    ? summary.currentData.instance
+    : (listedInstance ?? summary.currentData?.instance)
   const base = `/me/instances/${encodeURIComponent(instanceID)}`
   const runtime =
     data?.status.runtimeState ||
     instance?.runtimeStatus ||
     instance?.status ||
     ''
-  const back = () => navigate('/me/instances')
+  const back = () =>
+    navigate(
+      summary.currentData?.selfHosted
+        ? `/me/nodes/${encodeURIComponent(summary.currentData.nodeId)}`
+        : '/me/instances'
+    )
   return (
     <section className="page me-page">
       <PageHeader
@@ -86,7 +102,7 @@ export function InstanceDetailPage({
         actions={
           <div className="flex flex-wrap gap-2">
             <Button tone="secondary" onClick={back}>
-              返回我的实例
+              {summary.currentData?.selfHosted ? '返回所属节点' : '返回我的实例'}
             </Button>
             <Button
               tone="secondary"
@@ -139,24 +155,36 @@ export function InstanceDetailPage({
         </Alert>
       )}
       {(loading || isLoading) && <LoadingState>正在读取实例信息…</LoadingState>}
-      {!loading && !instance && (
+      {!loading && !summary.isLoading && !instance && (
         <Alert>暂无此实例的基本信息，请返回列表确认实例是否存在。</Alert>
       )}
       {tab === 'logs' ? (
         <InstanceLogsPage
           instanceID={instanceID}
           instance={instance}
-          onBack={back}
+          onBack={() => navigate(base)}
         />
       ) : tab === 'executions' ? (
         <InstanceExecutionPage
           instanceID={instanceID}
           instance={instance}
-          onBack={back}
+          onBack={() => navigate(base)}
         />
       ) : tab === 'manage' ? (
         instance && (
           <InstancesPage
+            view="manage"
+            workspace={
+              summary.currentData?.selfHosted
+                ? {
+                    title: '实例管理',
+                    description: '管理当前自建节点实例',
+                    createLabel: '创建服务',
+                    selfHosted: true,
+                    compact: true
+                  }
+                : undefined
+            }
             instances={[instance]}
             orders={orders}
             loading={loading}
@@ -197,13 +225,10 @@ export function InstanceDetailPage({
               </article>
             ))}
           </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-900">
-            <h2 className="m-0 text-base font-bold">当前资源占用</h2>
-            <p className="mb-0 text-sm text-slate-500 dark:text-slate-400">
-              CPU
-              使用率、内存用量、磁盘用量及网络流量暂未接入监控。上方配额表示实例可用资源上限，不代表实时占用。
-            </p>
-          </div>
+          <InstanceUsage
+            instanceID={instanceID}
+            running={runtime === 'running'}
+          />
           {tab === 'overview' ? (
             <div className="grid items-start gap-4 lg:grid-cols-2">
               <Facts

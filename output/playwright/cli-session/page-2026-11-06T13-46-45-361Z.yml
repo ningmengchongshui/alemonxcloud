@@ -1,0 +1,144 @@
+- generic [ref=f1e3]:
+  - complementary [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - img "AlemonX Cloud" [ref=f1e6]:
+        - generic [ref=f1e7]: X
+        - generic [ref=f1e8]:
+          - generic [ref=f1e9]: AL
+          - generic [ref=f1e10]: CLOUD
+      - button "收起导航" [ref=f1e11] [cursor=pointer]: ‹
+    - navigation "用户控制台导航" [ref=f1e12]:
+      - generic [ref=f1e14]:
+        - button "控制台总览" [ref=f1e15] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e16]: ◇
+        - button "我的实例" [ref=f1e18] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e19]: ▦
+        - button "自建节点" [ref=f1e21] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e22]: ◌
+        - button "创建服务" [ref=f1e24] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e25]: ＋
+        - button "订单中心" [ref=f1e27] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e28]: □
+      - generic [ref=f1e30]:
+        - paragraph [ref=f1e31]: 账户中心
+        - generic [ref=f1e32]:
+          - button "钱包与流水" [ref=f1e33] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e34]: ◈
+          - button "站内通知" [ref=f1e36] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e37]: ●
+          - button "工单支持" [ref=f1e39] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e40]: ◉
+    - button "本地 本地测试 个人工作区" [ref=f1e44] [cursor=pointer]:
+      - generic [ref=f1e45]: 本地
+      - generic [ref=f1e46]:
+        - generic [ref=f1e47]: 本地测试
+        - generic [ref=f1e48]: 个人工作区
+  - main [ref=f1e49]:
+    - generic [ref=f1e50]:
+      - generic [ref=f1e51]: 用户控制台/我的实例
+      - button "帮助" [ref=f1e53] [cursor=pointer]
+    - generic [ref=f1e75]:
+      - generic [ref=f1e76]:
+        - generic [ref=f1e77]:
+          - heading "演示实例" [level=1] [ref=f1e78]
+          - paragraph [ref=f1e79]: demo-instance
+        - generic [ref=f1e81]:
+          - button "返回我的实例" [ref=f1e82] [cursor=pointer]
+          - button "刷新状态" [ref=f1e83] [cursor=pointer]
+          - button "连接终端" [ref=f1e84] [cursor=pointer]
+      - navigation "实例功能" [ref=f1e85]:
+        - link "概览" [ref=f1e86] [cursor=pointer]:
+          - /url: /me/instances/demo-instance/overview
+        - link "资源与状态" [ref=f1e87] [cursor=pointer]:
+          - /url: /me/instances/demo-instance/resources
+        - link "实例管理" [ref=f1e88] [cursor=pointer]:
+          - /url: /me/instances/demo-instance/manage
+        - link "运行日志" [ref=f1e89] [cursor=pointer]:
+          - /url: /me/instances/demo-instance/logs
+        - link "执行记录" [ref=f1e90] [cursor=pointer]:
+          - /url: /me/instances/demo-instance/executions
+      - generic [ref=f1e91]:
+        - generic [ref=f1e92]:
+          - article [ref=f1e93]:
+            - paragraph [ref=f1e94]: 运行状态
+            - paragraph [ref=f1e95]: 运行中
+          - article [ref=f1e96]:
+            - paragraph [ref=f1e97]: 已生效 CPU 配额
+            - paragraph [ref=f1e98]: 2 核
+          - article [ref=f1e99]:
+            - paragraph [ref=f1e100]: 已生效内存配额
+            - paragraph [ref=f1e101]: 1024 MB
+        - article [ref=f1e102]:
+          - generic [ref=f1e103]:
+            - heading "当前资源占用" [level=2] [ref=f1e104]
+            - button "刷新监控" [ref=f1e105] [cursor=pointer]
+          - generic [ref=f1e106]:
+            - generic [ref=f1e107]:
+              - term [ref=f1e108]: CPU 使用率
+              - definition [ref=f1e109]: 125.50%
+            - generic [ref=f1e110]:
+              - term [ref=f1e111]: 内存使用 / 上限
+              - definition [ref=f1e112]: 256MiB / 1GiB
+            - generic [ref=f1e113]:
+              - term [ref=f1e114]: 内存使用率
+              - definition [ref=f1e115]: 25.00%
+            - generic [ref=f1e116]:
+              - term [ref=f1e117]: 累计网络接收 / 发送
+              - definition [ref=f1e118]: 10MB / 20MB
+            - generic [ref=f1e119]:
+              - term [ref=f1e120]: 累计磁盘读取 / 写入
+              - definition [ref=f1e121]: 1MB / 2MB
+            - generic [ref=f1e122]:
+              - term [ref=f1e123]: 进程与线程数
+              - definition [ref=f1e124]: "8"
+          - paragraph [ref=f1e125]: 采样时间：2026/11/6 21:46:44 · 每 15 秒刷新
+          - paragraph [ref=f1e126]: CPU 按单核 100% 计，多核可超过 100%。网络和磁盘为容器累计读写量，并非实时速率。磁盘空间占用暂未采集。
+        - generic [ref=f1e127]:
+          - article [ref=f1e128]:
+            - heading "基本信息" [level=2] [ref=f1e129]
+            - generic [ref=f1e130]:
+              - generic [ref=f1e131]:
+                - term [ref=f1e132]: 实例名称
+                - definition [ref=f1e133]: 演示实例
+              - generic [ref=f1e134]:
+                - term [ref=f1e135]: 实例 ID
+                - definition [ref=f1e136]: demo-instance
+              - generic [ref=f1e137]:
+                - term [ref=f1e138]: 镜像
+                - definition [ref=f1e139]: app/demo
+              - generic [ref=f1e140]:
+                - term [ref=f1e141]: 版本
+                - definition [ref=f1e142]: latest
+              - generic [ref=f1e143]:
+                - term [ref=f1e144]: 资源规格
+                - definition [ref=f1e145]: 2 核 / 1 GB
+              - generic [ref=f1e146]:
+                - term [ref=f1e147]: 当前套餐
+                - definition [ref=f1e148]: 暂未上报
+              - generic [ref=f1e149]:
+                - term [ref=f1e150]: 创建时间
+                - definition [ref=f1e151]: 2026/11/6 08:00:00
+          - article [ref=f1e152]:
+            - heading "服务与访问" [level=2] [ref=f1e153]
+            - generic [ref=f1e154]:
+              - generic [ref=f1e155]:
+                - term [ref=f1e156]: 服务开始
+                - definition [ref=f1e157]: 暂无记录
+              - generic [ref=f1e158]:
+                - term [ref=f1e159]: 服务到期
+                - definition [ref=f1e160]: 暂无记录
+              - generic [ref=f1e161]:
+                - term [ref=f1e162]: 服务地址
+                - definition [ref=f1e163]: https://example.com
+              - generic [ref=f1e164]:
+                - term [ref=f1e165]: 容器名称
+                - definition [ref=f1e166]: xcloud-0123456789abcdef
+              - generic [ref=f1e167]:
+                - term [ref=f1e168]: 宿主机访问
+                - definition [ref=f1e169]: 未启用
+              - generic [ref=f1e170]:
+                - term [ref=f1e171]: 最近观测
+                - definition [ref=f1e172]: 暂无记录
+              - generic [ref=f1e173]:
+                - term [ref=f1e174]: 当前任务
+                - definition [ref=f1e175]: 无进行中的任务

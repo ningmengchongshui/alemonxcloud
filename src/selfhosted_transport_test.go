@@ -8,6 +8,7 @@ import (
 func TestSelfHostedCommandActionAllowsOnlyMappedReads(t *testing.T) {
 	for _, item := range []struct{ path, action string }{
 		{"/container/xcloud-r0123456789abcdef/logs?tail=300", "logs"},
+		{"/container/xcloud-0123456789abcdef/stats", "stats"},
 		{"/container/xcloud-r0123456789abcdef/files?path=workspace", "files"},
 		{"/container/xcloud-r0123456789abcdef/files/content?path=workspace/a.txt", "file-read"},
 		{"/container/xcloud-r0123456789abcdef/operation-status?operationId=aop_12345678", "operation-status"},

@@ -424,6 +424,7 @@ export default function App() {
           detail
           nodeID={selectedControlNodeID}
           onBack={() => navigate('/me/nodes')}
+          onOpenDetail={id => navigate(`/me/instances/${encodeURIComponent(id)}`)}
           onOpenLogs={instanceID =>
             navigate(`/me/instances/${encodeURIComponent(instanceID)}/logs`)
           }

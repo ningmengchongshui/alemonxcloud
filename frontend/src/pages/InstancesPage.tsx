@@ -265,12 +265,14 @@ export function InstancesPage({
   orders,
   loading,
   onCreate,
+  view = 'list',
   onOpenDetail,
   onOpenLogs,
   onOpenTerminal,
   onOpenExecutions,
   workspace
 }: {
+  view?: 'list' | 'manage'
   instances: Instance[]
   orders: Order[]
   loading: boolean
@@ -522,7 +524,7 @@ export function InstancesPage({
 
   return (
     <section className={workspace ? '' : 'page me-page'}>
-      {workspace &&
+      {view === 'list' && workspace &&
         (workspace.compact ? (
           <header className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -651,7 +653,7 @@ export function InstancesPage({
                     </b>
                   </div>
                 </div>
-                {item.hostAccessAllowed && <InstanceHostAccess
+                {view === 'manage' && item.hostAccessAllowed && <InstanceHostAccess
                   instance={item}
                   busy={Boolean(activeTask)}
                   onSubmitted={task => {
@@ -662,7 +664,7 @@ export function InstancesPage({
                 {item.planChangeStatus === 'needs_review' && (
                   <div className="mx-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
                     <span>套餐变更的资金结算正在自动核实运行资源；重启、重装和销毁不受影响。核实完成前暂不能再次变更套餐。</span>
-                    {item.planChangeId &&
+                    {view === 'manage' && item.planChangeId &&
                       ['observing', 'exception', 'compensating'].includes(
                         item.planChangeSagaStatus || 'observing'
                       ) && (
@@ -712,7 +714,6 @@ export function InstancesPage({
                     ) : null}
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2 max-[760px]:w-full">
-                    {onOpenDetail && <Button onClick={() => onOpenDetail(item.id)}>实例详情</Button>}
                     {!item.terminalOnly && (
                       <Button
                         tone="secondary"
@@ -728,12 +729,13 @@ export function InstancesPage({
                         {item.ip ? 'Web服务 ↗' : '服务准备中'}
                       </Button>
                     )}
+                    {view === 'manage' && <>
                     <Button
                       tone="secondary"
                       disabled={runtime !== 'running' || agentCommandRunning}
                       onClick={() => onOpenTerminal(item.id)}
                     >
-                      {runtime === 'running' ? '终端' : '终端准备中'}
+                    {runtime === 'running' ? '终端' : '终端准备中'}
                     </Button>
                     {lifecycle !== 'destroyed' && lifecycle !== 'purged' && (
                       <Button
@@ -762,6 +764,7 @@ export function InstancesPage({
                           启动
                         </Button>
                       )}
+                    </>}
                     {runtime === 'running' &&
                       lifecycle === 'running' &&
                       canOperate && (
@@ -831,6 +834,7 @@ export function InstancesPage({
                           }
                         />
                       )}
+                    {view === 'manage' && <>
                     {renewalOrder &&
                       ['running', 'stopped'].includes(lifecycle) &&
                       item.destroyReason !== 'refund' && (
@@ -905,6 +909,7 @@ export function InstancesPage({
                         </Button>
                       </>
                     )}
+                    </>}
                   </div>
                 </div>
               </article>

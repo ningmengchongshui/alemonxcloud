@@ -44,12 +44,12 @@ interface AuthorizeResponse {
 
 export const cloudApi = createApi({
   reducerPath: 'cloudApi',
-  baseQuery: async (args, api, extraOptions) => {
+  baseQuery: async (args, api, extraOptions: { silent?: boolean }) => {
     const result = await fetchBaseQuery({ baseUrl: '/api' })(args, api, extraOptions)
     if (!result.error) return result
     const url = typeof args === 'string' ? args : args.url
     // Session probing expects a 401 before login and must stay silent.
-    if (url === '/oidc/session') return result
+    if (url === '/oidc/session' || extraOptions?.silent) return result
     const payload = result.error.data
     const detail = typeof payload === 'object' && payload !== null && 'message' in payload && typeof payload.message === 'string'
       ? payload.message
@@ -84,6 +84,14 @@ export const cloudApi = createApi({
       transformResponse: (response: SessionResponse) =>
         response.user ? { user: response.user } : null,
       providesTags: ['Session']
+    }),
+    getInstanceSummary: builder.query<{ instance: Instance; selfHosted: boolean; nodeId: string }, string>({
+      query: id => `/instances/${encodeURIComponent(id)}/summary`,
+      providesTags: ['Instances']
+    }),
+    getInstanceStats: builder.query<import('@/types/cloud').InstanceStats, string>({
+      query: id => `/instances/${encodeURIComponent(id)}/stats`,
+      extraOptions: { silent: true }
     }),
     getInstances: builder.query<Instance[], void>({
       query: () => '/instances',
@@ -699,6 +707,8 @@ export const {
   useGetSessionQuery,
   useGetInstancesQuery,
 	useGetInstanceResourceQuery,
+ useGetInstanceStatsQuery,
+ useGetInstanceSummaryQuery,
 	usePatchInstanceDesiredMutation,
   useGetSelfHostedNodesQuery,
   useGetSelfHostedNodeQuery,

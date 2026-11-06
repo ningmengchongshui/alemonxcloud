@@ -27,6 +27,7 @@ type Props = {
   onBack?: () => void
   onOpenLogs?: (instanceID: string) => void
   onOpenTerminal?: (instanceID: string) => void
+  onOpenDetail?: (instanceID: string) => void
   onOpenExecutions?: (instanceID: string) => void
 }
 
@@ -127,6 +128,7 @@ export function SelfHostedControlPanel({
   onBack,
   onOpenLogs = () => undefined,
   onOpenTerminal = () => undefined,
+  onOpenDetail,
   onOpenExecutions = () => undefined
 }: Props) {
   const { data: nodes = [], isLoading: nodesLoading } =
@@ -315,6 +317,7 @@ export function SelfHostedControlPanel({
           orders={[]}
           loading={instancesLoading}
           onCreate={() => setCreateOpen(true)}
+          onOpenDetail={onOpenDetail}
           onOpenLogs={onOpenLogs}
           onOpenTerminal={onOpenTerminal}
           onOpenExecutions={onOpenExecutions}

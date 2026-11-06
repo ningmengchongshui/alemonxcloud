@@ -21,6 +21,13 @@
 
 退款使用 `GET /api/orders/:id/refund-quote` 取得服务端试算，再以 `POST /api/orders/:id/refund` 确认。试算返回 `eligible`、`reason`、完整天数、预扣天数、退款金额、调整后服务到期时间和预计清理时间；确认返回更新后的 `order`、退款 `entry`、`wallet` 与最终 `quote`。仅迁移后创建且服务期完整的钱包订单可自助退款。退款回到 XCoin，不会立即停止实例；到最终服务时间才销毁容器资源，数据再保留 30 天，退款实例不可续费恢复。钱包流水的 `orderId` 可关联购买、续费和退款记录。
 
+实例详情补充接口（均验证当前用户对实例的所有权）：
+
+- `GET /api/instances/:id/summary`：返回 `instance`、`selfHosted`、`nodeId`，供平台实例与自建实例的详情页读取基本信息。平台列表仍不混入自建实例。
+- `GET /api/instances/:id/stats`：返回 `cpuPercent`、`memoryUsage`（使用量 / 上限）、`memoryPercent`、`networkIO`（累计接收 / 发送）、`blockIO`（累计读取 / 写入）、`pids` 和 RFC3339 格式的 `sampledAt`。CPU 按单核 100% 计，多核可超过 100%；磁盘读写累计量不等于磁盘空间占用。停止实例返回 `409`，节点采集不可用返回 `502`，不以零值伪装采集失败。需要升级托管 Agent 或自建 Control；旧节点尚不支持监控时仍可使用其他详情功能。
+
+详情页地址为 `/me/instances/:id`，支持 `overview`、`resources`、`manage`、`logs`、`executions` 子路径，可直接刷新访问。实时采样仅在概览和资源页显示，每 15 秒更新，窗口失焦时停止定时采样。暂未提供监控历史与磁盘空间占用。
+
 实例声明资源使用 `GET /api/instances/:id` 读取 `metadata/spec/status/conditions/operations`，使用 `PATCH /api/instances/:id/desired` 写入带 `resourceVersion` 和 `idempotencyKey` 的运行意图；版本过期返回 `409` 及最新资源摘要。原 `POST /api/instances/:id/:action` 暂作为一个发布周期的兼容层，响应带 `Deprecation: true` 与替代链接。`destroy` 创建手动 7 天销毁计划，`destroy-now` 立即销毁容器资源但保留数据，`cancel-destroy` 仅取消手动计划，`archive` 仅从列表移除已销毁实例；旧 `DELETE /api/instances/:id` 兼容映射为 `destroy`。实例响应含 `runtimeStatus`、`destroyAt`、`destroyReason`、`destroyedAt`、`purgeAt` 与 `archivedAt`。
 
 工单使用 `/api/tickets`：用户可创建、查看本人列表与详情、回复，或重新打开已关闭工单。创建参数为 `category`（`instance`、`billing`、`account`、`other`）、`priority`（`normal`、`high`、`urgent`）、`subject`、`body`，并可选关联本人 `instanceId` 或 `orderId`。主题最多 160 字符，内容最多 4000 字符；不支持附件。

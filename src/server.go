@@ -188,6 +188,8 @@ func Run() {
 	router.POST("/api/instances/:id/plan-changes/:changeID/cancel", requireSession, cancelPlanChangeHandler)
 	router.DELETE("/api/instances/:id", requireSession, queueDeleteInstance)
 	router.GET("/api/instances/:id/logs", requireSession, instanceLogs)
+	router.GET("/api/instances/:id/stats", requireSession, instanceStats)
+	router.GET("/api/instances/:id/summary", requireSession, instanceSummary)
 	router.GET("/api/instances/:id/files", requireSession, instanceFiles)
 	router.GET("/api/instances/:id/files/content", requireSession, instanceFileContent)
 	router.PUT("/api/instances/:id/files/content", requireSession, saveInstanceFileContent)
